@@ -1628,7 +1628,7 @@ class Backtester:
         total_return = (
             self.equity_curve[-1] - self.initial_cash) / self.initial_cash * 100
         max_drawdown = self._max_drawdown(self.equity_curve)
-        print(f"\nBacktest report:")
+        print("\nBacktest report:")
         print(
             f"  Starting capital: {self.initial_cash:.2f} {self.base_currency}")
         print(

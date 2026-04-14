@@ -1,11 +1,8 @@
 import ccxt
 import talib
-import numpy as np
 import pandas as pd
-from datetime import datetime
 import time
 import sqlite3
-from pathlib import Path
 
 
 class CryptoDataFetcher:
@@ -44,17 +41,19 @@ class CryptoDataFetcher:
 
     def fetch_ohlcv_with_retry(self, exchange, symbol, max_retries=3):
         """Attempts to fetch OHLCV data with retries"""
+        last_error = None
         for attempt in range(max_retries):
             try:
                 ohlcv = exchange.fetch_ohlcv(
                     symbol, self.timeframe, limit=self.days)
                 return ohlcv
-            except Exception as e:
+            except Exception as err:
+                last_error = err
                 wait_time = (attempt + 1) * 5
                 print(
                     f"Attempt {attempt + 1}/{max_retries} for {symbol} failed. Waiting {wait_time}s...", end="\r")
                 time.sleep(wait_time)
-        self.error_log.append((symbol, str(e)))
+        self.error_log.append((symbol, str(last_error) if last_error else "Unknown error"))
         return None
 
     def calculate_indicators(self, df):

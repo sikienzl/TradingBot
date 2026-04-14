@@ -45,7 +45,46 @@ jobs:
           python -m py_compile "${files[@]}"
 
       - name: Lint check (ruff)
-        run: ruff check . --exclude build --exclude .venv --exclude results --exclude catboost_info
+        id: ruff
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          ruff check . \
+            --exclude build \
+            --exclude .venv \
+            --exclude results \
+            --exclude catboost_info \
+            --output-format=github | tee ruff-report.txt
+          echo "ruff_exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Ruff summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Ruff Lint Result"
+            echo
+            if [[ "${{ steps.ruff.outputs.ruff_exit_code }}" == "0" ]]; then
+              echo "- Status: passed"
+            else
+              echo "- Status: failed"
+              echo "- Exit code: ${{ steps.ruff.outputs.ruff_exit_code }}"
+              echo
+              echo "Top findings:"
+              echo '```text'
+              head -n 80 ruff-report.txt || true
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce lint gate
+        shell: bash
+        run: |
+          if [[ "${{ steps.ruff.outputs.ruff_exit_code }}" != "0" ]]; then
+            echo "Ruff lint check failed. See annotations and step summary."
+            exit 1
+          fi
 
   tests:
     name: Unit tests
@@ -68,4 +107,50 @@ jobs:
           pip install pytest numpy pandas scikit-learn catboost ccxt python-dotenv
 
       - name: Run tests
-        run: pytest tests/ -v --maxfail=1
+        id: pytest
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          pytest tests/ -v --maxfail=1 --junitxml=pytest-report.xml | tee pytest-output.txt
+          echo "pytest_exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-artifacts-${{ github.run_number }}
+          path: |
+            pytest-report.xml
+            pytest-output.txt
+          if-no-files-found: warn
+
+      - name: Pytest summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Pytest Result"
+            echo
+            if [[ "${{ steps.pytest.outputs.pytest_exit_code }}" == "0" ]]; then
+              echo "- Status: passed"
+            else
+              echo "- Status: failed"
+              echo "- Exit code: ${{ steps.pytest.outputs.pytest_exit_code }}"
+              echo
+              echo "Tail of pytest output:"
+              echo '```text'
+              tail -n 80 pytest-output.txt || true
+              echo '```'
+            fi
+            echo
+            echo "JUnit report: pytest-report.xml"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce test gate
+        shell: bash
+        run: |
+          if [[ "${{ steps.pytest.outputs.pytest_exit_code }}" != "0" ]]; then
+            echo "Pytest failed. See summary and artifacts for details."
+            exit 1
+          fi
