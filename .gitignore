@@ -23,7 +23,6 @@ backtest_log.txt
 *.db
 
 # Model artifacts
-model/
 catboost_info/
 old_data/
 
