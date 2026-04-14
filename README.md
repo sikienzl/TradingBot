@@ -23,6 +23,29 @@ cp .env.example .env        # default / dry-run profile
 cp .env.live.example .env   # conservative live profile
 ```
 
+## Quickstart (60 seconds)
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+python3 get_data.py
+python3 data_preperation.py
+python3 trading_bot.py --backtest
+```
+
+## CI / Quality Gates
+
+GitHub Actions pipeline in `.github/workflows/ci.yml` runs on push and pull requests with Python 3.12 and 3.13.
+
+- Syntax gate: `py_compile` on tracked Python files
+- Lint gate: `ruff check` with annotations in GitHub Checks
+- Test gate: `pytest` with JUnit XML (`pytest-report.xml`) and artifact upload
+- Explicit gate steps fail the job when lint/tests are not green
+
+Weekly decision automation is separated in `.github/workflows/weekly-scorecard.yml`.
+
 ## Project structure
 
 | File | Purpose |
@@ -131,6 +154,17 @@ python3 go_no_go_scorecard.py --file trade_journal.csv \
 ```sh
 .venv/bin/python -m pytest tests/ -v
 ```
+
+## Troubleshooting
+
+- TA-Lib import/build issues:
+  - Ubuntu/Debian: `sudo apt install libta-lib-dev`
+- CatBoost runtime issues on Linux CI:
+  - Ensure `libgomp1` is installed on the runner
+- CI import errors like `ModuleNotFoundError` for project modules:
+  - Run tests with `PYTHONPATH` set to the repository root
+- Reproduce CI test command locally:
+  - `.venv/bin/python -m pytest tests/ -v --maxfail=1 --junitxml=pytest-report.xml`
 
 ## Disclaimer
 
