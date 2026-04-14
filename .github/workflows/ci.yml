@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Syntax + Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install quality tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Syntax check (py_compile)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git ls-files '*.py' | grep -v '^build/' || true)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No Python files found."
+            exit 0
+          fi
+          python -m py_compile "${files[@]}"
+
+      - name: Lint check (ruff)
+        run: ruff check . --exclude build --exclude .venv --exclude results --exclude catboost_info
+
+  tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    needs: quality
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest numpy pandas scikit-learn catboost ccxt python-dotenv
+
+      - name: Run tests
+        run: pytest tests/ -v --maxfail=1
