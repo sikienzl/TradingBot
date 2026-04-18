@@ -382,6 +382,13 @@ Before changing repository visibility from private to public:
 
 See `SECURITY.md` for the full policy and reporting guidance.
 
+## Community and Collaboration
+
+- Code of Conduct: `CODE_OF_CONDUCT.md`
+- Contributing Guide: `CONTRIBUTING.md`
+- Issue templates: `.github/ISSUE_TEMPLATE/`
+- Pull request template: `.github/pull_request_template.md`
+
 ## Disclaimer
 
 This project is for research and educational purposes. Use at your own risk.
