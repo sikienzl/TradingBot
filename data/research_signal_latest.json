@@ -1,20 +1,23 @@
 {
-  "timestamp_utc": "2026-04-18T08:42:37.682739Z",
-  "sentiment_score": 0.0,
-  "confidence": 0.0,
-  "risk_score": 0.0,
-  "market_regime": "sideways",
-  "citations": [],
+  "timestamp_utc": "2026-04-18T09:30:00Z",
+  "sentiment_score": 0.42,
+  "confidence": 0.81,
+  "risk_score": 0.27,
+  "market_regime": "bull",
+  "citations": [
+    "https://example.com/news-a",
+    "https://example.com/news-b"
+  ],
   "normalized_features": {
-    "research_sentiment_score": 0.0,
-    "research_confidence": 0.0,
-    "research_risk_score": 0.0,
-    "research_regime_bull": 0.0,
+    "research_sentiment_score": 0.42,
+    "research_confidence": 0.81,
+    "research_risk_score": 0.27,
+    "research_regime_bull": 1.0,
     "research_regime_bear": 0.0,
-    "research_regime_sideways": 1.0
+    "research_regime_sideways": 0.0
   },
   "integration": {
     "source": "autoresearch",
-    "written_at_utc": "2026-04-18T08:45:47.829464Z"
+    "written_at_utc": "2026-04-18T09:36:43.486336Z"
   }
 }
