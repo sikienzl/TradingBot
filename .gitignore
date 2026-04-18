@@ -1,5 +1,6 @@
 # Environment & secrets
 .env
+.env.simulation.autoresearch.test
 
 
 # Python
@@ -21,6 +22,7 @@ backtest_log.txt
 *.csv
 *.zip
 *.db
+data/research_signal_raw_test.json
 
 # Model artifacts
 catboost_info/
