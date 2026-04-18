@@ -110,6 +110,16 @@ python3 trading_bot.py
 - Set `SIMULATE_DATA=true` to run fully offline without an exchange connection.
 - Trades are recorded to `trade_journal.csv`.
 
+Simulation helper scripts:
+```sh
+bash scripts/start_sim_bot.sh
+bash scripts/stop_sim_bot.sh
+```
+Defaults:
+- Uses `.env.simulation.example`
+- Writes logs to `logs/sim_bot.log`
+- Stores PID in `logs/sim_bot.pid`
+
 ### 4. Backtesting
 ```sh
 python3 trading_bot.py --backtest
