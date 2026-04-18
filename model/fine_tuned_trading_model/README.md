@@ -10,200 +10,65 @@ tags:
 - trl
 ---
 
-# Model Card for Model ID
+# Fine-Tuned Trading Adapter Model Card
 
-<!-- Provide a quick summary of what the model is/does. -->
+## Model Summary
 
-
+This directory contains a PEFT LoRA adapter used for experimental trading-signal text generation and research workflows.
+It is not a standalone model and must be loaded on top of the base model listed above.
 
 ## Model Details
 
-### Model Description
+- Developed by: Repository maintainer
+- Model type: PEFT LoRA adapter for causal language modeling
+- Intended language: Primarily German and English prompts used in this repository
+- Finetuned from: mistralai/Mistral-7B-v0.1
+- Adapter framework: PEFT with Transformers
 
-<!-- Provide a longer summary of what this model is. -->
+## License
 
+- Repository code license: BSD-3-Clause (see root LICENSE file)
+- Base model and tokenizer license: Defined by the upstream provider of mistralai/Mistral-7B-v0.1
+- You are responsible for complying with upstream model and data licenses before production use
 
+## Intended Use
 
-- **Developed by:** [More Information Needed]
-- **Funded by [optional]:** [More Information Needed]
-- **Shared by [optional]:** [More Information Needed]
-- **Model type:** [More Information Needed]
-- **Language(s) (NLP):** [More Information Needed]
-- **License:** [More Information Needed]
-- **Finetuned from model [optional]:** [More Information Needed]
+- Research and educational experiments
+- Prompt-based market commentary or auxiliary signal generation
+- Offline evaluation and prototyping
 
-### Model Sources [optional]
+## Out-of-Scope Use
 
-<!-- Provide the basic links for the model. -->
+- Autonomous live trading without human supervision
+- Financial advice or investment recommendation services
+- Safety-critical or compliance-critical decision systems
 
-- **Repository:** [More Information Needed]
-- **Paper [optional]:** [More Information Needed]
-- **Demo [optional]:** [More Information Needed]
+## Risks and Limitations
 
-## Uses
+- Outputs can be incorrect, stale, or hallucinated
+- Market regime shifts may invalidate learned behavior
+- Data leakage and look-ahead bias can invalidate evaluation
+- This adapter is not sufficient as a sole risk-control layer
+- Performance in backtests does not imply forward profitability
 
-<!-- Address questions around how the model is intended to be used, including the foreseeable users of the model and those affected by the model. -->
+## Recommendations
 
-### Direct Use
+- Keep hard risk limits enforced in the execution layer
+- Use dry-run and paper-trading first
+- Monitor drawdown, win rate, and trade frequency continuously
+- Re-train and re-validate periodically with walk-forward splits
+- Treat model outputs as one input among multiple controls
 
-<!-- This section is for the model use without fine-tuning or plugging into a larger ecosystem/app. -->
+## Training Notes
 
-[More Information Needed]
+Training scripts and data preparation are repository-specific and may evolve.
+Refer to the root project README and training scripts for the current pipeline.
 
-### Downstream Use [optional]
+## Evaluation Notes
 
-<!-- This section is for the model use when fine-tuned for a task, or when plugged into a larger ecosystem/app -->
+Evaluation quality depends on market period, data quality, and execution assumptions.
+Always validate with out-of-sample and walk-forward testing before any live deployment.
 
-[More Information Needed]
+## Contact
 
-### Out-of-Scope Use
-
-<!-- This section addresses misuse, malicious use, and uses that the model will not work well for. -->
-
-[More Information Needed]
-
-## Bias, Risks, and Limitations
-
-<!-- This section is meant to convey both technical and sociotechnical limitations. -->
-
-[More Information Needed]
-
-### Recommendations
-
-<!-- This section is meant to convey recommendations with respect to the bias, risk, and technical limitations. -->
-
-Users (both direct and downstream) should be made aware of the risks, biases and limitations of the model. More information needed for further recommendations.
-
-## How to Get Started with the Model
-
-Use the code below to get started with the model.
-
-[More Information Needed]
-
-## Training Details
-
-### Training Data
-
-<!-- This should link to a Dataset Card, perhaps with a short stub of information on what the training data is all about as well as documentation related to data pre-processing or additional filtering. -->
-
-[More Information Needed]
-
-### Training Procedure
-
-<!-- This relates heavily to the Technical Specifications. Content here should link to that section when it is relevant to the training procedure. -->
-
-#### Preprocessing [optional]
-
-[More Information Needed]
-
-
-#### Training Hyperparameters
-
-- **Training regime:** [More Information Needed] <!--fp32, fp16 mixed precision, bf16 mixed precision, bf16 non-mixed precision, fp16 non-mixed precision, fp8 mixed precision -->
-
-#### Speeds, Sizes, Times [optional]
-
-<!-- This section provides information about throughput, start/end time, checkpoint size if relevant, etc. -->
-
-[More Information Needed]
-
-## Evaluation
-
-<!-- This section describes the evaluation protocols and provides the results. -->
-
-### Testing Data, Factors & Metrics
-
-#### Testing Data
-
-<!-- This should link to a Dataset Card if possible. -->
-
-[More Information Needed]
-
-#### Factors
-
-<!-- These are the things the evaluation is disaggregating by, e.g., subpopulations or domains. -->
-
-[More Information Needed]
-
-#### Metrics
-
-<!-- These are the evaluation metrics being used, ideally with a description of why. -->
-
-[More Information Needed]
-
-### Results
-
-[More Information Needed]
-
-#### Summary
-
-
-
-## Model Examination [optional]
-
-<!-- Relevant interpretability work for the model goes here -->
-
-[More Information Needed]
-
-## Environmental Impact
-
-<!-- Total emissions (in grams of CO2eq) and additional considerations, such as electricity usage, go here. Edit the suggested text below accordingly -->
-
-Carbon emissions can be estimated using the [Machine Learning Impact calculator](https://mlco2.github.io/impact#compute) presented in [Lacoste et al. (2019)](https://arxiv.org/abs/1910.09700).
-
-- **Hardware Type:** [More Information Needed]
-- **Hours used:** [More Information Needed]
-- **Cloud Provider:** [More Information Needed]
-- **Compute Region:** [More Information Needed]
-- **Carbon Emitted:** [More Information Needed]
-
-## Technical Specifications [optional]
-
-### Model Architecture and Objective
-
-[More Information Needed]
-
-### Compute Infrastructure
-
-[More Information Needed]
-
-#### Hardware
-
-[More Information Needed]
-
-#### Software
-
-[More Information Needed]
-
-## Citation [optional]
-
-<!-- If there is a paper or blog post introducing the model, the APA and Bibtex information for that should go in this section. -->
-
-**BibTeX:**
-
-[More Information Needed]
-
-**APA:**
-
-[More Information Needed]
-
-## Glossary [optional]
-
-<!-- If relevant, include terms and calculations in this section that can help readers understand the model or model card. -->
-
-[More Information Needed]
-
-## More Information [optional]
-
-[More Information Needed]
-
-## Model Card Authors [optional]
-
-[More Information Needed]
-
-## Model Card Contact
-
-[More Information Needed]
-### Framework versions
-
-- PEFT 0.18.0
+For project-level questions, open an issue in the repository.

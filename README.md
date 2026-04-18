@@ -370,6 +370,18 @@ python3 go_no_go_scorecard.py --file trade_journal.csv \
 - Reproduce CI test command locally:
   - `.venv/bin/python -m pytest tests/ -v --maxfail=1 --junitxml=pytest-report.xml`
 
+## Public Release Safety
+
+Before changing repository visibility from private to public:
+
+- Rotate all exchange API keys used during development.
+- Confirm `.env` remains untracked and ignored.
+- Run a secret scan over tracked files.
+- Verify local test env files are not staged.
+- Use least-privilege API permissions (no withdrawals).
+
+See `SECURITY.md` for the full policy and reporting guidance.
+
 ## Disclaimer
 
 This project is for research and educational purposes. Use at your own risk.
