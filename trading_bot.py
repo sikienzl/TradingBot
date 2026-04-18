@@ -184,6 +184,8 @@ class BotConfig:
         self.use_tabular_model = _env_bool('USE_TABULAR_MODEL', False)
         self.tabular_model_path = os.getenv(
             'TABULAR_MODEL_PATH', './model/catboost_trading_model')
+        self.tabular_research_signal_path = os.getenv(
+            'TABULAR_RESEARCH_SIGNAL_PATH', './data/research_signal_latest.json')
         self.tabular_min_confidence = float(
             os.getenv('TABULAR_MIN_CONFIDENCE', 0.45))
         # Optional safety filter: block new entries when CatBoost signals a strong sell
@@ -280,7 +282,9 @@ class CryptoTradingBot:
             try:
                 from predict_catboost import CatBoostTradingPredictor
                 self.tabular_predictor = CatBoostTradingPredictor(
-                    self.config.tabular_model_path)
+                    self.config.tabular_model_path,
+                    research_signal_path=self.config.tabular_research_signal_path,
+                )
                 logger.info(
                     f"📊 CatBoost model loaded from '{self.config.tabular_model_path}'.")
             except Exception as e:

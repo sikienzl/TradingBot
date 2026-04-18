@@ -1,0 +1,20 @@
+{
+  "timestamp_utc": "2026-04-18T08:42:37.682739Z",
+  "sentiment_score": 0.0,
+  "confidence": 0.0,
+  "risk_score": 0.0,
+  "market_regime": "sideways",
+  "citations": [],
+  "normalized_features": {
+    "research_sentiment_score": 0.0,
+    "research_confidence": 0.0,
+    "research_risk_score": 0.0,
+    "research_regime_bull": 0.0,
+    "research_regime_bear": 0.0,
+    "research_regime_sideways": 1.0
+  },
+  "integration": {
+    "source": "autoresearch",
+    "written_at_utc": "2026-04-18T08:45:47.829464Z"
+  }
+}

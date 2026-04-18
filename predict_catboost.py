@@ -5,10 +5,13 @@ import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier
 
+from research_signal import apply_research_features, load_latest_research_signal
+
 
 class CatBoostTradingPredictor:
-    def __init__(self, model_dir: str = "./model/catboost_trading_model"):
+    def __init__(self, model_dir: str = "./model/catboost_trading_model", research_signal_path: str = ""):
         self.model_dir = model_dir
+        self.research_signal_path = research_signal_path
         self.model = CatBoostClassifier()
         self.features = []
         self.label_map = {"verkaufen": 0, "halten": 1, "kaufen": 2}
@@ -32,7 +35,10 @@ class CatBoostTradingPredictor:
         if row_df.empty:
             return {"decision": "halten", "confidence": 0.0, "proba": {}}
 
-        x = row_df.copy()
+        research_features = load_latest_research_signal(
+            getattr(self, "research_signal_path", "")
+        )
+        x = apply_research_features(row_df.copy(), research_features)
         # Add missing fallback features if absent from live input.
         if "ret_1" not in x.columns and "close" in x.columns:
             x["ret_1"] = 0.0

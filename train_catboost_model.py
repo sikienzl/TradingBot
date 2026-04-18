@@ -7,6 +7,12 @@ import pandas as pd
 from catboost import CatBoostClassifier
 from sklearn.metrics import accuracy_score, classification_report, f1_score
 
+from research_signal import (
+    RESEARCH_FEATURE_COLUMNS,
+    apply_research_features,
+    load_latest_research_signal,
+)
+
 
 BASE_FEATURE_COLUMNS: List[str] = [
     "rsi",
@@ -178,7 +184,8 @@ def run_walk_forward_evaluation(
 
 
 def prepare_xy(df: pd.DataFrame) -> Tuple[pd.DataFrame, np.ndarray, List[str]]:
-    all_features = BASE_FEATURE_COLUMNS + ["ret_1", "ret_3", "ret_6", "vol_6"]
+    all_features = BASE_FEATURE_COLUMNS + [
+        "ret_1", "ret_3", "ret_6", "vol_6"] + RESEARCH_FEATURE_COLUMNS
     available_features = [c for c in all_features if c in df.columns]
     x = df[available_features].copy()
     y = df["label"].map(LABEL_MAP).values
@@ -190,9 +197,13 @@ def train_model(
     data_path: str = "training_data.csv",
     output_dir: str = "./model/catboost_trading_model",
     walk_forward_splits: int = 3,
+    research_signal_path: str = "",
 ) -> None:
     df = load_data(data_path)
     df = add_features(df)
+    research_features = load_latest_research_signal(
+        research_signal_path or os.getenv("RESEARCH_SIGNAL_PATH", ""))
+    df = apply_research_features(df, research_features)
     df = create_profit_labels(df)
 
     required = ["close", "label"]
@@ -268,7 +279,28 @@ def train_model(
 
 
 def main() -> None:
-    train_model()
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Train CatBoost trading model with optional AutoResearch features."
+    )
+    parser.add_argument("--data-path", default="training_data.csv")
+    parser.add_argument(
+        "--output-dir", default="./model/catboost_trading_model")
+    parser.add_argument("--walk-forward-splits", type=int, default=3)
+    parser.add_argument(
+        "--research-signal-path",
+        default="",
+        help="Path to latest AutoResearch JSON signal. Can also be set via RESEARCH_SIGNAL_PATH.",
+    )
+    args = parser.parse_args()
+
+    train_model(
+        data_path=args.data_path,
+        output_dir=args.output_dir,
+        walk_forward_splits=args.walk_forward_splits,
+        research_signal_path=args.research_signal_path,
+    )
 
 
 if __name__ == "__main__":
