@@ -513,7 +513,9 @@ VS Code task:
 - `Scorecard: Weekly Go/No-Go` (from `.vscode/tasks.json`)
 
 🚨 Disclaimer & Risk Warning
+
 ⚠️ USE THIS TRADING BOT AT YOUR OWN RISK!
+
 This trading bot is provided "as is" without any warranties, express or implied. The author(s) and contributors are not liable for any financial losses, damages, or other negative consequences resulting from the use of this software.
 Key Risks to Consider:
 
