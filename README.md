@@ -511,3 +511,22 @@ Then run bot/scorecard from that server only.
 
 VS Code task:
 - `Scorecard: Weekly Go/No-Go` (from `.vscode/tasks.json`)
+
+🚨 Disclaimer & Risk Warning
+⚠️ USE THIS TRADING BOT AT YOUR OWN RISK!
+This trading bot is provided "as is" without any warranties, express or implied. The author(s) and contributors are not liable for any financial losses, damages, or other negative consequences resulting from the use of this software.
+Key Risks to Consider:
+
+- Market Volatility: Cryptocurrency and financial markets are highly unpredictable. Past performance does not guarantee future results.
+- Technical Failures: Bugs, connectivity issues, or exchange API changes may lead to unexpected behavior.
+- Financial Loss: Trading involves risk, and you may lose part or all of your invested capital.
+- No Guarantees: The bot’s strategies may not always be profitable. Always test thoroughly in a simulated environment before using real funds.
+
+Important Notes:
+
+- Backtest & Paper Trade First: Never deploy the bot with real money without extensive testing.
+- Monitor Performance: Regularly check the bot’s activity to ensure it behaves as expected.
+- Legal & Tax Compliance: Ensure compliance with local regulations regarding automated trading and taxation.
+
+By using this bot, you acknowledge and accept full responsibility for all outcomes, including potential losses. The author(s) disclaim all liability for any damages arising from its use.
+Trade responsibly!
