@@ -128,20 +128,33 @@ fi
 
 mkdir -p "$LOG_DIR"
 
+pip_install_with_retry() {
+  local req_file="$1"
+  local attempt
+  for attempt in 1 2 3; do
+    if "${VENV}/bin/pip" install -r "$req_file" --retries 10 --timeout 120; then
+      return 0
+    fi
+    echo "WARN: pip install failed (attempt ${attempt}/3). Retrying in $((attempt * 5))s ..."
+    sleep $((attempt * 5))
+  done
+  return 1
+}
+
 # ── Python virtual environment ────────────────────────────────────────────────
 VENV="${INSTALL_DIR}/.venv"
 info "Creating Python virtual environment..."
 python3 -m venv "$VENV"
-"${VENV}/bin/pip" install --upgrade pip -q
+"${VENV}/bin/pip" install --upgrade pip --retries 10 --timeout 120
 
 REQ_PI="${INSTALL_DIR}/requirements-pi.txt"
 REQ_FULL="${INSTALL_DIR}/requirements.txt"
 if [[ -f "$REQ_PI" ]]; then
   info "Installing Pi requirements (${REQ_PI})..."
-  "${VENV}/bin/pip" install -r "$REQ_PI" -q
+  pip_install_with_retry "$REQ_PI" || die "Failed to install Pi requirements after multiple attempts."
 else
   info "Installing full requirements (${REQ_FULL})..."
-  "${VENV}/bin/pip" install -r "$REQ_FULL" -q
+  pip_install_with_retry "$REQ_FULL" || die "Failed to install requirements after multiple attempts."
 fi
 ok "Python environment ready at ${VENV}"
 
