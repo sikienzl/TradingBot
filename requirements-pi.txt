@@ -1,0 +1,16 @@
+# requirements-pi.txt
+# Raspberry Pi runtime dependencies (no LLM training, no GPU)
+# Use this instead of requirements.txt on the Pi to avoid large GPU packages.
+#
+# Install:
+#   pip install -r requirements-pi.txt
+# -----------------------------------------------------------------------
+ccxt==4.5.30
+pandas==2.3.3
+numpy==2.4.0
+# TA-Lib requires the native C library:
+#   sudo apt install libta-lib-dev
+TA-Lib==0.6.8
+python-dotenv==1.2.1
+catboost==1.2.8
+scikit-learn==1.6.1

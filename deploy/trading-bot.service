@@ -1,0 +1,25 @@
+[Unit]
+Description=Crypto Trading Bot
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=trading
+Group=trading
+WorkingDirectory=/opt/trading_2
+EnvironmentFile=/opt/trading_2/.env
+ExecStart=/opt/trading_2/.venv/bin/python /opt/trading_2/trading_bot.py
+Restart=on-failure
+RestartSec=30
+StandardOutput=append:/opt/trading_2/logs/bot.log
+StandardError=append:/opt/trading_2/logs/bot.log
+
+# Safety limits
+MemoryMax=512M
+CPUQuota=80%
+
+[Install]
+WantedBy=multi-user.target

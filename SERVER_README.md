@@ -80,6 +80,79 @@ Before replacing code, keep a backup of:
 
 Then unpack new package, reinstall requirements if needed, and restart the service/process.
 
+---
+
+## Raspberry Pi Deployment (via GitHub Releases)
+
+The easiest way to run the bot on a Raspberry Pi is through the pre-built GitHub Release packages.
+
+### Quick Install (one-liner)
+
+Run this on your Pi as root:
+
+```bash
+curl -fsSL https://github.com/sikienzl/TradingBot/releases/latest/download/install_pi.sh \
+  | sudo bash -s -- v0.1.0
+```
+
+Or to install a specific version:
+
+```bash
+sudo bash install_pi.sh v0.1.1
+```
+
+The installer will:
+1. Install system packages (`python3-venv`, `libta-lib-dev`, …)
+2. Create a restricted `trading` system user
+3. Download and verify the release archive from GitHub
+4. Set up `/opt/trading_2` with a Python virtual environment
+5. Install and enable systemd units (`trading-bot.service`, `scorecard.timer`)
+
+### After Install
+
+```bash
+# 1. Configure your API keys and settings
+sudo nano /opt/trading_2/.env
+
+# 2. Start the bot
+sudo systemctl start trading-bot
+
+# 3. Watch logs
+sudo journalctl -u trading-bot -f
+```
+
+### Useful systemd Commands
+
+```bash
+sudo systemctl status  trading-bot      # check status
+sudo systemctl restart trading-bot      # restart
+sudo systemctl stop    trading-bot      # stop
+sudo systemctl list-timers              # see weekly scorecard schedule
+```
+
+### Creating a New Release (from dev machine)
+
+```bash
+# Build, tag, and push a new Pi release:
+bash scripts/create_pi_release.sh
+
+# Or tag manually and let CI publish it:
+git tag v0.1.1 && git push origin v0.1.1
+```
+
+The `.github/workflows/release.yml` workflow automatically builds the Pi tarball and publishes a GitHub Release whenever a `v*` tag is pushed.
+
+### Download a Specific Release Manually
+
+```bash
+VERSION=v0.1.0
+curl -LO "https://github.com/sikienzl/TradingBot/releases/download/${VERSION}/trading-bot-pi-${VERSION}.tar.gz"
+curl -LO "https://github.com/sikienzl/TradingBot/releases/download/${VERSION}/trading-bot-pi-${VERSION}.tar.gz.sha256"
+sha256sum -c "trading-bot-pi-${VERSION}.tar.gz.sha256"
+```
+
+---
+
 ## 6. Operational Safety
 - Start with smallest possible position sizes.
 - Keep DRY_RUN=true until server behavior is verified.
