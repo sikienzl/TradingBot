@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Error handling with detailed context
+trap 'echo "ERROR: AutoResearch precheck failed at line $LINENO with exit code $?" >&2; exit 1' ERR
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Configuration with safe defaults
 AUTORESEARCH_ENABLED="${AUTORESEARCH_ENABLED:-false}"
 AUTORESEARCH_REQUIRED="${AUTORESEARCH_REQUIRED:-false}"
 AUTORESEARCH_REPO_PATH="${AUTORESEARCH_REPO_PATH:-}"
@@ -54,7 +58,7 @@ fallback_lc="$(to_lower "$AUTORESEARCH_WRITE_NEUTRAL_FALLBACK")"
 dry_run_lc="$(to_lower "$AUTORESEARCH_PRECHECK_DRY_RUN")"
 
 if [[ "$enabled_lc" != "true" ]]; then
-  echo "AutoResearch precheck: skipped (AUTORESEARCH_ENABLED=$AUTORESEARCH_ENABLED)"
+  echo "INFO: AutoResearch precheck skipped (AUTORESEARCH_ENABLED=$AUTORESEARCH_ENABLED)"
   exit 0
 fi
 
@@ -115,23 +119,23 @@ if [[ -n "$AUTORESEARCH_SOURCE_PATH" ]]; then
   fi
 fi
 
-echo "AutoResearch precheck summary"
-echo "- enabled: $AUTORESEARCH_ENABLED"
-echo "- required: $AUTORESEARCH_REQUIRED"
-echo "- repo: ${repo_abs:-<unset>}"
-echo "- output: $output_abs"
+echo "INFO: AutoResearch precheck summary"
+echo "INFO: - enabled: $AUTORESEARCH_ENABLED"
+echo "INFO: - required: $AUTORESEARCH_REQUIRED"
+echo "INFO: - repo: ${repo_abs:-<unset>}"
+echo "INFO: - output: $output_abs"
 
 if [[ ${#WARNINGS[@]} -gt 0 ]]; then
-  echo "Warnings:"
+  echo "WARN: Warnings:"
   for w in "${WARNINGS[@]}"; do
-    echo "- $w"
+    echo "WARN: - $w"
   done
 fi
 
 if [[ ${#ERRORS[@]} -gt 0 ]]; then
-  echo "Errors:"
+  echo "ERROR: Errors:"
   for e in "${ERRORS[@]}"; do
-    echo "- $e"
+    echo "ERROR: - $e"
   done
   exit 1
 fi
@@ -139,8 +143,7 @@ fi
 if [[ "$dry_run_lc" == "true" ]]; then
   python_cmd="$(resolve_python)"
   if [[ -z "$python_cmd" ]]; then
-    echo "Errors:"
-    echo "- Python interpreter not found for dry-run precheck. Set PYTHON_BIN or install python3."
+    echo "ERROR: Python interpreter not found for dry-run precheck. Set PYTHON_BIN or install python3."
     exit 1
   fi
 

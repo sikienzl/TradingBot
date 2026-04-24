@@ -48,6 +48,45 @@ class Portfolio:
         # Offene Trades: {'BTC': {'buy_price': 30000, 'amount_coin': 0.001, 'amount_base': 30, 'timestamp': datetime}}
         self.open_trades: Dict[str, Dict] = {}
         self.last_update: Optional[datetime] = None
+        self.state_file: str = ".portfolio_state.json"  # Persistency file for dry-run
+
+    def save_state(self, filepath: Optional[str] = None) -> bool:
+        """Save portfolio state to JSON file (for dry-run persistency)."""
+        try:
+            state_file = filepath or self.state_file
+            state = {
+                'cash': self.cash,
+                'holdings': self.holdings,
+                'base_currency': self.base_currency,
+                'timestamp': datetime.now().isoformat(),
+            }
+            with open(state_file, 'w') as f:
+                json.dump(state, f, indent=2)
+            logger.debug(f"Portfolio state saved to {state_file}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save portfolio state: {e}")
+            return False
+
+    def load_state(self, filepath: Optional[str] = None) -> bool:
+        """Load portfolio state from JSON file (for dry-run persistency)."""
+        try:
+            state_file = filepath or self.state_file
+            if not os.path.exists(state_file):
+                logger.debug(f"Portfolio state file not found: {state_file}")
+                return False
+            with open(state_file, 'r') as f:
+                state = json.load(f)
+            self.cash = float(state.get('cash', 0.0))
+            self.holdings = {k: float(v)
+                             for k, v in state.get('holdings', {}).items()}
+            logger.info(f"Portfolio state loaded from {state_file}")
+            logger.info(f"  Cash: {self.cash:.2f} {self.base_currency}")
+            logger.info(f"  Holdings: {self.holdings}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to load portfolio state: {e}")
+            return False
 
     def get_value(self, prices: Dict[str, float]) -> float:
         """
@@ -646,18 +685,49 @@ class CryptoTradingBot:
     def _update_portfolio_balance(self):
         """Updates the portfolio with current balances from the exchange."""
         if self.config.simulate_data or self.exchange is None:
-            if self.portfolio.cash == 0.0 and not self.portfolio.holdings:  # Initial simulated cash
-                self.portfolio.cash = 1000.0
-                logger.info(
-                    f"Simulated starting capital: {self.portfolio.cash:.2f} {self.config.base_currency}")
+            # For simulate_data mode: initialize dry-run cash once, then respect persistence
+            if self.portfolio.cash == 0.0 and not self.portfolio.holdings:
+                # Try to load from persistent state first
+                if not self.portfolio.load_state():
+                    # No state file, initialize with default dry-run capital
+                    self.portfolio.cash = 1000.0
+                    logger.info(
+                        f"Simulated starting capital: {self.portfolio.cash:.2f} {self.config.base_currency}")
             self.portfolio.last_update = datetime.now()
             return
 
-        # In dry-run mode, load the starting balance from the account exactly once,
-        # then no longer overwrite simulated portfolio changes.
-        if self.config.dry_run and self.portfolio.last_update is not None:
+        # In dry-run mode:
+        # 1. Load initial balance from exchange exactly once
+        # 2. Then restore from persistent state file (portfolio changes from previous runs)
+        # 3. Never overwrite simulated portfolio changes
+        if self.config.dry_run:
+            if self.portfolio.last_update is not None:
+                return
+            # First time: try to load persistent state
+            if self.portfolio.load_state():
+                # Restore from file and mark as initialized
+                self.portfolio.last_update = datetime.now()
+                return
+            # No persistent state, load initial balance from exchange
+            try:
+                balance = self.exchange.fetch_balance()
+                self.portfolio.cash = balance['free'].get(
+                    self.config.base_currency, 1000.0)  # Fallback to 1000 if not found
+                self.portfolio.holdings = {}
+                for currency, amounts in balance['free'].items():
+                    if currency != self.config.base_currency and amounts > 0:
+                        self.portfolio.holdings[currency] = amounts
+                self.portfolio.last_update = datetime.now()
+                logger.info(
+                    f"Portfolio initialized from exchange (dry-run mode). Cash: {self.portfolio.cash:.2f} {self.config.base_currency}, Holdings: {self.portfolio.holdings}")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to load initial balance from exchange, using default starting capital: {e}")
+                self.portfolio.cash = 1000.0
+                self.portfolio.last_update = datetime.now()
             return
 
+        # Live trading mode: always fetch current balance
         try:
             balance = self.exchange.fetch_balance()
             self.portfolio.cash = balance['free'].get(
@@ -1156,6 +1226,9 @@ class CryptoTradingBot:
                     'reason': reason,
                     'dry_run': True,
                 })
+                # Persist portfolio state after successful dry-run buy
+                if self.config.dry_run:
+                    self.portfolio.save_state()
             elif action == "sell":
                 held = self.portfolio.holdings.get(coin, 0.0)
                 sell_amount = min(amount_coin, held)
@@ -1189,6 +1262,9 @@ class CryptoTradingBot:
                     'dry_run': True,
                 })
                 self.portfolio.remove_trade(coin)
+                # Persist portfolio state after successful dry-run sell
+                if self.config.dry_run:
+                    self.portfolio.save_state()
             return True
 
         if self.exchange is None:
