@@ -1,10 +1,8 @@
-import unittest
-from unittest.mock import patch, MagicMock, Mock
-import json
+from unittest.mock import patch, MagicMock
 import base64
-import hashlib
-import hmac
 import time
+
+import pytest
 
 from get_account_balance import (
     get_nonce,
@@ -124,7 +122,7 @@ class TestRequest:
         mock_response.read.return_value = b'{"result": "ok"}'
         mock_urlopen.return_value = mock_response
 
-        response = request(
+        request(
             method="GET",
             path="/0/public/Time",
             environment="https://api.kraken.com"
@@ -134,7 +132,7 @@ class TestRequest:
         call_args = mock_urlopen.call_args
         # Check that URL was properly formed
         request_obj = call_args[0][0]
-        assert isinstance(request_obj, unittest.mock.ANY)
+        assert request_obj is not None
 
     @patch('urllib.request.urlopen')
     def test_request_post_method_with_body(self, mock_urlopen):
@@ -144,7 +142,7 @@ class TestRequest:
         mock_urlopen.return_value = mock_response
 
         body = {"test": "data"}
-        response = request(
+        request(
             method="POST",
             path="/0/private/Balance",
             body=body,
@@ -168,7 +166,7 @@ class TestRequest:
         mock_urlopen.return_value = mock_response
 
         query = {"param1": "value1", "param2": "value2"}
-        response = request(
+        request(
             method="GET",
             path="/0/public/Assets",
             query=query,
@@ -188,7 +186,7 @@ class TestRequest:
         mock_response.read.return_value = b'{"result": "ok"}'
         mock_urlopen.return_value = mock_response
 
-        response = request(
+        request(
             method="POST",
             path="/0/private/Balance",
             public_key="test_api_key",
@@ -210,7 +208,7 @@ class TestRequest:
         mock_response.read.return_value = b'{"result": "ok"}'
         mock_urlopen.return_value = mock_response
 
-        response = request(
+        request(
             method="POST",
             path="/0/private/Balance",
             public_key="test_api_key",
@@ -232,7 +230,7 @@ class TestRequest:
         mock_urlopen.return_value = mock_response
 
         body = {"test": "data"}
-        response = request(
+        request(
             method="POST",
             path="/0/private/Balance",
             body=body,

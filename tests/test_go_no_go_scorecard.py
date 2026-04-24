@@ -1,8 +1,4 @@
-import os
-import tempfile
-import pytest
 import pandas as pd
-import numpy as np
 
 from go_no_go_scorecard import (
     _safe_float,

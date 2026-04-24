@@ -125,10 +125,10 @@ def main() -> None:
             df = df[df["timestamp"] >= cutoff].copy()
 
     if df.empty:
-        print(f"ERROR: No data in the selected lookback window.")
+        print("ERROR: No data in the selected lookback window.")
         if args.lookback_days > 0:
             print(f"       Lookback window: last {args.lookback_days} day(s)")
-            print(f"       Hint: Use --lookback-days 0 to evaluate all data")
+            print("       Hint: Use --lookback-days 0 to evaluate all data")
         raise SystemExit(1)
 
     df["pnl_base"] = _safe_float(df.get("pnl_base", pd.Series(dtype=float)))
