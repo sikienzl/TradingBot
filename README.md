@@ -14,7 +14,9 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-> TA-Lib requires the native C library. On Ubuntu/Debian: `sudo apt install libta-lib-dev`
+> On Debian Bookworm (Raspberry Pi), `libta-lib-dev` is usually unavailable.
+> Install dependencies with `pip install -r requirements-pi.txt` first; if TA-Lib fails to build,
+> compile the TA-Lib C library from source and retry.
 
 Copy and edit the example config:
 ```sh
@@ -362,7 +364,7 @@ python3 go_no_go_scorecard.py --file trade_journal.csv \
 ## Troubleshooting
 
 - TA-Lib import/build issues:
-  - Ubuntu/Debian: `sudo apt install libta-lib-dev`
+  - Debian Bookworm (Raspberry Pi): `libta-lib-dev` is typically unavailable. Build TA-Lib C from source if `pip install TA-Lib` fails.
 - CatBoost runtime issues on Linux CI:
   - Ensure `libgomp1` is installed on the runner
 - CI import errors like `ModuleNotFoundError` for project modules:

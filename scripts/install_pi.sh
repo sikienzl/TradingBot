@@ -53,7 +53,8 @@ info "Installing system packages..."
 apt-get update -q
 apt-get install -y -q \
   python3 python3-venv python3-pip \
-  libta-lib-dev libgomp1 \
+  python3-dev build-essential pkg-config \
+  libgomp1 \
   curl ca-certificates
 ok "System packages installed."
 

@@ -102,7 +102,7 @@ sudo bash install_pi.sh v0.1.1
 ```
 
 The installer will:
-1. Install system packages (`python3-venv`, `libta-lib-dev`, …)
+1. Install system packages (`python3-venv`, compiler/build tools, …)
 2. Create a restricted `trading` system user
 3. Download and verify the release archive from GitHub
 4. Set up `/opt/trading_2` with a Python virtual environment
