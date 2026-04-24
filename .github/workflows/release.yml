@@ -81,7 +81,9 @@ jobs:
           # 2. Verify checksum
           curl -LO https://github.com/${{ github.repository }}/releases/download/${VERSION}/trading-bot-pi-${VERSION}.tar.gz.sha256
           sha256sum -c trading-bot-pi-${VERSION}.tar.gz.sha256
-          # 3. Run installer
+          # 3. Extract
+          tar -xzf trading-bot-pi-${VERSION}.tar.gz
+          # 4. Run installer
           sudo bash scripts/install_pi.sh ${VERSION}
           \`\`\`
 
