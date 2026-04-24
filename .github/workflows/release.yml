@@ -52,6 +52,12 @@ jobs:
             cp .env.example "${PKG}/"
           fi
 
+          # CatBoost model – decision engine for buy/sell signals
+          if [[ -d "model/catboost_trading_model" ]]; then
+            mkdir -p "${PKG}/model"
+            cp -r model/catboost_trading_model "${PKG}/model/"
+          fi
+
           # Archive
           tar -czf "${PKG}.tar.gz" "${PKG}/"
           sha256sum "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
