@@ -198,8 +198,9 @@ class TestRequest:
         assert mock_urlopen.called
         call_args = mock_urlopen.call_args
         request_obj = call_args[0][0]
-        assert "API-Key" in request_obj.headers
-        assert request_obj.headers["API-Key"] == "test_api_key"
+        headers = {k.lower(): v for k, v in request_obj.headers.items()}
+        assert "api-key" in headers
+        assert headers["api-key"] == "test_api_key"
 
     @patch('urllib.request.urlopen')
     def test_request_adds_api_sign_header(self, mock_urlopen):
@@ -220,7 +221,8 @@ class TestRequest:
         assert mock_urlopen.called
         call_args = mock_urlopen.call_args
         request_obj = call_args[0][0]
-        assert "API-Sign" in request_obj.headers
+        headers = {k.lower(): v for k, v in request_obj.headers.items()}
+        assert "api-sign" in headers
 
     @patch('urllib.request.urlopen')
     def test_request_sets_content_type_json(self, mock_urlopen):
@@ -240,8 +242,9 @@ class TestRequest:
         assert mock_urlopen.called
         call_args = mock_urlopen.call_args
         request_obj = call_args[0][0]
-        assert "Content-Type" in request_obj.headers
-        assert request_obj.headers["Content-Type"] == "application/json"
+        headers = {k.lower(): v for k, v in request_obj.headers.items()}
+        assert "content-type" in headers
+        assert headers["content-type"] == "application/json"
 
     @patch('urllib.request.urlopen')
     def test_request_returns_response_object(self, mock_urlopen):
