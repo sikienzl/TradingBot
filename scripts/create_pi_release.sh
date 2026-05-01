@@ -46,6 +46,7 @@ ARCHIVE_NAME="${PACKAGE_NAME}.tar.gz"
 NOTES_NAME="release-notes-${TAG}.txt"
 NOTES_FILE="${ROOT_DIR}/${NOTES_NAME}"
 RELEASE_BODY_FILE="${ROOT_DIR}/release-body-${TAG}.md"
+CUSTOM_NOTES_SOURCE="${ROOT_DIR}/release_notes/${TAG}.txt"
 BUILD_DIR="$(mktemp -d)"
 STAGE="${BUILD_DIR}/${PACKAGE_NAME}"
 trap 'rm -rf "$BUILD_DIR"; rm -f "$RELEASE_BODY_FILE"' EXIT
@@ -176,10 +177,43 @@ if [[ -z "$CHANGED_FILES" ]]; then
   CHANGED_FILES="- No file list available."
 fi
 
-HIGHLIGHTS="$(printf '%s\n' "$COMMITS" | head -5)"
+HIGHLIGHTS="$(printf '%s\n' "$COMMITS" | sed -E 's/^- [0-9a-f]+ //' | sed '/^$/d' | sed 's/^/- /' | head -6)"
 if [[ -z "$HIGHLIGHTS" ]]; then
   HIGHLIGHTS="- No highlights available."
 fi
+
+OPERATIONAL_IMPACT="- Review the highlights above before rollout; they summarize the release delta.
+- Validate the changed components below in the target environment after deployment."
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq 'grafana|prometheus|scorecard|run_weekly_scorecard|go_no_go_scorecard'; then
+  OPERATIONAL_IMPACT="${OPERATIONAL_IMPACT}
+- Monitoring and scorecard outputs changed; confirm dashboards and exported metrics refresh as expected."
+fi
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq 'trading_bot|predict|research_signal|model/'; then
+  OPERATIONAL_IMPACT="${OPERATIONAL_IMPACT}
+- Runtime trading behavior or model packaging changed; validate the deployed bot before enabling live execution."
+fi
+
+VERIFICATION_CHECKLIST="- Release assets download successfully and checksum verification passes."
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq 'scorecard|run_weekly_scorecard|go_no_go_scorecard'; then
+  VERIFICATION_CHECKLIST="${VERIFICATION_CHECKLIST}
+- Scorecard services/timers run successfully and refresh status outputs after deployment."
+fi
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq 'grafana|prometheus|scorecard-status|node-exporter'; then
+  VERIFICATION_CHECKLIST="${VERIFICATION_CHECKLIST}
+- Prometheus exports update and Grafana panels show the expected current values."
+fi
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq 'trading_bot|predict|research_signal|model/'; then
+  VERIFICATION_CHECKLIST="${VERIFICATION_CHECKLIST}
+- Trading bot startup and logs look healthy in the intended runtime profile."
+fi
+
+NOTES_SECTION="- Review the changed components before rolling out to production."
+if [[ "$TAG" == *-rc* ]]; then
+  NOTES_SECTION="${NOTES_SECTION}
+- This is a release candidate. Keep production safeguards enabled."
+fi
+NOTES_SECTION="${NOTES_SECTION}
+- Revoke and rotate any credentials that may have been exposed in logs, terminals, or chat history."
 
 cat > "$RELEASE_BODY_FILE" <<EOF
 ## Crypto Trading Bot ${TAG}
@@ -200,75 +234,35 @@ curl -fsSL https://github.com/${REPO_FOR_NOTES}/releases/download/${TAG}/install
 
 EOF
 
+if [[ -f "$CUSTOM_NOTES_SOURCE" ]]; then
+  cp "$CUSTOM_NOTES_SOURCE" "$NOTES_FILE"
+else
 cat > "$NOTES_FILE" <<EOF
-## Crypto Trading Bot ${TAG}
+Trading Bot Pi Release Notes - ${TAG}
 
 Date: $(date -I)
-Previous tag: ${PREV_TAG:-none}
-Commit: $(git rev-parse --short HEAD)
-Archive: ${ARCHIVE_NAME}
-SHA-256: ${SHA256}
 
-### Highlights
+Highlights
 
 ${HIGHLIGHTS}
 
-### Operational Impact
+Operational Impact
 
-- Review the highlights above before rollout; they summarize the release delta.
-- Use the verification checklist below after deployment to confirm runtime health.
-- Monitoring and dashboard behavior can change when related components are listed below.
+${OPERATIONAL_IMPACT}
 
-### Changed Components
+Changed Components
 
 ${CHANGED_FILES}
 
-### Raspberry Pi Quick Install
+Verification Checklist
 
-Download and run the installer on your Pi (as root):
+${VERIFICATION_CHECKLIST}
 
-```bash
-curl -fsSL https://github.com/${REPO_FOR_NOTES}/releases/download/${TAG}/install_pi.sh | sudo bash -s -- ${TAG}
-```
+Notes
 
-Or manually:
-
-```bash
-# 1. Download the package
-curl -LO https://github.com/${REPO_FOR_NOTES}/releases/download/${TAG}/${ARCHIVE_NAME}
-# 2. Verify checksum
-curl -LO https://github.com/${REPO_FOR_NOTES}/releases/download/${TAG}/${ARCHIVE_NAME}.sha256
-sha256sum -c ${ARCHIVE_NAME}.sha256
-# 3. Extract
-tar -xzf ${ARCHIVE_NAME}
-# 4. Run the bundled installer from the extracted package directory
-cd ${PACKAGE_NAME}
-sudo bash scripts/install_pi.sh ${TAG}
-```
-
-### After installation
-1. Edit `/opt/trading_2/.env` - set your API keys.
-2. `sudo systemctl start trading-bot`
-3. `sudo journalctl -u trading-bot -f`
-
-### What's included
-- Runtime Python scripts
-- Pi-optimised `requirements-pi.txt`
-- Systemd service and timer units (`deploy/`)
-- One-shot installer (`scripts/install_pi.sh`)
-- Monitoring stack config for Prometheus and Grafana
-
-### Verification Checklist
-
-- Confirm the relevant systemd services and timers are active after deployment.
-- Confirm the Prometheus textfile export updates after the next scorecard run.
-- Confirm Grafana panels load the expected values for this release.
-
-### Notes
-
-- Review the changed components before rolling out to production.
-- Keep production safeguards and secret-handling practices enabled during release-candidate testing.
+${NOTES_SECTION}
 EOF
+fi
 
 info "Release notes generated: ${NOTES_FILE}"
 

@@ -117,6 +117,7 @@ jobs:
         id: notes
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
+          CUSTOM_NOTES_SOURCE="release_notes/${VERSION}.txt"
           PREV_TAG="$(git tag --list 'v*' --sort=-version:refname | grep -vx "${VERSION}" | head -1 || true)"
 
           if [[ -n "$PREV_TAG" ]]; then
@@ -136,10 +137,43 @@ jobs:
             CHANGED_FILES="- No file list available."
           fi
 
-          HIGHLIGHTS="$(printf '%s\n' "$COMMITS" | head -5)"
+          HIGHLIGHTS="$(printf '%s\n' "$COMMITS" | sed -E 's/^- [0-9a-f]+ //' | sed '/^$/d' | sed 's/^/- /' | head -6)"
           if [[ -z "$HIGHLIGHTS" ]]; then
             HIGHLIGHTS="- No highlights available."
           fi
+
+          OPERATIONAL_IMPACT="- Review the highlights above before rollout; they summarize the release delta.
+          - Validate the changed components below in the target environment after deployment."
+          if printf '%s\n' "$CHANGED_FILES" | grep -Eq 'grafana|prometheus|scorecard|run_weekly_scorecard|go_no_go_scorecard'; then
+            OPERATIONAL_IMPACT="${OPERATIONAL_IMPACT}
+          - Monitoring and scorecard outputs changed; confirm dashboards and exported metrics refresh as expected."
+          fi
+          if printf '%s\n' "$CHANGED_FILES" | grep -Eq 'trading_bot|predict|research_signal|model/'; then
+            OPERATIONAL_IMPACT="${OPERATIONAL_IMPACT}
+          - Runtime trading behavior or model packaging changed; validate the deployed bot before enabling live execution."
+          fi
+
+          VERIFICATION_CHECKLIST="- Release assets download successfully and checksum verification passes."
+          if printf '%s\n' "$CHANGED_FILES" | grep -Eq 'scorecard|run_weekly_scorecard|go_no_go_scorecard'; then
+            VERIFICATION_CHECKLIST="${VERIFICATION_CHECKLIST}
+          - Scorecard services/timers run successfully and refresh status outputs after deployment."
+          fi
+          if printf '%s\n' "$CHANGED_FILES" | grep -Eq 'grafana|prometheus|scorecard-status|node-exporter'; then
+            VERIFICATION_CHECKLIST="${VERIFICATION_CHECKLIST}
+          - Prometheus exports update and Grafana panels show the expected current values."
+          fi
+          if printf '%s\n' "$CHANGED_FILES" | grep -Eq 'trading_bot|predict|research_signal|model/'; then
+            VERIFICATION_CHECKLIST="${VERIFICATION_CHECKLIST}
+          - Trading bot startup and logs look healthy in the intended runtime profile."
+          fi
+
+          NOTES_SECTION="- Review the changed components before rolling out to production."
+          if [[ "$VERSION" == *-rc* ]]; then
+            NOTES_SECTION="${NOTES_SECTION}
+          - This is a release candidate. Keep production safeguards enabled."
+          fi
+          NOTES_SECTION="${NOTES_SECTION}
+          - Revoke and rotate any credentials that may have been exposed in logs, terminals, or chat history."
 
           cat <<EOF > release_body.md
           ## Crypto Trading Bot ${VERSION}
@@ -160,75 +194,35 @@ jobs:
 
           EOF
 
+          if [[ -f "$CUSTOM_NOTES_SOURCE" ]]; then
+            cp "$CUSTOM_NOTES_SOURCE" "release-notes-${VERSION}.txt"
+          else
           cat <<EOF > release-notes-${VERSION}.txt
-          ## Crypto Trading Bot ${VERSION}
+          Trading Bot Pi Release Notes - ${VERSION}
 
           Date: $(date -I)
-          Previous tag: ${PREV_TAG:-none}
-          Commit: ${GITHUB_SHA}
-          Archive: trading-bot-pi-${VERSION}.tar.gz
-          SHA-256: $(cut -d' ' -f1 "${PKG}.tar.gz.sha256")
 
-          ### Highlights
+          Highlights
 
           ${HIGHLIGHTS}
 
-          ### Operational Impact
+          Operational Impact
 
-          - Review the highlights above before rollout; they summarize the release delta.
-          - Use the verification checklist below after deployment to confirm runtime health.
-          - Monitoring and dashboard behavior can change when related components are listed below.
+          ${OPERATIONAL_IMPACT}
 
-          ### Changed Components
+          Changed Components
 
           ${CHANGED_FILES}
 
-          ### Raspberry Pi Quick Install
+          Verification Checklist
 
-          Download and run the installer on your Pi (as root):
+          ${VERIFICATION_CHECKLIST}
 
-          \`\`\`bash
-          curl -fsSL https://github.com/${{ github.repository }}/releases/download/${VERSION}/install_pi.sh | sudo bash -s -- ${VERSION}
-          \`\`\`
+          Notes
 
-          Or manually:
-
-          \`\`\`bash
-          # 1. Download the package
-          curl -LO https://github.com/${{ github.repository }}/releases/download/${VERSION}/trading-bot-pi-${VERSION}.tar.gz
-          # 2. Verify checksum
-          curl -LO https://github.com/${{ github.repository }}/releases/download/${VERSION}/trading-bot-pi-${VERSION}.tar.gz.sha256
-          sha256sum -c trading-bot-pi-${VERSION}.tar.gz.sha256
-          # 3. Extract
-          tar -xzf trading-bot-pi-${VERSION}.tar.gz
-          # 4. Run the bundled installer from the extracted package directory
-          cd trading-bot-pi-${VERSION}
-          sudo bash scripts/install_pi.sh ${VERSION}
-          \`\`\`
-
-          ### After installation
-          1. Edit \`/opt/trading_2/.env\` – set your API keys.
-          2. \`sudo systemctl start trading-bot\`
-          3. \`sudo journalctl -u trading-bot -f\`
-
-          ### What's included
-          - Runtime Python scripts
-          - Pi-optimised \`requirements-pi.txt\`
-          - Systemd service & timer units (\`deploy/\`)
-          - One-shot installer (\`scripts/install_pi.sh\`)
-          - Monitoring stack config for Prometheus and Grafana
-
-          ### Verification Checklist
-
-          - Confirm the relevant systemd services and timers are active after deployment.
-          - Confirm the Prometheus textfile export updates after the next scorecard run.
-          - Confirm Grafana panels load the expected values for this release.
-
-          ### Notes
-
-          - Review the changed components before rolling out to production.
-          - Keep production safeguards and secret-handling practices enabled during release-candidate testing.
+          ${NOTES_SECTION}
           EOF
+          fi
 
           echo "NOTES_FILE=release-notes-${VERSION}.txt" >> "$GITHUB_ENV"
 
