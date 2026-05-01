@@ -1,5 +1,6 @@
 import argparse
-from dataclasses import dataclass
+import json
+from dataclasses import asdict, dataclass
 from typing import List
 
 import numpy as np
@@ -10,6 +11,19 @@ import pandas as pd
 class ScorecardResult:
     verdict: str
     reasons: List[str]
+
+
+@dataclass
+class ScorecardMetrics:
+    closed_trades: int
+    realized_pnl: float
+    avg_pnl: float
+    win_rate: float
+    gross_profit: float
+    gross_loss: float
+    profit_factor: float
+    max_drawdown_base: float
+    max_drawdown_pct: float
 
 
 def _safe_float(series: pd.Series) -> pd.Series:
@@ -81,6 +95,37 @@ def _evaluate_verdict(
     return ScorecardResult(verdict="GO", reasons=["All defined scorecard criteria met."])
 
 
+def _compute_metrics(df: pd.DataFrame, starting_capital: float) -> ScorecardMetrics:
+    sells = df[df["action"] == "sell"].copy()
+    closed = len(sells)
+
+    realized_pnl = float(sells["pnl_base"].sum()) if closed > 0 else 0.0
+    avg_pnl = float(sells["pnl_base"].mean()) if closed > 0 else 0.0
+    win_rate = float((sells["pnl_base"] > 0).mean()
+                     * 100.0) if closed > 0 else 0.0
+
+    gross_profit = float(sells.loc[sells["pnl_base"] > 0, "pnl_base"].sum())
+    gross_loss = float(-sells.loc[sells["pnl_base"] < 0, "pnl_base"].sum())
+    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else np.inf
+
+    equity = sells["pnl_base"].cumsum(
+    ) if closed > 0 else pd.Series(dtype=float)
+    max_dd_base = _max_drawdown_base(equity)
+    max_dd_pct = abs(max_dd_base) / max(starting_capital, 1e-9) * 100.0
+
+    return ScorecardMetrics(
+        closed_trades=closed,
+        realized_pnl=realized_pnl,
+        avg_pnl=avg_pnl,
+        win_rate=win_rate,
+        gross_profit=gross_profit,
+        gross_loss=gross_loss,
+        profit_factor=profit_factor,
+        max_drawdown_base=max_dd_base,
+        max_drawdown_pct=max_dd_pct,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Go/No-Go scorecard based on the trade journal")
@@ -104,6 +149,8 @@ def main() -> None:
                         help="Minimum avg PnL per sell")
     parser.add_argument("--max-drawdown-pct", type=float, default=10.0,
                         help="Maximum drawdown as percentage of starting capital")
+    parser.add_argument("--metrics-json", default="",
+                        help="Optional path to write structured scorecard metrics as JSON")
 
     args = parser.parse_args()
 
@@ -133,49 +180,54 @@ def main() -> None:
 
     df["pnl_base"] = _safe_float(df.get("pnl_base", pd.Series(dtype=float)))
 
-    sells = df[df["action"] == "sell"].copy()
-    closed = len(sells)
-
-    realized_pnl = float(sells["pnl_base"].sum()) if closed > 0 else 0.0
-    avg_pnl = float(sells["pnl_base"].mean()) if closed > 0 else 0.0
-    win_rate = float((sells["pnl_base"] > 0).mean()
-                     * 100.0) if closed > 0 else 0.0
-
-    gross_profit = float(sells.loc[sells["pnl_base"] > 0, "pnl_base"].sum())
-    gross_loss = float(-sells.loc[sells["pnl_base"] < 0, "pnl_base"].sum())
-    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else np.inf
-
-    equity = sells["pnl_base"].cumsum(
-    ) if closed > 0 else pd.Series(dtype=float)
-    max_dd_base = _max_drawdown_base(equity)
-    max_dd_pct = abs(max_dd_base) / max(args.starting_capital, 1e-9) * 100.0
+    metrics = _compute_metrics(df, args.starting_capital)
 
     result = _evaluate_verdict(
-        closed_trades=closed,
+        closed_trades=metrics.closed_trades,
         min_closed_trades=args.min_closed_trades,
-        realized_pnl=realized_pnl,
-        win_rate=win_rate,
+        realized_pnl=metrics.realized_pnl,
+        win_rate=metrics.win_rate,
         min_win_rate=args.min_win_rate,
-        profit_factor=profit_factor,
+        profit_factor=metrics.profit_factor,
         min_profit_factor=args.min_profit_factor,
-        avg_pnl=avg_pnl,
+        avg_pnl=metrics.avg_pnl,
         min_avg_pnl=args.min_avg_pnl,
-        max_drawdown_pct=max_dd_pct,
+        max_drawdown_pct=metrics.max_drawdown_pct,
         max_allowed_drawdown_pct=args.max_drawdown_pct,
     )
 
+    if args.metrics_json:
+        payload = {
+            "metrics": asdict(metrics),
+            "verdict": result.verdict,
+            "reasons": result.reasons,
+            "thresholds": {
+                "min_closed_trades": args.min_closed_trades,
+                "min_win_rate": args.min_win_rate,
+                "min_profit_factor": args.min_profit_factor,
+                "min_avg_pnl": args.min_avg_pnl,
+                "max_drawdown_pct": args.max_drawdown_pct,
+                "starting_capital": args.starting_capital,
+                "lookback_days": args.lookback_days,
+            },
+        }
+        with open(args.metrics_json, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=True, indent=2)
+
     print("=== Go/No-Go Scorecard ===")
     print(f"File:                 {args.file}")
-    print(f"Closed trades:        {closed}")
-    print(f"Win rate:             {win_rate:.2f}%")
-    print(f"Realized PnL:         {realized_pnl:.6f} {args.base_currency}")
-    print(f"Avg PnL per sell:     {avg_pnl:.6f} {args.base_currency}")
-    if np.isinf(profit_factor):
+    print(f"Closed trades:        {metrics.closed_trades}")
+    print(f"Win rate:             {metrics.win_rate:.2f}%")
+    print(
+        f"Realized PnL:         {metrics.realized_pnl:.6f} {args.base_currency}")
+    print(f"Avg PnL per sell:     {metrics.avg_pnl:.6f} {args.base_currency}")
+    if np.isinf(metrics.profit_factor):
         print("Profit factor:        inf")
     else:
-        print(f"Profit factor:        {profit_factor:.4f}")
-    print(f"Max DD (realized):    {max_dd_base:.6f} {args.base_currency}")
-    print(f"Max DD (% of start):  {max_dd_pct:.2f}%")
+        print(f"Profit factor:        {metrics.profit_factor:.4f}")
+    print(
+        f"Max DD (realized):    {metrics.max_drawdown_base:.6f} {args.base_currency}")
+    print(f"Max DD (% of start):  {metrics.max_drawdown_pct:.2f}%")
     print(f"VERDICT:              {result.verdict}")
     print("\nReason(s):")
     for r in result.reasons:

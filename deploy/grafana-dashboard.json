@@ -203,6 +203,120 @@
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "yellow", "value": 50 },
+            { "color": "green", "value": 100 }
+          ] },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 28 },
+      "id": 12,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "title": "Closed Trades",
+      "type": "stat",
+      "targets": [{ "expr": "trading_scorecard_closed_trades", "legendFormat": "Closed", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "max": 100,
+          "min": 0,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "yellow", "value": 45 },
+            { "color": "green", "value": 50 }
+          ] },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 28 },
+      "id": 13,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "title": "Win Rate",
+      "type": "stat",
+      "targets": [{ "expr": "trading_scorecard_win_rate_percent", "legendFormat": "Win Rate", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "yellow", "value": 1.0 },
+            { "color": "green", "value": 1.2 }
+          ] },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Profit Factor" },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  { "options": { "match": "-1", "result": { "color": "green", "text": "inf" } }, "type": "value" }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 28 },
+      "id": 14,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "title": "Profit Factor",
+      "type": "stat",
+      "targets": [{ "expr": "trading_scorecard_profit_factor", "legendFormat": "Profit Factor", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "green", "value": 0 }
+          ] },
+          "unit": "currencyEUR"
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 28 },
+      "id": 15,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "title": "Realized PnL",
+      "type": "stat",
+      "targets": [{ "expr": "trading_scorecard_realized_pnl", "legendFormat": "PnL", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 10 },
+            { "color": "red", "value": 15 }
+          ] },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 28 },
+      "id": 16,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "title": "Max Drawdown %",
+      "type": "stat",
+      "targets": [{ "expr": "trading_scorecard_max_drawdown_pct", "legendFormat": "Max DD %", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -213,7 +327,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 28 },
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 32 },
       "id": 11,
       "options": {
         "colorMode": "background",
@@ -230,6 +344,46 @@
         "legendFormat": "{{reason}}",
         "refId": "A"
       }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "percent" },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "id": 17,
+      "options": { "legend": { "calcs": ["lastNotNull", "min", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Trading KPI History (%)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "trading_scorecard_win_rate_percent", "legendFormat": "Win Rate %", "refId": "A" },
+        { "expr": "trading_scorecard_max_drawdown_pct", "legendFormat": "Max DD %", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Realized PnL" },
+            "properties": [
+              { "id": "unit", "value": "currencyEUR" }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "id": 18,
+      "options": { "legend": { "calcs": ["lastNotNull", "min", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Trading KPI History (Absolute)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "trading_scorecard_closed_trades", "legendFormat": "Closed Trades", "refId": "A" },
+        { "expr": "trading_scorecard_profit_factor", "legendFormat": "Profit Factor", "refId": "B" },
+        { "expr": "trading_scorecard_realized_pnl", "legendFormat": "Realized PnL", "refId": "C" }
+      ]
     }
   ],
   "refresh": "30s",
@@ -239,5 +393,5 @@
   "timepicker": {},
   "title": "Trading Bot — Pi Ops",
   "uid": "trading-bot-pi-ops",
-  "version": 3
+  "version": 4
 }

@@ -69,6 +69,7 @@ STATUS_JSON_ENABLED="${STATUS_JSON_ENABLED:-false}"
 STATUS_JSON_FILE="${STATUS_JSON_FILE:-$OUT_DIR/latest_status.json}"
 STATUS_PROM_ENABLED="${STATUS_PROM_ENABLED:-false}"
 STATUS_PROM_FILE="${STATUS_PROM_FILE:-$OUT_DIR/latest_status.prom}"
+METRICS_JSON_FILE="$OUT_DIR/scorecard_metrics_${TS}.json"
 
 mkdir -p "$OUT_DIR"
 
@@ -162,6 +163,7 @@ set +e
   --min-profit-factor "$MIN_PROFIT_FACTOR" \
   --min-avg-pnl "$MIN_AVG_PNL" \
   --max-drawdown-pct "$MAX_DRAWDOWN_PCT" \
+  --metrics-json "$METRICS_JSON_FILE" \
   | tee -a "$OUT_FILE"
 RC=$?
 set -e
@@ -197,6 +199,52 @@ if [[ "$VERDICT" != "GO" ]]; then
   fi
 fi
 echo "Primary reason: $PRIMARY_REASON" | tee -a "$OUT_FILE"
+
+METRICS_CLOSED_TRADES="0"
+METRICS_WIN_RATE="0"
+METRICS_REALIZED_PNL="0"
+METRICS_AVG_PNL="0"
+METRICS_PROFIT_FACTOR="0"
+METRICS_MAX_DRAWDOWN_BASE="0"
+METRICS_MAX_DRAWDOWN_PCT="0"
+if [[ -f "$METRICS_JSON_FILE" ]]; then
+  while IFS='=' read -r metric_key metric_value; do
+    case "$metric_key" in
+      METRICS_CLOSED_TRADES) METRICS_CLOSED_TRADES="$metric_value" ;;
+      METRICS_WIN_RATE) METRICS_WIN_RATE="$metric_value" ;;
+      METRICS_REALIZED_PNL) METRICS_REALIZED_PNL="$metric_value" ;;
+      METRICS_AVG_PNL) METRICS_AVG_PNL="$metric_value" ;;
+      METRICS_PROFIT_FACTOR) METRICS_PROFIT_FACTOR="$metric_value" ;;
+      METRICS_MAX_DRAWDOWN_BASE) METRICS_MAX_DRAWDOWN_BASE="$metric_value" ;;
+      METRICS_MAX_DRAWDOWN_PCT) METRICS_MAX_DRAWDOWN_PCT="$metric_value" ;;
+    esac
+  done < <(
+    "$PYTHON_CMD" - "$METRICS_JSON_FILE" <<'PY'
+import json
+import math
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    payload = json.load(f)
+
+metrics = payload.get("metrics", {})
+mapping = {
+    "METRICS_CLOSED_TRADES": int(metrics.get("closed_trades", 0)),
+    "METRICS_WIN_RATE": float(metrics.get("win_rate", 0.0)),
+    "METRICS_REALIZED_PNL": float(metrics.get("realized_pnl", 0.0)),
+    "METRICS_AVG_PNL": float(metrics.get("avg_pnl", 0.0)),
+    "METRICS_PROFIT_FACTOR": float(metrics.get("profit_factor", 0.0)),
+    "METRICS_MAX_DRAWDOWN_BASE": float(metrics.get("max_drawdown_base", 0.0)),
+    "METRICS_MAX_DRAWDOWN_PCT": float(metrics.get("max_drawdown_pct", 0.0)),
+}
+
+for key, value in mapping.items():
+    if isinstance(value, float) and not math.isfinite(value):
+        value = -1.0
+    print(f"{key}={value}")
+PY
+  )
+fi
 
 RUN_MODE="standard"
 if [[ "$AR_MAINTENANCE_OVERRIDE_USED" == "true" ]]; then
@@ -240,6 +288,13 @@ if [[ "${STATUS_JSON_ENABLED,,}" == "true" ]]; then
   FINAL_EXIT_CODE="$FINAL_RC" \
   REPORT_FILE="$OUT_FILE" \
   LATEST_REPORT_LINK="$LATEST_LINK" \
+  METRICS_CLOSED_TRADES="$METRICS_CLOSED_TRADES" \
+  METRICS_WIN_RATE="$METRICS_WIN_RATE" \
+  METRICS_REALIZED_PNL="$METRICS_REALIZED_PNL" \
+  METRICS_AVG_PNL="$METRICS_AVG_PNL" \
+  METRICS_PROFIT_FACTOR="$METRICS_PROFIT_FACTOR" \
+  METRICS_MAX_DRAWDOWN_BASE="$METRICS_MAX_DRAWDOWN_BASE" \
+  METRICS_MAX_DRAWDOWN_PCT="$METRICS_MAX_DRAWDOWN_PCT" \
   STATUS_JSON_TMP_FILE="$STATUS_JSON_TMP_FILE" \
   "$PYTHON_CMD" - <<'PY'
 import json
@@ -249,11 +304,20 @@ payload = {
     "timestamp_utc": os.environ["TIMESTAMP_UTC"],
     "run_mode": os.environ["RUN_MODE"],
     "verdict": os.environ["VERDICT"],
-  "primary_reason": os.environ["PRIMARY_REASON"],
+    "primary_reason": os.environ["PRIMARY_REASON"],
     "underlying_exit_code": int(os.environ["UNDERLYING_EXIT_CODE"]),
     "final_exit_code": int(os.environ["FINAL_EXIT_CODE"]),
     "report_file": os.environ["REPORT_FILE"],
     "latest_report_link": os.environ["LATEST_REPORT_LINK"],
+    "metrics": {
+        "closed_trades": int(os.environ["METRICS_CLOSED_TRADES"]),
+        "win_rate": float(os.environ["METRICS_WIN_RATE"]),
+        "realized_pnl": float(os.environ["METRICS_REALIZED_PNL"]),
+        "avg_pnl": float(os.environ["METRICS_AVG_PNL"]),
+        "profit_factor": float(os.environ["METRICS_PROFIT_FACTOR"]),
+        "max_drawdown_base": float(os.environ["METRICS_MAX_DRAWDOWN_BASE"]),
+        "max_drawdown_pct": float(os.environ["METRICS_MAX_DRAWDOWN_PCT"]),
+    },
 }
 
 with open(os.environ["STATUS_JSON_TMP_FILE"], "w", encoding="utf-8") as f:
@@ -292,6 +356,27 @@ if [[ "${STATUS_PROM_ENABLED,,}" == "true" ]]; then
     echo "# HELP trading_scorecard_fail_reason Current primary fail reason (labelled gauge set to 1 for active reason)"
     echo "# TYPE trading_scorecard_fail_reason gauge"
     echo "trading_scorecard_fail_reason{reason=\"$PROM_REASON_ESCAPED\"} 1"
+    echo "# HELP trading_scorecard_closed_trades Number of closed trades in the evaluated window"
+    echo "# TYPE trading_scorecard_closed_trades gauge"
+    echo "trading_scorecard_closed_trades $METRICS_CLOSED_TRADES"
+    echo "# HELP trading_scorecard_win_rate_percent Win rate in percent for closed trades"
+    echo "# TYPE trading_scorecard_win_rate_percent gauge"
+    echo "trading_scorecard_win_rate_percent $METRICS_WIN_RATE"
+    echo "# HELP trading_scorecard_realized_pnl Realized PnL in base currency for the evaluated window"
+    echo "# TYPE trading_scorecard_realized_pnl gauge"
+    echo "trading_scorecard_realized_pnl $METRICS_REALIZED_PNL"
+    echo "# HELP trading_scorecard_avg_pnl_per_sell Average realized PnL per sell in base currency"
+    echo "# TYPE trading_scorecard_avg_pnl_per_sell gauge"
+    echo "trading_scorecard_avg_pnl_per_sell $METRICS_AVG_PNL"
+    echo "# HELP trading_scorecard_profit_factor Profit factor for the evaluated window; -1 means infinite because no losses occurred"
+    echo "# TYPE trading_scorecard_profit_factor gauge"
+    echo "trading_scorecard_profit_factor $METRICS_PROFIT_FACTOR"
+    echo "# HELP trading_scorecard_max_drawdown_base Maximum realized drawdown in base currency"
+    echo "# TYPE trading_scorecard_max_drawdown_base gauge"
+    echo "trading_scorecard_max_drawdown_base $METRICS_MAX_DRAWDOWN_BASE"
+    echo "# HELP trading_scorecard_max_drawdown_pct Maximum realized drawdown as percentage of starting capital"
+    echo "# TYPE trading_scorecard_max_drawdown_pct gauge"
+    echo "trading_scorecard_max_drawdown_pct $METRICS_MAX_DRAWDOWN_PCT"
   } > "$STATUS_PROM_TMP_FILE"
 
   mv "$STATUS_PROM_TMP_FILE" "$STATUS_PROM_FILE"

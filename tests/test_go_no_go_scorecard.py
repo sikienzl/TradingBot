@@ -3,6 +3,7 @@ import pandas as pd
 from go_no_go_scorecard import (
     _safe_float,
     _max_drawdown_base,
+    _compute_metrics,
     _evaluate_verdict,
     ScorecardResult,
 )
@@ -247,6 +248,46 @@ class TestEvaluateVerdict:
         )
         assert result.verdict == "HOLD"
         assert len(result.reasons) > 1
+
+
+class TestComputeMetrics:
+    """Tests for _compute_metrics helper function."""
+
+    def test_compute_metrics_with_closed_trades(self):
+        df = pd.DataFrame([
+            {"action": "buy", "pnl_base": 0.0},
+            {"action": "sell", "pnl_base": 2.0},
+            {"action": "sell", "pnl_base": -1.0},
+            {"action": "sell", "pnl_base": 3.0},
+        ])
+
+        result = _compute_metrics(df, starting_capital=20.0)
+
+        assert result.closed_trades == 3
+        assert result.realized_pnl == 4.0
+        assert result.avg_pnl == 4.0 / 3.0
+        assert result.win_rate == (2.0 / 3.0) * 100.0
+        assert result.gross_profit == 5.0
+        assert result.gross_loss == 1.0
+        assert result.profit_factor == 5.0
+        assert result.max_drawdown_base == -1.0
+        assert result.max_drawdown_pct == 5.0
+
+    def test_compute_metrics_without_closed_trades(self):
+        df = pd.DataFrame([
+            {"action": "buy", "pnl_base": 0.0},
+        ])
+
+        result = _compute_metrics(df, starting_capital=20.0)
+
+        assert result.closed_trades == 0
+        assert result.realized_pnl == 0.0
+        assert result.avg_pnl == 0.0
+        assert result.win_rate == 0.0
+        assert result.gross_profit == 0.0
+        assert result.gross_loss == 0.0
+        assert result.max_drawdown_base == 0.0
+        assert result.max_drawdown_pct == 0.0
 
 
 class TestScorecardResultDataclass:
