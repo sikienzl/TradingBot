@@ -21,11 +21,6 @@ apt-get update -q
 apt-get install -y -q prometheus prometheus-node-exporter
 _ok "Packages installed."
 
-if ! id node-exp >/dev/null 2>&1; then
-  useradd --system --no-create-home --shell /usr/sbin/nologin node-exp
-  _ok "Created system user node-exp"
-fi
-
 mkdir -p /opt/trading_2/results/scorecards/textfile
 chown -R trading:trading /opt/trading_2/results
 
@@ -41,10 +36,6 @@ mkdir -p "$PROMETHEUS_DIR" "$PROMETHEUS_RULES_DIR"
 cp "${INSTALL_DIR}/deploy/prometheus.yml" "${PROMETHEUS_DIR}/prometheus.yml"
 cp "${INSTALL_DIR}/deploy/trading-alerts.yml" "${PROMETHEUS_RULES_DIR}/trading-alerts.yml"
 _ok "Prometheus config installed."
-
-if systemctl list-unit-files | grep -q '^prometheus-node-exporter.service'; then
-  systemctl disable --now prometheus-node-exporter.service || true
-fi
 
 systemctl daemon-reload
 systemctl enable --now node-exporter-textfile.service
