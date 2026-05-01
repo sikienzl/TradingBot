@@ -39,6 +39,65 @@ LABEL_MAP = {"verkaufen": 0, "halten": 1, "kaufen": 2}
 INV_LABEL_MAP = {v: k for k, v in LABEL_MAP.items()}
 
 
+def compute_class_weights(y: np.ndarray, n_classes: int = 3) -> List[float]:
+    """Computes inverse-frequency class weights with mean normalized to 1.0."""
+    counts = np.bincount(y.astype(int), minlength=n_classes).astype(float)
+    total = float(np.sum(counts))
+    if total <= 0:
+        return [1.0] * n_classes
+
+    weights: List[float] = []
+    for c in counts:
+        if c <= 0:
+            weights.append(1.0)
+        else:
+            weights.append(total / (n_classes * c))
+
+    mean_weight = float(np.mean(weights)) if weights else 1.0
+    if mean_weight <= 0:
+        return [1.0] * n_classes
+    return [float(w / mean_weight) for w in weights]
+
+
+def tune_confidence_threshold(
+    y_true: np.ndarray,
+    proba: np.ndarray,
+    hold_label: int = LABEL_MAP["halten"],
+    threshold_min: float = 0.40,
+    threshold_max: float = 0.80,
+    threshold_step: float = 0.01,
+) -> Tuple[float, dict]:
+    """Finds the best confidence threshold by maximizing macro-F1 after abstaining to HOLD."""
+    if len(y_true) == 0 or proba.size == 0:
+        return 0.45, {"macro_f1": 0.0, "coverage": 0.0}
+
+    conf = np.max(proba, axis=1)
+    pred = np.argmax(proba, axis=1).astype(int)
+
+    best_th = 0.45
+    best_macro = -1.0
+    best_cov = 0.0
+
+    thresholds = np.arange(
+        threshold_min,
+        threshold_max + threshold_step * 0.5,
+        threshold_step,
+    )
+    for th in thresholds:
+        adjusted = pred.copy()
+        adjusted[conf < th] = hold_label
+        macro = float(f1_score(y_true, adjusted,
+                      average="macro", zero_division=0))
+        coverage = float(np.mean(conf >= th))
+
+        if macro > best_macro or (np.isclose(macro, best_macro) and coverage > best_cov):
+            best_macro = macro
+            best_cov = coverage
+            best_th = float(th)
+
+    return best_th, {"macro_f1": best_macro, "coverage": best_cov}
+
+
 def load_data(path: str = "training_data.csv") -> pd.DataFrame:
     df = pd.read_csv(path)
     if "timestamp" in df.columns:
@@ -157,6 +216,7 @@ def run_walk_forward_evaluation(
 
         x_train, y_train, _ = prepare_xy(train_df)
         x_val, y_val, _ = prepare_xy(val_df)
+        class_weights = compute_class_weights(y_train)
 
         model = CatBoostClassifier(
             iterations=400,
@@ -164,6 +224,7 @@ def run_walk_forward_evaluation(
             depth=6,
             loss_function="MultiClass",
             eval_metric="TotalF1",
+            class_weights=class_weights,
             random_seed=42,
             verbose=False,
         )
@@ -219,6 +280,7 @@ def train_model(
     train_df, val_df = train_val_split_time(df, train_ratio=0.8)
     x_train, y_train, features = prepare_xy(train_df)
     x_val, y_val, _ = prepare_xy(val_df)
+    class_weights = compute_class_weights(y_train)
 
     model = CatBoostClassifier(
         iterations=600,
@@ -226,6 +288,7 @@ def train_model(
         depth=6,
         loss_function="MultiClass",
         eval_metric="TotalF1",
+        class_weights=class_weights,
         random_seed=42,
         verbose=100,
     )
@@ -238,9 +301,23 @@ def train_model(
 
     model.save_model(model_path)
 
+    val_proba = model.predict_proba(x_val)
+    recommended_conf_threshold, threshold_stats = tune_confidence_threshold(
+        y_true=y_val,
+        proba=val_proba,
+        hold_label=LABEL_MAP["halten"],
+        threshold_min=0.40,
+        threshold_max=0.80,
+        threshold_step=0.01,
+    )
+
     metadata = {
         "features": features,
         "label_map": LABEL_MAP,
+        "class_weights": class_weights,
+        "recommended_confidence_threshold": recommended_conf_threshold,
+        "recommended_confidence_threshold_stats": threshold_stats,
+        "margin_threshold": 0.03,
     }
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, ensure_ascii=True, indent=2)
@@ -251,6 +328,11 @@ def train_model(
 
     print("\n=== Validierungsreport (CatBoost) ===")
     print(classification_report(y_true_labels, y_pred_labels, digits=3))
+    print(
+        "Empfohlene Confidence-Schwelle: "
+        f"{recommended_conf_threshold:.2f} "
+        f"(macro_f1={threshold_stats['macro_f1']:.4f}, coverage={threshold_stats['coverage']:.2%})"
+    )
 
     walk_forward_df = run_walk_forward_evaluation(
         df,

@@ -21,11 +21,28 @@
     "ret_1",
     "ret_3",
     "ret_6",
-    "vol_6"
+    "vol_6",
+    "research_sentiment_score",
+    "research_confidence",
+    "research_risk_score",
+    "research_regime_bull",
+    "research_regime_bear",
+    "research_regime_sideways"
   ],
   "label_map": {
     "verkaufen": 0,
     "halten": 1,
     "kaufen": 2
-  }
+  },
+  "class_weights": [
+    0.8159334928882351,
+    0.41680531396655607,
+    1.7672611931452087
+  ],
+  "recommended_confidence_threshold": 0.4,
+  "recommended_confidence_threshold_stats": {
+    "macro_f1": 0.45721588610202923,
+    "coverage": 0.7820368327658146
+  },
+  "margin_threshold": 0.03
 }

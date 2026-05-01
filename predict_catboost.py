@@ -1,5 +1,5 @@
 import json
-from typing import Dict
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -16,6 +16,8 @@ class CatBoostTradingPredictor:
         self.features = []
         self.label_map = {"verkaufen": 0, "halten": 1, "kaufen": 2}
         self.inv_label_map = {v: k for k, v in self.label_map.items()}
+        self.recommended_confidence_threshold = 0.45
+        self.margin_threshold = 0.03
         self._load()
 
     def _load(self) -> None:
@@ -30,10 +32,20 @@ class CatBoostTradingPredictor:
         self.features = metadata.get("features", [])
         self.label_map = metadata.get("label_map", self.label_map)
         self.inv_label_map = {v: k for k, v in self.label_map.items()}
+        self.recommended_confidence_threshold = float(
+            metadata.get("recommended_confidence_threshold", 0.45)
+        )
+        self.margin_threshold = float(metadata.get("margin_threshold", 0.03))
 
-    def predict(self, row_df: pd.DataFrame, confidence_threshold: float = 0.45) -> Dict:
+    def predict(self, row_df: pd.DataFrame, confidence_threshold: Optional[float] = None) -> Dict:
         if row_df.empty:
             return {"decision": "halten", "confidence": 0.0, "proba": {}}
+
+        threshold = float(
+            self.recommended_confidence_threshold
+            if confidence_threshold is None
+            else confidence_threshold
+        )
 
         research_features = load_latest_research_signal(
             getattr(self, "research_signal_path", "")
@@ -59,9 +71,11 @@ class CatBoostTradingPredictor:
         pred_idx = int(np.argmax(proba))
         confidence = float(np.max(proba))
         decision = self.inv_label_map.get(pred_idx, "halten")
+        sorted_proba = np.sort(proba)
+        margin = float(sorted_proba[-1] - sorted_proba[-2]) if len(sorted_proba) >= 2 else 1.0
 
         # Conservative guard: only trade with sufficient confidence
-        if confidence < confidence_threshold:
+        if confidence < threshold or margin < self.margin_threshold:
             decision = "halten"
 
         proba_dict = {
@@ -73,4 +87,6 @@ class CatBoostTradingPredictor:
             "decision": decision,
             "confidence": confidence,
             "proba": proba_dict,
+            "threshold_used": threshold,
+            "margin": margin,
         }

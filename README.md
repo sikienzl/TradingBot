@@ -147,7 +147,10 @@ All parameters are set via `.env` (see `.env.example` for the full list). Key va
 | `TRADE_AMOUNT` | `10` | EUR per trade |
 | `MAX_OPEN_TRADES` | `4` | Maximum concurrent positions |
 | `OHLCV_TIMEFRAME` | `1h` | Candle interval |
+| `TICKER_BATCH_SIZE` | `80` | Symbols per `fetch_tickers` request (smaller is more stable) |
+| `TICKER_FETCH_RETRIES` | `2` | Retries per ticker batch on exchange/network errors |
 | `USE_TABULAR_MODEL` | `true` | Enable CatBoost signal filter |
+| `TABULAR_MIN_CONFIDENCE` | `0.45` | Minimum CatBoost confidence required for non-HOLD signal |
 | `TABULAR_RESEARCH_SIGNAL_PATH` | `./data/research_signal_latest.json` | Latest AutoResearch JSON used as model input features |
 | `AUTO_TUNE_TABULAR_CONFIDENCE` | `true` | Auto-adjust CatBoost threshold |
 | `USE_ML_MODEL` | `false` | Enable LLM signal (GPU recommended) |

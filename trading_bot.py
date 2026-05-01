@@ -181,6 +181,11 @@ class BotConfig:
         self.min_volume_base = float(os.getenv('MIN_VOLUME_BASE', 100000))
         # Number of top coins for analysis
         self.top_n_for_analysis = int(os.getenv('TOP_N_FOR_ANALYSIS', 10))
+        # Split ticker requests into manageable chunks to avoid oversized exchange calls.
+        self.ticker_batch_size = int(os.getenv('TICKER_BATCH_SIZE', 80))
+        self.ticker_fetch_retries = int(os.getenv('TICKER_FETCH_RETRIES', 2))
+        self.ticker_retry_delay_seconds = float(
+            os.getenv('TICKER_RETRY_DELAY_SECONDS', 1.0))
         self.rsi_period = int(os.getenv('RSI_PERIOD', 14))
         self.sma_period_short = int(os.getenv('SMA_PERIOD_SHORT', 20))
         self.sma_period_long = int(os.getenv('SMA_PERIOD_LONG', 50))
@@ -768,9 +773,45 @@ class CryptoTradingBot:
                 "Exchange is not initialised, cannot fetch market data.")
             return {}
 
-        try:
-            tickers = self.exchange.fetch_tickers(self.all_symbols)
-            for symbol in self.all_symbols:
+        symbols = list(self.all_symbols)
+        if not symbols:
+            return {}
+
+        batch_size = max(1, self.config.ticker_batch_size)
+        retries = max(0, self.config.ticker_fetch_retries)
+        delay_seconds = max(0.0, self.config.ticker_retry_delay_seconds)
+
+        for start in range(0, len(symbols), batch_size):
+            batch = symbols[start:start + batch_size]
+            tickers = None
+            for attempt in range(retries + 1):
+                try:
+                    tickers = self.exchange.fetch_tickers(batch)
+                    break
+                except (ccxt.NetworkError, ccxt.ExchangeError) as e:
+                    if attempt >= retries:
+                        logger.error(
+                            f"Error fetching ticker data for batch {start//batch_size + 1}: {e}")
+                    else:
+                        wait = delay_seconds * (attempt + 1)
+                        logger.warning(
+                            f"Retrying ticker batch {start//batch_size + 1}/{(len(symbols)-1)//batch_size + 1} "
+                            f"after error: {e} (wait {wait:.1f}s)")
+                        if wait > 0:
+                            time.sleep(wait)
+                except Exception as e:
+                    if attempt >= retries:
+                        logger.error(
+                            f"Unexpected ticker error for batch {start//batch_size + 1}: {e}")
+                    else:
+                        wait = delay_seconds * (attempt + 1)
+                        if wait > 0:
+                            time.sleep(wait)
+
+            if not tickers:
+                continue
+
+            for symbol in batch:
                 ticker = tickers.get(symbol)
                 if ticker and ticker['last'] is not None and ticker['quoteVolume'] is not None:
                     coin = symbol.split('/')[0]
@@ -779,14 +820,8 @@ class CryptoTradingBot:
                         # Volume in base currency
                         'volume': ticker['quoteVolume']
                     }
-            return market_data
-        except (ccxt.NetworkError, ccxt.ExchangeError) as e:
-            logger.error(f"Error fetching ticker data: {e}")
-            return {}
-        except Exception as e:
-            logger.error(
-                f"Unexpected error fetching ticker data: {e}")
-            return {}
+
+        return market_data
 
     def _fetch_ohlcv_data(self, symbol: str, timeframe: str = '1h', limit: int = 100) -> Optional[pd.DataFrame]:
         """Fetches OHLCV data for a symbol."""
