@@ -59,6 +59,7 @@ INCLUDE_FILES=(
   data_preperation.py
   predict.py
   predict_catboost.py
+  research_signal.py
   go_no_go_scorecard.py
   analyze_trade_journal.py
   get_account_balance.py
