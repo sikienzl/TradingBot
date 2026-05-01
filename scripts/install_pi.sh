@@ -177,7 +177,22 @@ for svc_file in trading-bot.service scorecard.service scorecard.timer; do
   fi
 done
 
+# ── Grafana memory limit (prevents OOM-kills on 1 GB RAM devices) ─────────────
+GRAFANA_OVERRIDE_DIR="/etc/systemd/system/grafana-server.service.d"
+GRAFANA_OVERRIDE_SRC="${INSTALL_DIR}/deploy/grafana-memory-limit.conf"
+if [[ -f "$GRAFANA_OVERRIDE_SRC" ]]; then
+  mkdir -p "$GRAFANA_OVERRIDE_DIR"
+  cp "$GRAFANA_OVERRIDE_SRC" "${GRAFANA_OVERRIDE_DIR}/memory-limit.conf"
+  ok "Grafana memory limit installed (400 MB max)."
+fi
+
 systemctl daemon-reload
+
+# Restart Grafana if running, to apply memory limit
+if systemctl is-active --quiet grafana-server 2>/dev/null; then
+  systemctl restart grafana-server
+  ok "Grafana restarted with memory limit."
+fi
 
 # Enable & start scorecard timer (runs weekly, low risk)
 if [[ -f "${SYSTEMD_DIR}/scorecard.timer" ]]; then
