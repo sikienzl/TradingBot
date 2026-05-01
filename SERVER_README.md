@@ -85,6 +85,7 @@ Then unpack new package, reinstall requirements if needed, and restart the servi
 ## Raspberry Pi Deployment (via GitHub Releases)
 
 The easiest way to run the bot on a Raspberry Pi is through the pre-built GitHub Release packages.
+The current Pi deployment profile, including the Grafana memory cap for monitoring, has been tested on a Raspberry Pi 3B+ with 1 GB RAM.
 
 ### Quick Install (one-liner)
 
@@ -133,6 +134,7 @@ sudo systemctl list-timers              # see weekly scorecard schedule
 ### Optional Browser Monitoring (Prometheus + Node Exporter)
 
 After the bot is installed, enable monitoring stack on the Pi:
+These monitoring defaults are intended for the tested Raspberry Pi 3B+ baseline and can be relaxed on newer Pi models with more RAM.
 
 ```bash
 sudo bash /opt/trading_2/scripts/install_monitoring_pi.sh

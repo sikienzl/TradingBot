@@ -216,6 +216,12 @@ echo
 echo " Installation directory : ${INSTALL_DIR}"
 echo " Python environment     : ${VENV}"
 echo " Log directory          : ${LOG_DIR}"
+echo " Tested hardware        : Raspberry Pi 3B+ (1 GB RAM)"
+echo " Future upgrade path    : Raspberry Pi 5 supported as higher-headroom target"
+echo
+echo " Notes:"
+echo "  - The bundled low-RAM defaults are validated on Raspberry Pi 3B+."
+echo "  - On a future Raspberry Pi 5, monitoring and model settings can be relaxed."
 echo
 echo " ⚠️  Next steps:"
 echo "  1. Edit /opt/trading_2/.env – set API keys, DRY_RUN, etc."

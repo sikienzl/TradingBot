@@ -179,6 +179,11 @@ cat > "$NOTES_FILE" <<EOF
 Trading Bot Pi Release Notes - ${TAG}
 Date: $(date -Iseconds)
 
+Hardware baseline
+- Tested deployment profile: Raspberry Pi 3B+ (1 GB RAM)
+- Future target: Raspberry Pi 5 for higher monitoring/model headroom
+- Note: bundled defaults stay conservative for the Pi 3B+ baseline
+
 Base
 - Git commit: $(git rev-parse --short HEAD)
 - Previous tag: ${PREV_TAG:-none}
@@ -233,7 +238,7 @@ AUTH_HEADER="Authorization: Bearer ${GITHUB_TOKEN}"
 
 # Create release
 info "Creating GitHub Release ${TAG} ..."
-RELEASE_PAYLOAD="$(printf '{"tag_name":"%s","name":"Raspberry Pi Release %s","body":"## Raspberry Pi Release %s\n\n**SHA-256:** `%s`\n\n### Installation\n```bash\ncurl -fsSL https://github.com/%s/releases/download/%s/install_pi.sh | bash -s -- %s\n```\nSee SERVER_README.md for full instructions.","draft":false,"prerelease":false}' \
+RELEASE_PAYLOAD="$(printf '{"tag_name":"%s","name":"Raspberry Pi Release %s","body":"## Raspberry Pi Release %s\n\n**SHA-256:** `%s`\n\n**Tested baseline:** Raspberry Pi 3B+ (1 GB RAM)\n\n**Planned upgrade path:** Raspberry Pi 5 for more RAM headroom and relaxed monitoring/model settings.\n\n### Installation\n```bash\ncurl -fsSL https://github.com/%s/releases/download/%s/install_pi.sh | bash -s -- %s\n```\nSee SERVER_README.md for full instructions.","draft":false,"prerelease":false}' \
   "$TAG" "$TAG" "$TAG" "$SHA256" "$GITHUB_REPO" "$TAG" "$TAG")"
 
 RELEASE_RESPONSE="$(curl -fsSL \

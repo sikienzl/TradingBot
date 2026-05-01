@@ -18,6 +18,8 @@ pip install -r requirements.txt
 > Install dependencies with `pip install -r requirements-pi.txt` first; if TA-Lib fails to build,
 > compile the TA-Lib C library from source and retry.
 
+The current low-RAM Raspberry Pi runtime profile in this repository has been tested on a Raspberry Pi 3B+ with 1 GB RAM.
+
 Copy and edit the example config:
 ```sh
 cp .env.example .env        # default / dry-run profile
