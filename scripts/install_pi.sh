@@ -162,6 +162,77 @@ ok "Python environment ready at ${VENV}"
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR"
 ok "Ownership set to ${SERVICE_USER}."
 
+install_or_update_monitoring() {
+  local monitoring_files=()
+  local missing=0
+
+  monitoring_files=(
+    "${INSTALL_DIR}/deploy/prometheus.yml"
+    "${INSTALL_DIR}/deploy/trading-alerts.yml"
+    "${INSTALL_DIR}/deploy/grafana-datasource.yml"
+    "${INSTALL_DIR}/deploy/grafana-dashboard-provisioning.yml"
+    "${INSTALL_DIR}/deploy/grafana-dashboard.json"
+  )
+
+  for monitoring_file in "${monitoring_files[@]}"; do
+    if [[ ! -f "$monitoring_file" ]]; then
+      echo "WARN: Monitoring config missing: ${monitoring_file}"
+      missing=1
+    fi
+  done
+
+  if [[ "$missing" -ne 0 ]]; then
+    echo "WARN: Skipping monitoring config sync because one or more files are missing."
+    return 0
+  fi
+
+  mkdir -p /etc/prometheus /etc/prometheus/rules
+  mkdir -p /etc/grafana/provisioning/datasources
+  mkdir -p /etc/grafana/provisioning/dashboards
+  mkdir -p /etc/grafana/dashboards
+  mkdir -p "${INSTALL_DIR}/results/scorecards/textfile"
+
+  cp "${INSTALL_DIR}/deploy/prometheus.yml" /etc/prometheus/prometheus.yml
+  cp "${INSTALL_DIR}/deploy/trading-alerts.yml" /etc/prometheus/rules/trading-alerts.yml
+  cp "${INSTALL_DIR}/deploy/grafana-datasource.yml" /etc/grafana/provisioning/datasources/trading.yml
+  cp "${INSTALL_DIR}/deploy/grafana-dashboard-provisioning.yml" /etc/grafana/provisioning/dashboards/trading.yml
+  cp "${INSTALL_DIR}/deploy/grafana-dashboard.json" /etc/grafana/dashboards/trading-bot.json
+
+  chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}/results"
+  ok "Monitoring configs refreshed."
+
+  if systemctl list-unit-files | grep -q '^prometheus\.service'; then
+    systemctl restart prometheus
+    ok "Prometheus restarted."
+  fi
+
+  if systemctl list-unit-files | grep -q '^grafana-server\.service'; then
+    systemctl enable --now grafana-server
+    ok "Grafana ensured and dashboard refreshed."
+  fi
+
+  for monitor_unit in scorecard-status.service scorecard-status.timer node-exporter-textfile.service; do
+    local monitor_src="${INSTALL_DIR}/deploy/${monitor_unit}"
+    local monitor_dest="${SYSTEMD_DIR}/${monitor_unit}"
+    if [[ -f "$monitor_src" ]]; then
+      cp "$monitor_src" "$monitor_dest"
+      ok "Installed ${monitor_unit}"
+    fi
+  done
+
+  systemctl daemon-reload
+
+  if systemctl list-unit-files | grep -q '^node-exporter-textfile\.service'; then
+    systemctl enable --now node-exporter-textfile.service
+    ok "node-exporter textfile collector ensured."
+  fi
+
+  if systemctl list-unit-files | grep -q '^scorecard-status\.timer'; then
+    systemctl enable --now scorecard-status.timer
+    ok "Scorecard status timer ensured."
+  fi
+}
+
 # ── systemd services ──────────────────────────────────────────────────────────
 SYSTEMD_DIR="/etc/systemd/system"
 info "Installing systemd services..."
@@ -176,6 +247,8 @@ for svc_file in trading-bot.service scorecard.service scorecard.timer; do
     echo "WARN: ${SRC} not found – ${svc_file} not installed."
   fi
 done
+
+install_or_update_monitoring
 
 # ── Grafana memory limit (prevents OOM-kills on 1 GB RAM devices) ─────────────
 GRAFANA_OVERRIDE_DIR="/etc/systemd/system/grafana-server.service.d"

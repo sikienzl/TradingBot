@@ -57,6 +57,7 @@ jobs:
              deploy/node-exporter-textfile.service \
              deploy/prometheus.yml \
              deploy/trading-alerts.yml \
+             deploy/grafana-datasource.yml \
              deploy/grafana-dashboard.json \
              deploy/grafana-dashboard-provisioning.yml \
              deploy/grafana-memory-limit.conf \
