@@ -57,6 +57,7 @@ class Portfolio:
             state = {
                 'cash': self.cash,
                 'holdings': self.holdings,
+                'open_trades': self.open_trades,
                 'base_currency': self.base_currency,
                 'timestamp': datetime.now().isoformat(),
             }
@@ -80,9 +81,13 @@ class Portfolio:
             self.cash = float(state.get('cash', 0.0))
             self.holdings = {k: float(v)
                              for k, v in state.get('holdings', {}).items()}
+            self.open_trades = state.get('open_trades', {})
             logger.info(f"Portfolio state loaded from {state_file}")
             logger.info(f"  Cash: {self.cash:.2f} {self.base_currency}")
             logger.info(f"  Holdings: {self.holdings}")
+            if self.open_trades:
+                logger.info(
+                    f"  Open trades restored: {list(self.open_trades.keys())}")
             return True
         except Exception as e:
             logger.error(f"Failed to load portfolio state: {e}")
