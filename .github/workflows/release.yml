@@ -16,6 +16,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Extract version from tag
         id: version
@@ -133,19 +136,50 @@ jobs:
             CHANGED_FILES="- No file list available."
           fi
 
-          cat <<EOF > release_notes.md
+          HIGHLIGHTS="$(printf '%s\n' "$COMMITS" | head -5)"
+          if [[ -z "$HIGHLIGHTS" ]]; then
+            HIGHLIGHTS="- No highlights available."
+          fi
+
+          cat <<EOF > release_body.md
           ## Crypto Trading Bot ${VERSION}
 
-          ### What changed
+          ### Highlights
 
+          ${HIGHLIGHTS}
+
+          ### Notes Asset
+
+          Detailed notes are attached as \`release-notes-${VERSION}.txt\`.
+
+          ### Raspberry Pi Quick Install
+
+          \`\`\`bash
+          curl -fsSL https://github.com/${{ github.repository }}/releases/download/${VERSION}/install_pi.sh | sudo bash -s -- ${VERSION}
+          \`\`\`
+
+          EOF
+
+          cat <<EOF > release-notes-${VERSION}.txt
+          ## Crypto Trading Bot ${VERSION}
+
+          Date: $(date -I)
           Previous tag: ${PREV_TAG:-none}
           Commit: ${GITHUB_SHA}
+          Archive: trading-bot-pi-${VERSION}.tar.gz
+          SHA-256: $(cut -d' ' -f1 "${PKG}.tar.gz.sha256")
 
-          ### Commits in this release
+          ### Highlights
 
-          ${COMMITS}
+          ${HIGHLIGHTS}
 
-          ### Changed files
+          ### Operational Impact
+
+          - Review the highlights above before rollout; they summarize the release delta.
+          - Use the verification checklist below after deployment to confirm runtime health.
+          - Monitoring and dashboard behavior can change when related components are listed below.
+
+          ### Changed Components
 
           ${CHANGED_FILES}
 
@@ -183,10 +217,19 @@ jobs:
           - Systemd service & timer units (\`deploy/\`)
           - One-shot installer (\`scripts/install_pi.sh\`)
           - Monitoring stack config for Prometheus and Grafana
+
+          ### Verification Checklist
+
+          - Confirm the relevant systemd services and timers are active after deployment.
+          - Confirm the Prometheus textfile export updates after the next scorecard run.
+          - Confirm Grafana panels load the expected values for this release.
+
+          ### Notes
+
+          - Review the changed components before rolling out to production.
+          - Keep production safeguards and secret-handling practices enabled during release-candidate testing.
           EOF
 
-          # Also save as versioned txt file for upload as release asset
-          cp release_notes.md "release-notes-${VERSION}.txt"
           echo "NOTES_FILE=release-notes-${VERSION}.txt" >> "$GITHUB_ENV"
 
       - name: Publish GitHub Release
@@ -194,7 +237,7 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.VERSION }}
           name: "Crypto Trading Bot ${{ steps.version.outputs.VERSION }}"
-          body_path: release_notes.md
+          body_path: release_body.md
           files: |
             ${{ env.PKG }}.tar.gz
             ${{ env.PKG }}.tar.gz.sha256

@@ -45,9 +45,10 @@ PACKAGE_NAME="trading-bot-pi-${TAG}"
 ARCHIVE_NAME="${PACKAGE_NAME}.tar.gz"
 NOTES_NAME="release-notes-${TAG}.txt"
 NOTES_FILE="${ROOT_DIR}/${NOTES_NAME}"
+RELEASE_BODY_FILE="${ROOT_DIR}/release-body-${TAG}.md"
 BUILD_DIR="$(mktemp -d)"
 STAGE="${BUILD_DIR}/${PACKAGE_NAME}"
-trap 'rm -rf "$BUILD_DIR"' EXIT
+trap 'rm -rf "$BUILD_DIR"; rm -f "$RELEASE_BODY_FILE"' EXIT
 
 info "Building release ${TAG} ..."
 
@@ -175,21 +176,50 @@ if [[ -z "$CHANGED_FILES" ]]; then
   CHANGED_FILES="- No file list available."
 fi
 
+HIGHLIGHTS="$(printf '%s\n' "$COMMITS" | head -5)"
+if [[ -z "$HIGHLIGHTS" ]]; then
+  HIGHLIGHTS="- No highlights available."
+fi
+
+cat > "$RELEASE_BODY_FILE" <<EOF
+## Crypto Trading Bot ${TAG}
+
+### Highlights
+
+${HIGHLIGHTS}
+
+### Notes Asset
+
+Detailed notes are attached as `${NOTES_NAME}`.
+
+### Raspberry Pi Quick Install
+
+```bash
+curl -fsSL https://github.com/${REPO_FOR_NOTES}/releases/download/${TAG}/install_pi.sh | sudo bash -s -- ${TAG}
+```
+
+EOF
+
 cat > "$NOTES_FILE" <<EOF
 ## Crypto Trading Bot ${TAG}
 
-### What changed
-
+Date: $(date -I)
 Previous tag: ${PREV_TAG:-none}
 Commit: $(git rev-parse --short HEAD)
 Archive: ${ARCHIVE_NAME}
 SHA-256: ${SHA256}
 
-### Commits in this release
+### Highlights
 
-${COMMITS}
+${HIGHLIGHTS}
 
-### Changed files
+### Operational Impact
+
+- Review the highlights above before rollout; they summarize the release delta.
+- Use the verification checklist below after deployment to confirm runtime health.
+- Monitoring and dashboard behavior can change when related components are listed below.
+
+### Changed Components
 
 ${CHANGED_FILES}
 
@@ -227,6 +257,17 @@ sudo bash scripts/install_pi.sh ${TAG}
 - Systemd service and timer units (`deploy/`)
 - One-shot installer (`scripts/install_pi.sh`)
 - Monitoring stack config for Prometheus and Grafana
+
+### Verification Checklist
+
+- Confirm the relevant systemd services and timers are active after deployment.
+- Confirm the Prometheus textfile export updates after the next scorecard run.
+- Confirm Grafana panels load the expected values for this release.
+
+### Notes
+
+- Review the changed components before rolling out to production.
+- Keep production safeguards and secret-handling practices enabled during release-candidate testing.
 EOF
 
 info "Release notes generated: ${NOTES_FILE}"
@@ -267,7 +308,7 @@ AUTH_HEADER="Authorization: Bearer ${GITHUB_TOKEN}"
 
 # Create release
 info "Creating GitHub Release ${TAG} ..."
-RELEASE_BODY_JSON="$(python3 - <<'PY' "$NOTES_FILE"
+RELEASE_BODY_JSON="$(python3 - <<'PY' "$RELEASE_BODY_FILE"
 import json
 import pathlib
 import sys
