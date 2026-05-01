@@ -43,6 +43,8 @@ fi
 TAG="v${VERSION}"
 PACKAGE_NAME="trading-bot-pi-${TAG}"
 ARCHIVE_NAME="${PACKAGE_NAME}.tar.gz"
+NOTES_NAME="release-notes-${TAG}.txt"
+NOTES_FILE="${ROOT_DIR}/${NOTES_NAME}"
 BUILD_DIR="$(mktemp -d)"
 STAGE="${BUILD_DIR}/${PACKAGE_NAME}"
 trap 'rm -rf "$BUILD_DIR"' EXIT
@@ -154,6 +156,47 @@ info "SHA-256: ${SHA256}"
 # Write checksum file alongside archive
 echo "$SHA256  ${ARCHIVE_NAME}" > "${ROOT_DIR}/${ARCHIVE_NAME}.sha256"
 
+# ── Release notes (auto-generated) ───────────────────────────────────────────
+PREV_TAG="$(git tag --list 'v*' --sort=-version:refname | grep -vx "$TAG" | head -1 || true)"
+REPO_FOR_NOTES="$(git remote get-url origin | sed -E 's|.*github\.com[:/]||;s|\.git$||')"
+if [[ -n "$PREV_TAG" ]]; then
+  CHANGE_RANGE="${PREV_TAG}..HEAD"
+  COMMITS="$(git --no-pager log --pretty='- %h %s' ${CHANGE_RANGE} | head -20 || true)"
+  CHANGED_FILES="$(git --no-pager diff --name-only ${CHANGE_RANGE} | sed 's/^/- /' | head -40 || true)"
+else
+  CHANGE_RANGE="HEAD"
+  COMMITS="$(git --no-pager log -1 --pretty='- %h %s' HEAD || true)"
+  CHANGED_FILES="$(git --no-pager show --pretty='' --name-only HEAD | sed 's/^/- /' | sed '/^- $/d' | head -40 || true)"
+fi
+if [[ -z "$COMMITS" ]]; then
+  COMMITS="- No commit summary available."
+fi
+if [[ -z "$CHANGED_FILES" ]]; then
+  CHANGED_FILES="- No file list available."
+fi
+
+cat > "$NOTES_FILE" <<EOF
+Trading Bot Pi Release Notes - ${TAG}
+Date: $(date -Iseconds)
+
+Base
+- Git commit: $(git rev-parse --short HEAD)
+- Previous tag: ${PREV_TAG:-none}
+- Archive: ${ARCHIVE_NAME}
+- SHA-256: ${SHA256}
+
+Commits
+${COMMITS}
+
+Changed files
+${CHANGED_FILES}
+
+Install
+curl -fsSL https://github.com/${REPO_FOR_NOTES}/releases/download/${TAG}/install_pi.sh | bash -s -- ${TAG}
+EOF
+
+info "Release notes generated: ${NOTES_FILE}"
+
 # ── Git tag ───────────────────────────────────────────────────────────────────
 if git rev-parse "$TAG" >/dev/null 2>&1; then
   echo "WARN: Tag $TAG already exists locally, skipping tag creation."
@@ -172,6 +215,7 @@ if [[ -z "$GITHUB_TOKEN" ]]; then
   info "To upload manually:"
   info "  GITHUB_TOKEN=<token> bash scripts/create_pi_release.sh ${TAG}"
   info "Archive is ready at: ${ROOT_DIR}/${ARCHIVE_NAME}"
+  info "Notes are ready at: ${NOTES_FILE}"
   exit 0
 fi
 
@@ -232,9 +276,19 @@ curl -fsSL \
   --data-binary @"${ROOT_DIR}/scripts/install_pi.sh" \
   "${UPLOAD_URL}?name=install_pi.sh" > /dev/null
 
+# Upload release notes
+info "Uploading ${NOTES_NAME} ..."
+curl -fsSL \
+  -X POST \
+  -H "$AUTH_HEADER" \
+  -H "Content-Type: text/plain" \
+  --data-binary @"${NOTES_FILE}" \
+  "${UPLOAD_URL}?name=${NOTES_NAME}" > /dev/null
+
 info "───────────────────────────────────────────────────"
 info "Release ${TAG} published!"
 info "URL: https://github.com/${GITHUB_REPO}/releases/tag/${TAG}"
 info "Archive: ${ROOT_DIR}/${ARCHIVE_NAME}"
 info "SHA-256: ${SHA256}"
+info "Notes: ${NOTES_FILE}"
 info "───────────────────────────────────────────────────"
