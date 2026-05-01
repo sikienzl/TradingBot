@@ -1,0 +1,18 @@
+[Unit]
+Description=Trading Bot - Monitoring Status Export
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=trading
+Group=trading
+WorkingDirectory=/opt/trading_2
+EnvironmentFile=/opt/trading_2/.env
+Environment=STATUS_JSON_ENABLED=true
+Environment=STATUS_PROM_ENABLED=true
+Environment=STATUS_JSON_FILE=/opt/trading_2/results/scorecards/latest_status.json
+Environment=STATUS_PROM_FILE=/opt/trading_2/results/scorecards/textfile/trading_scorecard.prom
+ExecStartPre=/usr/bin/mkdir -p /opt/trading_2/results/scorecards/textfile
+ExecStart=/bin/bash /opt/trading_2/scripts/run_weekly_scorecard.sh
+StandardOutput=append:/opt/trading_2/logs/scorecard_status.log
+StandardError=append:/opt/trading_2/logs/scorecard_status.log

@@ -1,0 +1,12 @@
+[Unit]
+Description=Trading Bot - Monitoring Status Export Timer
+Requires=scorecard-status.service
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

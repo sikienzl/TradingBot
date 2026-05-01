@@ -73,9 +73,11 @@ INCLUDE_FILES=(
   # Deploy helpers
   deploy
   scripts/run_weekly_scorecard.sh
+  scripts/run_node_exporter_textfile_example.sh
   scripts/start_sim_bot.sh
   scripts/stop_sim_bot.sh
   scripts/install_pi.sh
+  scripts/install_monitoring_pi.sh
   scripts/check_autoresearch_setup.sh
   scripts/update_autoresearch_signal.py
 )
@@ -114,9 +116,33 @@ build_host=$(hostname)
 git_commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 EOF
 
+# ── Artifact sanity checks (release blocking) ───────────────────────────────
+REQUIRED_STAGE_FILES=(
+  "${PACKAGE_NAME}/trading_bot.py"
+  "${PACKAGE_NAME}/predict_catboost.py"
+  "${PACKAGE_NAME}/research_signal.py"
+  "${PACKAGE_NAME}/scripts/install_pi.sh"
+  "${PACKAGE_NAME}/scripts/run_weekly_scorecard.sh"
+  "${PACKAGE_NAME}/version.txt"
+)
+
+for required in "${REQUIRED_STAGE_FILES[@]}"; do
+  if [[ ! -e "$BUILD_DIR/$required" ]]; then
+    die "Missing required staged file: $required"
+  fi
+done
+
 # ── Archive ───────────────────────────────────────────────────────────────────
 info "Creating archive ${ARCHIVE_NAME} ..."
 tar -czf "${ROOT_DIR}/${ARCHIVE_NAME}" -C "$BUILD_DIR" "$PACKAGE_NAME"
+
+# Verify required files are present in archive before tagging/release upload.
+for required in "${REQUIRED_STAGE_FILES[@]}"; do
+  if ! tar -tzf "${ROOT_DIR}/${ARCHIVE_NAME}" "$required" >/dev/null 2>&1; then
+    die "Missing required file in archive: $required"
+  fi
+done
+
 SHA256="$(sha256sum "${ROOT_DIR}/${ARCHIVE_NAME}" | awk '{print $1}')"
 info "Archive: ${ROOT_DIR}/${ARCHIVE_NAME}"
 info "SHA-256: ${SHA256}"

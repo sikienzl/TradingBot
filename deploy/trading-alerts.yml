@@ -1,0 +1,29 @@
+groups:
+  - name: trading-bot-alerts
+    rules:
+      - alert: TradingScorecardNoGo
+        expr: trading_scorecard_final_exit_code >= 3
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Trading scorecard verdict is NO-GO"
+          description: "latest_status reports final_exit_code >= 3 for at least 10 minutes."
+
+      - alert: TradingScorecardHold
+        expr: trading_scorecard_final_exit_code == 2
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Trading scorecard verdict is HOLD"
+          description: "latest_status reports HOLD for at least 30 minutes."
+
+      - alert: TradingScorecardMissing
+        expr: (time() - trading_scorecard_timestamp_seconds) > 1200
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Trading scorecard metrics are stale"
+          description: "No fresh textfile metric update for over 20 minutes."

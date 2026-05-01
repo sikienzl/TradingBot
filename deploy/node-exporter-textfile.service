@@ -1,0 +1,15 @@
+[Unit]
+Description=Node Exporter (Trading textfile collector)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=node-exp
+Group=node-exp
+ExecStart=/usr/bin/prometheus-node-exporter --collector.textfile --collector.textfile.directory=/opt/trading_2/results/scorecards/textfile
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

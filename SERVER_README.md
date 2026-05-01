@@ -130,6 +130,26 @@ sudo systemctl stop    trading-bot      # stop
 sudo systemctl list-timers              # see weekly scorecard schedule
 ```
 
+### Optional Browser Monitoring (Prometheus + Node Exporter)
+
+After the bot is installed, enable monitoring stack on the Pi:
+
+```bash
+sudo bash /opt/trading_2/scripts/install_monitoring_pi.sh
+```
+
+This enables:
+- `scorecard-status.timer` (exports status metrics every 5 minutes)
+- `node-exporter-textfile.service` (exposes metrics at port 9100)
+- Prometheus scraping on port 9090
+
+Browser endpoints in local network:
+
+```text
+http://<raspi-ip>:9100/metrics
+http://<raspi-ip>:9090
+```
+
 ### Creating a New Release (from dev machine)
 
 ```bash
