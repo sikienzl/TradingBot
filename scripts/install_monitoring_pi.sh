@@ -18,7 +18,19 @@ fi
 
 _info "Installing monitoring dependencies..."
 apt-get update -q
-apt-get install -y -q prometheus prometheus-node-exporter grafana
+apt-get install -y -q prometheus prometheus-node-exporter apt-transport-https software-properties-common wget gpg
+
+# Add Grafana APT repo if not already present
+if [[ ! -f /etc/apt/sources.list.d/grafana.list ]]; then
+  _info "Adding Grafana APT repository..."
+  mkdir -p /etc/apt/keyrings
+  wget -q -O /etc/apt/keyrings/grafana.gpg https://apt.grafana.com/gpg.key
+  echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" \
+    > /etc/apt/sources.list.d/grafana.list
+  apt-get update -q
+fi
+
+apt-get install -y -q grafana
 _ok "Packages installed."
 
 mkdir -p /opt/trading_2/results/scorecards/textfile
