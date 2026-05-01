@@ -150,6 +150,10 @@ jobs:
           - One-shot installer (\`scripts/install_pi.sh\`)
           EOF
 
+          # Also save as versioned txt file for upload as release asset
+          cp release_notes.md "release-notes-${VERSION}.txt"
+          echo "NOTES_FILE=release-notes-${VERSION}.txt" >> "$GITHUB_ENV"
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -160,3 +164,4 @@ jobs:
             ${{ env.PKG }}.tar.gz
             ${{ env.PKG }}.tar.gz.sha256
             scripts/install_pi.sh
+            ${{ env.NOTES_FILE }}
