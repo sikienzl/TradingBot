@@ -10,7 +10,7 @@
   "links": [],
   "panels": [
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -37,7 +37,7 @@
       "targets": [{ "expr": "trading_scorecard_final_exit_code", "legendFormat": "Verdict", "refId": "A" }]
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -57,7 +57,7 @@
       "targets": [{ "expr": "time() - trading_scorecard_timestamp_seconds", "legendFormat": "Age", "refId": "A" }]
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -77,7 +77,7 @@
       "targets": [{ "expr": "node_hwmon_temp_celsius{chip=\"thermal_thermal_zone0\",sensor=\"temp0\"}", "legendFormat": "°C", "refId": "A" }]
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -99,7 +99,7 @@
       "targets": [{ "expr": "100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)", "legendFormat": "RAM %", "refId": "A" }]
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": { "color": { "mode": "palette-classic" }, "unit": "percent" },
         "overrides": []
@@ -116,7 +116,7 @@
       }]
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": { "color": { "mode": "palette-classic" }, "unit": "bytes" },
         "overrides": []
@@ -132,7 +132,7 @@
       ]
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": { "color": { "mode": "palette-classic" }, "unit": "celsius" },
         "overrides": []
@@ -149,7 +149,7 @@
       }]
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" },
         "overrides": []
@@ -166,7 +166,7 @@
       }]
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" },
         "overrides": []
@@ -182,7 +182,7 @@
       ]
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": { "color": { "mode": "palette-classic" }, "unit": "bytes" },
         "overrides": []
@@ -206,5 +206,5 @@
   "timepicker": {},
   "title": "Trading Bot — Pi Ops",
   "uid": "trading-bot-pi-ops",
-  "version": 1
+  "version": 2
 }
