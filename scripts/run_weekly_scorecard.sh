@@ -20,11 +20,27 @@ fi
 JOURNAL_FILE="${JOURNAL_FILE:-$ROOT_DIR/trade_journal.csv}"
 LOOKBACK_DAYS="${LOOKBACK_DAYS:-7}"
 STARTING_CAPITAL="${STARTING_CAPITAL:-20}"
-MIN_CLOSED_TRADES="${MIN_CLOSED_TRADES:-200}"
+MIN_CLOSED_TRADES="${MIN_CLOSED_TRADES:-}"
 MIN_WIN_RATE="${MIN_WIN_RATE:-45}"
 MIN_PROFIT_FACTOR="${MIN_PROFIT_FACTOR:-1.2}"
 MIN_AVG_PNL="${MIN_AVG_PNL:-0.0}"
 MAX_DRAWDOWN_PCT="${MAX_DRAWDOWN_PCT:-10}"
+
+# Gate profile: use stricter defaults for live and friendlier defaults for paper/test.
+# Explicit MIN_CLOSED_TRADES keeps highest priority for backward compatibility.
+SCORECARD_PROFILE="${SCORECARD_PROFILE:-live}"
+MIN_CLOSED_TRADES_LIVE="${MIN_CLOSED_TRADES_LIVE:-100}"
+MIN_CLOSED_TRADES_TEST="${MIN_CLOSED_TRADES_TEST:-50}"
+if [[ -z "${MIN_CLOSED_TRADES:-}" ]]; then
+  case "${SCORECARD_PROFILE,,}" in
+    paper|test|sim|simulation)
+      MIN_CLOSED_TRADES="$MIN_CLOSED_TRADES_TEST"
+      ;;
+    *)
+      MIN_CLOSED_TRADES="$MIN_CLOSED_TRADES_LIVE"
+      ;;
+  esac
+fi
 
 # Optional AutoResearch refresh before scorecard/model usage.
 AUTORESEARCH_ENABLED="${AUTORESEARCH_ENABLED:-false}"
@@ -60,6 +76,7 @@ echo "=== Weekly Go/No-Go Scorecard ===" | tee "$OUT_FILE"
 echo "Timestamp: $(date -Iseconds)" | tee -a "$OUT_FILE"
 echo "Python: $PYTHON_CMD" | tee -a "$OUT_FILE"
 echo "Journal: $JOURNAL_FILE" | tee -a "$OUT_FILE"
+echo "SCORECARD_PROFILE=${SCORECARD_PROFILE,,}" | tee -a "$OUT_FILE"
 echo "RUN_MODE=standard" | tee -a "$OUT_FILE"
 echo "AUTORESEARCH_ENABLED=${AUTORESEARCH_ENABLED,,}" | tee -a "$OUT_FILE"
 echo | tee -a "$OUT_FILE"
