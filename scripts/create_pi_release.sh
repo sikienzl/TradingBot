@@ -177,7 +177,7 @@ if [[ -z "$CHANGED_FILES" ]]; then
   CHANGED_FILES="- No file list available."
 fi
 
-HIGHLIGHTS="$(printf '%s\n' "$COMMITS" | sed -E 's/^- [0-9a-f]+ //' | sed '/^$/d' | sed 's/^/- /' | head -6)"
+HIGHLIGHTS="$(printf '%s\n' "$COMMITS" | sed '/^$/d' | head -6)"
 if [[ -z "$HIGHLIGHTS" ]]; then
   HIGHLIGHTS="- No highlights available."
 fi

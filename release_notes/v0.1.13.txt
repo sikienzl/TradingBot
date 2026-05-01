@@ -3,7 +3,7 @@ Trading Bot Pi Release Notes - v0.1.13
 Date: 2026-05-01
 
 Highlights
-- Restored the classic release-page install overview while keeping a separate notes asset.
+- 50ca6bb fix: restore release overview and curated notes flow
 - Added Highlights and Notes Asset sections back to the GitHub release page.
 - Preserved custom per-version notes asset support via release_notes/vX.Y.Z.txt.
 - Kept the detailed operational notes out of the release page itself.
