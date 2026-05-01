@@ -228,9 +228,38 @@ Detailed notes are attached as `${NOTES_NAME}`.
 
 ### Raspberry Pi Quick Install
 
+Download and run the installer on your Pi (as root):
+
 ```bash
 curl -fsSL https://github.com/${REPO_FOR_NOTES}/releases/download/${TAG}/install_pi.sh | sudo bash -s -- ${TAG}
 ```
+
+Or manually:
+
+```bash
+# 1. Download the package
+curl -LO https://github.com/${REPO_FOR_NOTES}/releases/download/${TAG}/${ARCHIVE_NAME}
+# 2. Verify checksum
+curl -LO https://github.com/${REPO_FOR_NOTES}/releases/download/${TAG}/${ARCHIVE_NAME}.sha256
+sha256sum -c ${ARCHIVE_NAME}.sha256
+# 3. Extract
+tar -xzf ${ARCHIVE_NAME}
+# 4. Run installer
+sudo bash scripts/install_pi.sh ${TAG}
+```
+
+### After installation
+
+1. Edit `/opt/trading_2/.env` - set your API keys.
+2. `sudo systemctl start trading-bot`
+3. `sudo journalctl -u trading-bot -f`
+
+### What's included
+
+- Runtime Python scripts
+- Pi-optimised `requirements-pi.txt`
+- Systemd service and timer units (`deploy/`)
+- One-shot installer (`scripts/install_pi.sh`)
 
 EOF
 

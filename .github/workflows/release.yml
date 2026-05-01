@@ -188,9 +188,38 @@ jobs:
 
           ### Raspberry Pi Quick Install
 
+          Download and run the installer on your Pi (as root):
+
           \`\`\`bash
           curl -fsSL https://github.com/${{ github.repository }}/releases/download/${VERSION}/install_pi.sh | sudo bash -s -- ${VERSION}
           \`\`\`
+
+          Or manually:
+
+          \`\`\`bash
+          # 1. Download the package
+          curl -LO https://github.com/${{ github.repository }}/releases/download/${VERSION}/trading-bot-pi-${VERSION}.tar.gz
+          # 2. Verify checksum
+          curl -LO https://github.com/${{ github.repository }}/releases/download/${VERSION}/trading-bot-pi-${VERSION}.tar.gz.sha256
+          sha256sum -c trading-bot-pi-${VERSION}.tar.gz.sha256
+          # 3. Extract
+          tar -xzf trading-bot-pi-${VERSION}.tar.gz
+          # 4. Run installer
+          sudo bash scripts/install_pi.sh ${VERSION}
+          \`\`\`
+
+          ### After installation
+
+          1. Edit \`/opt/trading_2/.env\` – set your API keys.
+          2. \`sudo systemctl start trading-bot\`
+          3. \`sudo journalctl -u trading-bot -f\`
+
+          ### What's included
+
+          - Runtime Python scripts
+          - Pi-optimised \`requirements-pi.txt\`
+          - Systemd service & timer units (\`deploy/\`)
+          - One-shot installer (\`scripts/install_pi.sh\`)
 
           EOF
 

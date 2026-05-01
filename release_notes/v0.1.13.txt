@@ -1,0 +1,27 @@
+Trading Bot Pi Release Notes - v0.1.13
+
+Date: 2026-05-01
+
+Highlights
+- Restored the classic release-page install overview while keeping a separate notes asset.
+- Added Highlights and Notes Asset sections back to the GitHub release page.
+- Preserved custom per-version notes asset support via release_notes/vX.Y.Z.txt.
+- Kept the detailed operational notes out of the release page itself.
+
+Operational Impact
+- The release page remains suitable for quick Pi installation guidance.
+- Detailed release commentary stays in the attached notes asset where it is easier to tailor.
+- Future releases can now ship curated notes without changing automation again.
+
+Changed Components
+- .github/workflows/release.yml
+- scripts/create_pi_release.sh
+
+Verification Checklist
+- Release page shows Highlights, Notes Asset, and Raspberry Pi Quick Install.
+- release-notes-v0.1.13.txt is attached as a release asset.
+- The attached notes asset keeps this plain-text structure.
+
+Notes
+- This release updates the release automation and presentation only.
+- Revoke and rotate any PAT that was previously exposed in chat/logs.
