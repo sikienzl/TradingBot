@@ -176,28 +176,57 @@ if [[ -z "$CHANGED_FILES" ]]; then
 fi
 
 cat > "$NOTES_FILE" <<EOF
-Trading Bot Pi Release Notes - ${TAG}
-Date: $(date -Iseconds)
+## Crypto Trading Bot ${TAG}
 
-Hardware baseline
-- Tested deployment profile: Raspberry Pi 3B+ (1 GB RAM)
-- Future target: Raspberry Pi 5 for higher monitoring/model headroom
-- Note: bundled defaults stay conservative for the Pi 3B+ baseline
+### What changed
 
-Base
-- Git commit: $(git rev-parse --short HEAD)
-- Previous tag: ${PREV_TAG:-none}
-- Archive: ${ARCHIVE_NAME}
-- SHA-256: ${SHA256}
+Previous tag: ${PREV_TAG:-none}
+Commit: $(git rev-parse --short HEAD)
+Archive: ${ARCHIVE_NAME}
+SHA-256: ${SHA256}
 
-Commits
+### Commits in this release
+
 ${COMMITS}
 
-Changed files
+### Changed files
+
 ${CHANGED_FILES}
 
-Install
-curl -fsSL https://github.com/${REPO_FOR_NOTES}/releases/download/${TAG}/install_pi.sh | bash -s -- ${TAG}
+### Raspberry Pi Quick Install
+
+Download and run the installer on your Pi (as root):
+
+```bash
+curl -fsSL https://github.com/${REPO_FOR_NOTES}/releases/download/${TAG}/install_pi.sh | sudo bash -s -- ${TAG}
+```
+
+Or manually:
+
+```bash
+# 1. Download the package
+curl -LO https://github.com/${REPO_FOR_NOTES}/releases/download/${TAG}/${ARCHIVE_NAME}
+# 2. Verify checksum
+curl -LO https://github.com/${REPO_FOR_NOTES}/releases/download/${TAG}/${ARCHIVE_NAME}.sha256
+sha256sum -c ${ARCHIVE_NAME}.sha256
+# 3. Extract
+tar -xzf ${ARCHIVE_NAME}
+# 4. Run the bundled installer from the extracted package directory
+cd ${PACKAGE_NAME}
+sudo bash scripts/install_pi.sh ${TAG}
+```
+
+### After installation
+1. Edit `/opt/trading_2/.env` - set your API keys.
+2. `sudo systemctl start trading-bot`
+3. `sudo journalctl -u trading-bot -f`
+
+### What's included
+- Runtime Python scripts
+- Pi-optimised `requirements-pi.txt`
+- Systemd service and timer units (`deploy/`)
+- One-shot installer (`scripts/install_pi.sh`)
+- Monitoring stack config for Prometheus and Grafana
 EOF
 
 info "Release notes generated: ${NOTES_FILE}"
@@ -238,8 +267,15 @@ AUTH_HEADER="Authorization: Bearer ${GITHUB_TOKEN}"
 
 # Create release
 info "Creating GitHub Release ${TAG} ..."
-RELEASE_PAYLOAD="$(printf '{"tag_name":"%s","name":"Raspberry Pi Release %s","body":"## Raspberry Pi Release %s\n\n**SHA-256:** `%s`\n\n**Tested baseline:** Raspberry Pi 3B+ (1 GB RAM)\n\n**Planned upgrade path:** Raspberry Pi 5 for more RAM headroom and relaxed monitoring/model settings.\n\n### Installation\n```bash\ncurl -fsSL https://github.com/%s/releases/download/%s/install_pi.sh | bash -s -- %s\n```\nSee SERVER_README.md for full instructions.","draft":false,"prerelease":false}' \
-  "$TAG" "$TAG" "$TAG" "$SHA256" "$GITHUB_REPO" "$TAG" "$TAG")"
+RELEASE_BODY_JSON="$(python3 - <<'PY' "$NOTES_FILE"
+import json
+import pathlib
+import sys
+print(json.dumps(pathlib.Path(sys.argv[1]).read_text()))
+PY
+)"
+RELEASE_PAYLOAD="$(printf '{"tag_name":"%s","name":"Raspberry Pi Release %s","body":%s,"draft":false,"prerelease":false}' \
+  "$TAG" "$TAG" "$RELEASE_BODY_JSON")"
 
 RELEASE_RESPONSE="$(curl -fsSL \
   -X POST \

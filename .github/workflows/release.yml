@@ -114,8 +114,40 @@ jobs:
         id: notes
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
+          PREV_TAG="$(git tag --list 'v*' --sort=-version:refname | grep -vx "${VERSION}" | head -1 || true)"
+
+          if [[ -n "$PREV_TAG" ]]; then
+            CHANGE_RANGE="${PREV_TAG}..HEAD"
+            COMMITS="$(git --no-pager log --pretty='- %h %s' ${CHANGE_RANGE} | head -20 || true)"
+            CHANGED_FILES="$(git --no-pager diff --name-only ${CHANGE_RANGE} | sed 's/^/- /' | head -40 || true)"
+          else
+            CHANGE_RANGE="HEAD"
+            COMMITS="$(git --no-pager log -1 --pretty='- %h %s' HEAD || true)"
+            CHANGED_FILES="$(git --no-pager show --pretty='' --name-only HEAD | sed 's/^/- /' | sed '/^- $/d' | head -40 || true)"
+          fi
+
+          if [[ -z "$COMMITS" ]]; then
+            COMMITS="- No commit summary available."
+          fi
+          if [[ -z "$CHANGED_FILES" ]]; then
+            CHANGED_FILES="- No file list available."
+          fi
+
           cat <<EOF > release_notes.md
           ## Crypto Trading Bot ${VERSION}
+
+          ### What changed
+
+          Previous tag: ${PREV_TAG:-none}
+          Commit: ${GITHUB_SHA}
+
+          ### Commits in this release
+
+          ${COMMITS}
+
+          ### Changed files
+
+          ${CHANGED_FILES}
 
           ### Raspberry Pi Quick Install
 
@@ -135,7 +167,8 @@ jobs:
           sha256sum -c trading-bot-pi-${VERSION}.tar.gz.sha256
           # 3. Extract
           tar -xzf trading-bot-pi-${VERSION}.tar.gz
-          # 4. Run installer
+          # 4. Run the bundled installer from the extracted package directory
+          cd trading-bot-pi-${VERSION}
           sudo bash scripts/install_pi.sh ${VERSION}
           \`\`\`
 
@@ -149,6 +182,7 @@ jobs:
           - Pi-optimised \`requirements-pi.txt\`
           - Systemd service & timer units (\`deploy/\`)
           - One-shot installer (\`scripts/install_pi.sh\`)
+          - Monitoring stack config for Prometheus and Grafana
           EOF
 
           # Also save as versioned txt file for upload as release asset
