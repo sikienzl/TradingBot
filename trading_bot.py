@@ -62,7 +62,8 @@ class Portfolio:
                 'timestamp': datetime.now().isoformat(),
             }
             with open(state_file, 'w') as f:
-                json.dump(state, f, indent=2)
+                json.dump(state, f, indent=2, default=lambda o: o.isoformat(
+                ) if isinstance(o, datetime) else str(o))
             logger.debug(f"Portfolio state saved to {state_file}")
             return True
         except Exception as e:
@@ -82,6 +83,13 @@ class Portfolio:
             self.holdings = {k: float(v)
                              for k, v in state.get('holdings', {}).items()}
             self.open_trades = state.get('open_trades', {})
+            for trade in self.open_trades.values():
+                ts = trade.get('timestamp')
+                if isinstance(ts, str):
+                    try:
+                        trade['timestamp'] = datetime.fromisoformat(ts)
+                    except ValueError:
+                        trade['timestamp'] = datetime.now()
             logger.info(f"Portfolio state loaded from {state_file}")
             logger.info(f"  Cash: {self.cash:.2f} {self.base_currency}")
             logger.info(f"  Holdings: {self.holdings}")
