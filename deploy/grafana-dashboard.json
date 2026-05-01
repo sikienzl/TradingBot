@@ -197,6 +197,39 @@
         "legendFormat": "Free on /",
         "refId": "A"
       }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "orange", "value": null }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 28 },
+      "id": 11,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "name"
+      },
+      "title": "Primary Fail Reason",
+      "type": "stat",
+      "targets": [{
+        "expr": "trading_scorecard_fail_reason",
+        "legendFormat": "{{reason}}",
+        "refId": "A"
+      }]
     }
   ],
   "refresh": "30s",
@@ -206,5 +239,5 @@
   "timepicker": {},
   "title": "Trading Bot — Pi Ops",
   "uid": "trading-bot-pi-ops",
-  "version": 2
+  "version": 3
 }

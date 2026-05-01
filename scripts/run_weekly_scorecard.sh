@@ -189,6 +189,15 @@ else
   echo "Verdict summary: ERROR (exit code $RC)" | tee -a "$OUT_FILE"
 fi
 
+PRIMARY_REASON="none"
+if [[ "$VERDICT" != "GO" ]]; then
+  PRIMARY_REASON="$(awk '/^Reason\(s\):/{in_reasons=1; next} in_reasons && /^- /{sub(/^- /, "", $0); print; exit} in_reasons && NF==0{exit}' "$OUT_FILE")"
+  if [[ -z "$PRIMARY_REASON" ]]; then
+    PRIMARY_REASON="unspecified"
+  fi
+fi
+echo "Primary reason: $PRIMARY_REASON" | tee -a "$OUT_FILE"
+
 RUN_MODE="standard"
 if [[ "$AR_MAINTENANCE_OVERRIDE_USED" == "true" ]]; then
   RUN_MODE="maintenance_override"
@@ -226,6 +235,7 @@ if [[ "${STATUS_JSON_ENABLED,,}" == "true" ]]; then
   TIMESTAMP_UTC="$TIMESTAMP_UTC_VALUE" \
   RUN_MODE="$RUN_MODE" \
   VERDICT="$VERDICT" \
+  PRIMARY_REASON="$PRIMARY_REASON" \
   UNDERLYING_EXIT_CODE="$RC" \
   FINAL_EXIT_CODE="$FINAL_RC" \
   REPORT_FILE="$OUT_FILE" \
@@ -239,6 +249,7 @@ payload = {
     "timestamp_utc": os.environ["TIMESTAMP_UTC"],
     "run_mode": os.environ["RUN_MODE"],
     "verdict": os.environ["VERDICT"],
+  "primary_reason": os.environ["PRIMARY_REASON"],
     "underlying_exit_code": int(os.environ["UNDERLYING_EXIT_CODE"]),
     "final_exit_code": int(os.environ["FINAL_EXIT_CODE"]),
     "report_file": os.environ["REPORT_FILE"],
@@ -259,6 +270,8 @@ if [[ "${STATUS_PROM_ENABLED,,}" == "true" ]]; then
   mkdir -p "$STATUS_PROM_DIR"
 
   TS_UNIX="$(date -u +%s)"
+  PROM_REASON_ESCAPED="${PRIMARY_REASON//\\/\\\\}"
+  PROM_REASON_ESCAPED="${PROM_REASON_ESCAPED//\"/\\\"}"
 
   {
     echo "# HELP trading_scorecard_final_exit_code Final process exit code returned by run_weekly_scorecard.sh"
@@ -276,6 +289,9 @@ if [[ "${STATUS_PROM_ENABLED,,}" == "true" ]]; then
     echo "# HELP trading_scorecard_verdict Current scorecard verdict (labelled gauge set to 1 for active verdict)"
     echo "# TYPE trading_scorecard_verdict gauge"
     echo "trading_scorecard_verdict{verdict=\"$VERDICT\"} 1"
+    echo "# HELP trading_scorecard_fail_reason Current primary fail reason (labelled gauge set to 1 for active reason)"
+    echo "# TYPE trading_scorecard_fail_reason gauge"
+    echo "trading_scorecard_fail_reason{reason=\"$PROM_REASON_ESCAPED\"} 1"
   } > "$STATUS_PROM_TMP_FILE"
 
   mv "$STATUS_PROM_TMP_FILE" "$STATUS_PROM_FILE"
