@@ -35,22 +35,37 @@ jobs:
              requirements.txt requirements-pi.txt \
              "${PKG}/"
 
+           # Documentation and env templates used at runtime on Pi
+           cp README.md SERVER_README.md .env.example .env.live.example "${PKG}/"
+
           # Scripts & deploy (installer + systemd units)
           mkdir -p "${PKG}/scripts" "${PKG}/deploy"
           cp scripts/run_weekly_scorecard.sh \
+             scripts/run_node_exporter_textfile_example.sh \
              scripts/start_sim_bot.sh \
              scripts/stop_sim_bot.sh \
              scripts/install_pi.sh \
+             scripts/install_monitoring_pi.sh \
+             scripts/check_autoresearch_setup.sh \
+             scripts/update_autoresearch_signal.py \
              "${PKG}/scripts/"
           cp deploy/trading-bot.service \
              deploy/scorecard.service \
              deploy/scorecard.timer \
+             deploy/scorecard-status.service \
+             deploy/scorecard-status.timer \
+             deploy/node-exporter-textfile.service \
+             deploy/prometheus.yml \
+             deploy/trading-alerts.yml \
              "${PKG}/deploy/"
 
-          # .env template (keep .env itself out of the package)
-          if [[ -f ".env.example" ]]; then
-            cp .env.example "${PKG}/"
-          fi
+          # Release metadata inside package
+          cat > "${PKG}/version.txt" <<EOF
+          version=${VERSION}
+          build_date=$(date -Iseconds)
+          build_host=github-actions
+          git_commit=${GITHUB_SHA}
+          EOF
 
           # CatBoost model – decision engine for buy/sell signals
           if [[ -d "model/catboost_trading_model" ]]; then
@@ -58,8 +73,35 @@ jobs:
             cp -r model/catboost_trading_model "${PKG}/model/"
           fi
 
+          # Ensure result/log/data scaffolding exists on first install
+          mkdir -p "${PKG}/results/scorecards" "${PKG}/logs" "${PKG}/data"
+
+          # Release-blocking sanity checks before creating archive
+          required_files=(
+            "${PKG}/trading_bot.py"
+            "${PKG}/predict_catboost.py"
+            "${PKG}/research_signal.py"
+            "${PKG}/scripts/install_pi.sh"
+            "${PKG}/scripts/install_monitoring_pi.sh"
+            "${PKG}/deploy/prometheus.yml"
+            "${PKG}/deploy/scorecard-status.timer"
+            "${PKG}/version.txt"
+          )
+          for required in "${required_files[@]}"; do
+            [[ -e "$required" ]] || { echo "Missing staged file: $required"; exit 1; }
+          done
+
           # Archive
           tar -czf "${PKG}.tar.gz" "${PKG}/"
+
+          # Verify required files are also present in the final archive
+          for required in "${required_files[@]}"; do
+            if ! tar -tzf "${PKG}.tar.gz" "$required" >/dev/null 2>&1; then
+              echo "Missing required file in archive: $required"
+              exit 1
+            fi
+          done
+
           sha256sum "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
 
           echo "PKG=${PKG}" >> "$GITHUB_ENV"
