@@ -142,12 +142,14 @@ This enables:
 - `scorecard-status.timer` (exports status metrics every 5 minutes)
 - `node-exporter-textfile.service` (exposes metrics at port 9100)
 - Prometheus scraping on port 9090
+- Grafana dashboard at port 3000 (Login: admin / admin)
 
 Browser endpoints in local network:
 
 ```text
-http://<raspi-ip>:9100/metrics
-http://<raspi-ip>:9090
+http://<raspi-ip>:3000   ← Grafana Dashboard (Trading Bot — Pi Ops)
+http://<raspi-ip>:9090   ← Prometheus
+http://<raspi-ip>:9100/metrics  ← Raw metrics
 ```
 
 ### Creating a New Release (from dev machine)

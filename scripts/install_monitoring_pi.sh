@@ -18,7 +18,7 @@ fi
 
 _info "Installing monitoring dependencies..."
 apt-get update -q
-apt-get install -y -q prometheus prometheus-node-exporter
+apt-get install -y -q prometheus prometheus-node-exporter grafana
 _ok "Packages installed."
 
 mkdir -p /opt/trading_2/results/scorecards/textfile
@@ -42,9 +42,24 @@ systemctl enable --now node-exporter-textfile.service
 systemctl enable --now scorecard-status.timer
 systemctl restart prometheus
 
+# ── Grafana provisioning ───────────────────────────────────────────────────────
+_info "Configuring Grafana..."
+mkdir -p /etc/grafana/provisioning/datasources
+mkdir -p /etc/grafana/provisioning/dashboards
+mkdir -p /etc/grafana/dashboards
+
+cp "${INSTALL_DIR}/deploy/grafana-datasource.yml"              /etc/grafana/provisioning/datasources/trading.yml
+cp "${INSTALL_DIR}/deploy/grafana-dashboard-provisioning.yml"  /etc/grafana/provisioning/dashboards/trading.yml
+cp "${INSTALL_DIR}/deploy/grafana-dashboard.json"              /etc/grafana/dashboards/trading-bot.json
+
+systemctl enable --now grafana-server
+_ok "Grafana enabled. Dashboard will be available at http://<raspi-ip>:3000"
+# Default login: admin / admin  (change on first login)
+
 _ok "Monitoring services enabled."
 
 echo
 echo "Browser endpoints (LAN):"
-echo "  Node Exporter: http://<raspi-ip>:9100/metrics"
+echo "  Grafana:       http://<raspi-ip>:3000   (admin / admin)"
 echo "  Prometheus:    http://<raspi-ip>:9090"
+echo "  Node Exporter: http://<raspi-ip>:9100/metrics"

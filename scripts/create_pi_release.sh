@@ -80,6 +80,10 @@ INCLUDE_FILES=(
   scripts/install_monitoring_pi.sh
   scripts/check_autoresearch_setup.sh
   scripts/update_autoresearch_signal.py
+  # Monitoring provisioning
+  deploy/grafana-datasource.yml
+  deploy/grafana-dashboard-provisioning.yml
+  deploy/grafana-dashboard.json
 )
 
 for item in "${INCLUDE_FILES[@]}"; do
