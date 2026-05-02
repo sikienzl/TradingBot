@@ -1,0 +1,15 @@
+[Unit]
+Description=Trading Bot – Fetch Research Signal (Fear & Greed Index)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=trading
+Group=trading
+WorkingDirectory=/opt/trading_2
+EnvironmentFile=/opt/trading_2/.env
+ExecStart=/opt/trading_2/.venv/bin/python /opt/trading_2/scripts/fetch_research_signal.py \
+    --output /opt/trading_2/data/research_signal_latest.json
+StandardOutput=append:/opt/trading_2/logs/research_signal.log
+StandardError=append:/opt/trading_2/logs/research_signal.log
