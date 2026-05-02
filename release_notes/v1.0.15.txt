@@ -1,0 +1,39 @@
+Trading Bot Pi Release Notes - v1.0.15
+
+Date: 2026-05-02
+
+Highlights
+- a7ca04d chore: retrain CatBoost model with Fear & Greed signal (FNG=39, bear)
+- 561c15a fix: remove unused imports in test_fetch_research_signal (ruff)
+- 6a14445 feat: fetch Fear & Greed Index as autoresearch signal source
+- Replaced placeholder autoresearch signal with live Fear & Greed Index (alternative.me, no API key required).
+- CatBoost model retrained with real market sentiment (FNG=39, Fear, Bear regime).
+- Research signal now updated automatically every hour on Pi via systemd timer.
+
+Operational Impact
+- The research-signal.timer runs hourly and writes data/research_signal_latest.json.
+- The trading bot reads the signal at each prediction cycle; no restart required after signal updates.
+- Pi upgrades via install_pi.sh will automatically install and enable the new research-signal timer.
+- On first deploy the timer starts immediately (OnBootSec=2min) and then every hour.
+- Existing .env files are not overwritten on upgrade; review .env.example for the new AUTORESEARCH_CMD default.
+
+Changed Components
+- scripts/fetch_research_signal.py
+- deploy/research-signal.service
+- deploy/research-signal.timer
+- scripts/install_pi.sh
+- .env.example
+- model/catboost_trading_model/catboost_model.cbm
+- data/research_signal_latest.json
+- tests/test_fetch_research_signal.py
+
+Verification Checklist
+- research-signal.timer is active after Pi upgrade: systemctl is-active research-signal.timer
+- data/research_signal_latest.json is updated and contains market_regime/sentiment_score.
+- Trading bot reads the signal without errors (check logs/bot.log).
+- Release assets download successfully and checksum verification passes.
+
+Notes
+- Model metrics after retraining: accuracy=0.489, macro_f1=0.444, weighted_f1=0.507.
+- Walk-forward avg: accuracy=0.4771, macro_f1=0.4281. Recommended confidence threshold: 0.40.
+- Revoke and rotate any credentials that may have been exposed in logs, terminals, or chat history.
