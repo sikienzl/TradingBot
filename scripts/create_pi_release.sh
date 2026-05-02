@@ -84,6 +84,7 @@ INCLUDE_FILES=(
   scripts/install_monitoring_pi.sh
   scripts/check_autoresearch_setup.sh
   scripts/update_autoresearch_signal.py
+  scripts/fetch_research_signal.py
   # Monitoring provisioning
   deploy/grafana-datasource.yml
   deploy/grafana-dashboard-provisioning.yml

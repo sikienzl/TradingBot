@@ -51,6 +51,7 @@ jobs:
              scripts/install_monitoring_pi.sh \
              scripts/check_autoresearch_setup.sh \
              scripts/update_autoresearch_signal.py \
+             scripts/fetch_research_signal.py \
              "${PKG}/scripts/"
           cp deploy/trading-bot.service \
              deploy/scorecard.service \
@@ -64,6 +65,8 @@ jobs:
              deploy/grafana-dashboard.json \
              deploy/grafana-dashboard-provisioning.yml \
              deploy/grafana-memory-limit.conf \
+             deploy/research-signal.service \
+             deploy/research-signal.timer \
              "${PKG}/deploy/"
 
           # Release metadata inside package
@@ -92,6 +95,8 @@ jobs:
             "${PKG}/scripts/install_monitoring_pi.sh"
             "${PKG}/deploy/prometheus.yml"
             "${PKG}/deploy/scorecard-status.timer"
+            "${PKG}/deploy/research-signal.service"
+            "${PKG}/deploy/research-signal.timer"
             "${PKG}/version.txt"
           )
           for required in "${required_files[@]}"; do
