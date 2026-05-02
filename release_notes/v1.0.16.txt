@@ -1,0 +1,28 @@
+Trading Bot Pi Release Notes - v1.0.16
+
+Date: 2026-05-02
+
+Highlights
+- b44105b fix: include research-signal units and fetch_research_signal.py in Pi package
+- Patch release: fixes missing deploy files from v1.0.15 Pi package.
+- research-signal.service, research-signal.timer and fetch_research_signal.py were
+  omitted from the tar.gz in v1.0.15 due to incomplete packaging lists.
+
+Operational Impact
+- Pi upgrades from v1.0.15 will now correctly install research-signal.service and
+  research-signal.timer and activate the hourly Fear & Greed fetch.
+- No other functional changes; all v1.0.15 features remain identical.
+
+Changed Components
+- .github/workflows/release.yml
+- scripts/create_pi_release.sh
+
+Verification Checklist
+- research-signal.timer is active after upgrade: systemctl is-active research-signal.timer
+- /opt/trading_2/scripts/fetch_research_signal.py exists on Pi.
+- /opt/trading_2/deploy/research-signal.service and research-signal.timer exist on Pi.
+- data/research_signal_latest.json is populated after the timer runs.
+
+Notes
+- This is a packaging-only patch. No model or logic changes.
+- Revoke and rotate any credentials that may have been exposed in logs, terminals, or chat history.
