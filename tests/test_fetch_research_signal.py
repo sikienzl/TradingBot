@@ -1,8 +1,6 @@
 """Tests for scripts/fetch_research_signal.py"""
 
 import json
-import sys
-import types
 import unittest
 from unittest.mock import MagicMock, patch
 
