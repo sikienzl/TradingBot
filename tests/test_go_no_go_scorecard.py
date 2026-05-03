@@ -83,6 +83,17 @@ class TestEvaluateVerdict:
             min_avg_pnl=1.0,
             max_drawdown_pct=5.0,
             max_allowed_drawdown_pct=10.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            min_recent_realized_pnl=0.0,
+            recent_win_rate=55.0,
+            min_recent_win_rate=45.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            min_catboost_vs_rules_pnl_delta=-0.05,
+            min_source_trades_for_delta=50,
         )
         assert result.verdict == "GO"
         assert "All defined scorecard criteria met" in result.reasons[0]
@@ -231,6 +242,51 @@ class TestEvaluateVerdict:
         assert result.verdict == "HOLD"
         assert any("Max drawdown too high" in r for r in result.reasons)
 
+    def test_verdict_hold_soft_fail_recent_pnl(self):
+        """Test HOLD verdict when recent window PnL is below threshold."""
+        result = _evaluate_verdict(
+            closed_trades=300,
+            min_closed_trades=200,
+            realized_pnl=500.0,
+            win_rate=55.0,
+            min_win_rate=45.0,
+            profit_factor=2.5,
+            min_profit_factor=1.2,
+            avg_pnl=1.67,
+            min_avg_pnl=1.0,
+            max_drawdown_pct=5.0,
+            max_allowed_drawdown_pct=10.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=-0.2,
+            min_recent_realized_pnl=0.0,
+        )
+        assert result.verdict == "HOLD"
+        assert any("Recent PnL too low" in r for r in result.reasons)
+
+    def test_verdict_hold_soft_fail_catboost_underperformance(self):
+        """Test HOLD verdict when CatBoost trails rules beyond allowed delta."""
+        result = _evaluate_verdict(
+            closed_trades=300,
+            min_closed_trades=200,
+            realized_pnl=500.0,
+            win_rate=55.0,
+            min_win_rate=45.0,
+            profit_factor=2.5,
+            min_profit_factor=1.2,
+            avg_pnl=1.67,
+            min_avg_pnl=1.0,
+            max_drawdown_pct=5.0,
+            max_allowed_drawdown_pct=10.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=-0.3,
+            rules_closed_trades=140,
+            rules_realized_pnl=0.4,
+            min_catboost_vs_rules_pnl_delta=-0.05,
+            min_source_trades_for_delta=50,
+        )
+        assert result.verdict == "HOLD"
+        assert any("CatBoost underperforms rules" in r for r in result.reasons)
+
     def test_verdict_multiple_soft_failures(self):
         """Test HOLD with multiple soft failures."""
         result = _evaluate_verdict(
@@ -272,6 +328,9 @@ class TestComputeMetrics:
         assert result.profit_factor == 5.0
         assert result.max_drawdown_base == -1.0
         assert result.max_drawdown_pct == 5.0
+        assert result.recent_closed_trades == 3
+        assert result.recent_realized_pnl == 4.0
+        assert result.recent_win_rate == (2.0 / 3.0) * 100.0
 
     def test_compute_metrics_without_closed_trades(self):
         df = pd.DataFrame([
@@ -288,6 +347,9 @@ class TestComputeMetrics:
         assert result.gross_loss == 0.0
         assert result.max_drawdown_base == 0.0
         assert result.max_drawdown_pct == 0.0
+        assert result.recent_closed_trades == 0
+        assert result.catboost_closed_trades == 0
+        assert result.rules_closed_trades == 0
 
 
 class TestScorecardResultDataclass:

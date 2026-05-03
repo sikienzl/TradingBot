@@ -25,6 +25,11 @@ MIN_WIN_RATE="${MIN_WIN_RATE:-45}"
 MIN_PROFIT_FACTOR="${MIN_PROFIT_FACTOR:-1.2}"
 MIN_AVG_PNL="${MIN_AVG_PNL:-0.0}"
 MAX_DRAWDOWN_PCT="${MAX_DRAWDOWN_PCT:-10}"
+RECENT_TRADES_WINDOW="${RECENT_TRADES_WINDOW:-100}"
+MIN_RECENT_REALIZED_PNL="${MIN_RECENT_REALIZED_PNL:-0.0}"
+MIN_RECENT_WIN_RATE="${MIN_RECENT_WIN_RATE:-45}"
+MIN_CATBOOST_VS_RULES_PNL_DELTA="${MIN_CATBOOST_VS_RULES_PNL_DELTA:--0.05}"
+MIN_SOURCE_TRADES_FOR_DELTA="${MIN_SOURCE_TRADES_FOR_DELTA:-50}"
 
 # Gate profile: use stricter defaults for live and friendlier defaults for paper/test.
 # Explicit MIN_CLOSED_TRADES keeps highest priority for backward compatibility.
@@ -163,6 +168,11 @@ set +e
   --min-profit-factor "$MIN_PROFIT_FACTOR" \
   --min-avg-pnl "$MIN_AVG_PNL" \
   --max-drawdown-pct "$MAX_DRAWDOWN_PCT" \
+  --recent-trades-window "$RECENT_TRADES_WINDOW" \
+  --min-recent-realized-pnl "$MIN_RECENT_REALIZED_PNL" \
+  --min-recent-win-rate "$MIN_RECENT_WIN_RATE" \
+  --min-catboost-vs-rules-pnl-delta "$MIN_CATBOOST_VS_RULES_PNL_DELTA" \
+  --min-source-trades-for-delta "$MIN_SOURCE_TRADES_FOR_DELTA" \
   --metrics-json "$METRICS_JSON_FILE" \
   | tee -a "$OUT_FILE"
 RC=$?

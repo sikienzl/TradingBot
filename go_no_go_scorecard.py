@@ -24,6 +24,14 @@ class ScorecardMetrics:
     profit_factor: float
     max_drawdown_base: float
     max_drawdown_pct: float
+    recent_closed_trades: int
+    recent_realized_pnl: float
+    recent_win_rate: float
+    catboost_closed_trades: int
+    catboost_realized_pnl: float
+    rules_closed_trades: int
+    rules_realized_pnl: float
+    catboost_vs_rules_pnl_delta: float
 
 
 def _safe_float(series: pd.Series) -> pd.Series:
@@ -50,6 +58,17 @@ def _evaluate_verdict(
     min_avg_pnl: float,
     max_drawdown_pct: float,
     max_allowed_drawdown_pct: float,
+    recent_closed_trades: int = 0,
+    recent_realized_pnl: float = 0.0,
+    min_recent_realized_pnl: float = -1e18,
+    recent_win_rate: float = 0.0,
+    min_recent_win_rate: float = 0.0,
+    catboost_closed_trades: int = 0,
+    catboost_realized_pnl: float = 0.0,
+    rules_closed_trades: int = 0,
+    rules_realized_pnl: float = 0.0,
+    min_catboost_vs_rules_pnl_delta: float = -1e18,
+    min_source_trades_for_delta: int = 0,
 ) -> ScorecardResult:
     reasons: List[str] = []
 
@@ -89,13 +108,35 @@ def _evaluate_verdict(
         soft_fails.append(
             f"Max drawdown too high: {max_drawdown_pct:.2f}% > {max_allowed_drawdown_pct:.2f}%")
 
+    if recent_closed_trades > 0 and recent_realized_pnl < min_recent_realized_pnl:
+        soft_fails.append(
+            f"Recent PnL too low: {recent_realized_pnl:.6f} < {min_recent_realized_pnl:.6f}"
+        )
+
+    if recent_closed_trades > 0 and recent_win_rate < min_recent_win_rate:
+        soft_fails.append(
+            f"Recent win rate too low: {recent_win_rate:.2f}% < {min_recent_win_rate:.2f}%"
+        )
+
+    source_samples_ok = (
+        catboost_closed_trades >= min_source_trades_for_delta
+        and rules_closed_trades >= min_source_trades_for_delta
+    )
+    if source_samples_ok:
+        delta = catboost_realized_pnl - rules_realized_pnl
+        if delta < min_catboost_vs_rules_pnl_delta:
+            soft_fails.append(
+                "CatBoost underperforms rules too much: "
+                f"delta={delta:.6f} < {min_catboost_vs_rules_pnl_delta:.6f}"
+            )
+
     if soft_fails:
         return ScorecardResult(verdict="HOLD", reasons=soft_fails)
 
     return ScorecardResult(verdict="GO", reasons=["All defined scorecard criteria met."])
 
 
-def _compute_metrics(df: pd.DataFrame, starting_capital: float) -> ScorecardMetrics:
+def _compute_metrics(df: pd.DataFrame, starting_capital: float, recent_trades_window: int = 100) -> ScorecardMetrics:
     sells = df[df["action"] == "sell"].copy()
     closed = len(sells)
 
@@ -113,6 +154,25 @@ def _compute_metrics(df: pd.DataFrame, starting_capital: float) -> ScorecardMetr
     max_dd_base = _max_drawdown_base(equity)
     max_dd_pct = abs(max_dd_base) / max(starting_capital, 1e-9) * 100.0
 
+    recent = sells.tail(max(1, int(recent_trades_window))).copy()
+    recent_closed = len(recent)
+    recent_realized_pnl = float(
+        recent["pnl_base"].sum()) if recent_closed > 0 else 0.0
+    recent_win_rate = float(
+        (recent["pnl_base"] > 0).mean() * 100.0) if recent_closed > 0 else 0.0
+
+    signal_source = sells.get("signal_source", pd.Series(
+        index=sells.index, dtype=object)).fillna("").astype(str).str.strip().str.lower()
+    catboost_sells = sells[signal_source == "catboost"]
+    rules_sells = sells[signal_source == "rules"]
+    catboost_closed = len(catboost_sells)
+    rules_closed = len(rules_sells)
+    catboost_realized_pnl = float(
+        catboost_sells["pnl_base"].sum()) if catboost_closed > 0 else 0.0
+    rules_realized_pnl = float(
+        rules_sells["pnl_base"].sum()) if rules_closed > 0 else 0.0
+    catboost_vs_rules_pnl_delta = catboost_realized_pnl - rules_realized_pnl
+
     return ScorecardMetrics(
         closed_trades=closed,
         realized_pnl=realized_pnl,
@@ -123,6 +183,14 @@ def _compute_metrics(df: pd.DataFrame, starting_capital: float) -> ScorecardMetr
         profit_factor=profit_factor,
         max_drawdown_base=max_dd_base,
         max_drawdown_pct=max_dd_pct,
+        recent_closed_trades=recent_closed,
+        recent_realized_pnl=recent_realized_pnl,
+        recent_win_rate=recent_win_rate,
+        catboost_closed_trades=catboost_closed,
+        catboost_realized_pnl=catboost_realized_pnl,
+        rules_closed_trades=rules_closed,
+        rules_realized_pnl=rules_realized_pnl,
+        catboost_vs_rules_pnl_delta=catboost_vs_rules_pnl_delta,
     )
 
 
@@ -149,6 +217,16 @@ def main() -> None:
                         help="Minimum avg PnL per sell")
     parser.add_argument("--max-drawdown-pct", type=float, default=10.0,
                         help="Maximum drawdown as percentage of starting capital")
+    parser.add_argument("--recent-trades-window", type=int, default=100,
+                        help="Number of most recent sells used for rolling metrics")
+    parser.add_argument("--min-recent-realized-pnl", type=float, default=0.0,
+                        help="Minimum realized PnL across recent-trades-window sells")
+    parser.add_argument("--min-recent-win-rate", type=float, default=45.0,
+                        help="Minimum win rate across recent-trades-window sells")
+    parser.add_argument("--min-catboost-vs-rules-pnl-delta", type=float, default=-0.05,
+                        help="Minimum allowed CatBoost-vs-Rules realized-PnL delta (catboost - rules)")
+    parser.add_argument("--min-source-trades-for-delta", type=int, default=50,
+                        help="Minimum sells per source required before applying CatBoost-vs-Rules delta gate")
     parser.add_argument("--metrics-json", default="",
                         help="Optional path to write structured scorecard metrics as JSON")
 
@@ -180,7 +258,11 @@ def main() -> None:
 
     df["pnl_base"] = _safe_float(df.get("pnl_base", pd.Series(dtype=float)))
 
-    metrics = _compute_metrics(df, args.starting_capital)
+    metrics = _compute_metrics(
+        df,
+        args.starting_capital,
+        recent_trades_window=args.recent_trades_window,
+    )
 
     result = _evaluate_verdict(
         closed_trades=metrics.closed_trades,
@@ -194,6 +276,17 @@ def main() -> None:
         min_avg_pnl=args.min_avg_pnl,
         max_drawdown_pct=metrics.max_drawdown_pct,
         max_allowed_drawdown_pct=args.max_drawdown_pct,
+        recent_closed_trades=metrics.recent_closed_trades,
+        recent_realized_pnl=metrics.recent_realized_pnl,
+        min_recent_realized_pnl=args.min_recent_realized_pnl,
+        recent_win_rate=metrics.recent_win_rate,
+        min_recent_win_rate=args.min_recent_win_rate,
+        catboost_closed_trades=metrics.catboost_closed_trades,
+        catboost_realized_pnl=metrics.catboost_realized_pnl,
+        rules_closed_trades=metrics.rules_closed_trades,
+        rules_realized_pnl=metrics.rules_realized_pnl,
+        min_catboost_vs_rules_pnl_delta=args.min_catboost_vs_rules_pnl_delta,
+        min_source_trades_for_delta=args.min_source_trades_for_delta,
     )
 
     if args.metrics_json:
@@ -207,6 +300,11 @@ def main() -> None:
                 "min_profit_factor": args.min_profit_factor,
                 "min_avg_pnl": args.min_avg_pnl,
                 "max_drawdown_pct": args.max_drawdown_pct,
+                "recent_trades_window": args.recent_trades_window,
+                "min_recent_realized_pnl": args.min_recent_realized_pnl,
+                "min_recent_win_rate": args.min_recent_win_rate,
+                "min_catboost_vs_rules_pnl_delta": args.min_catboost_vs_rules_pnl_delta,
+                "min_source_trades_for_delta": args.min_source_trades_for_delta,
                 "starting_capital": args.starting_capital,
                 "lookback_days": args.lookback_days,
             },
@@ -228,6 +326,17 @@ def main() -> None:
     print(
         f"Max DD (realized):    {metrics.max_drawdown_base:.6f} {args.base_currency}")
     print(f"Max DD (% of start):  {metrics.max_drawdown_pct:.2f}%")
+    print(
+        f"Recent PnL ({args.recent_trades_window}): {metrics.recent_realized_pnl:.6f} {args.base_currency}"
+    )
+    print(
+        f"Recent win rate:      {metrics.recent_win_rate:.2f}%"
+    )
+    print(
+        "CatBoost vs rules Δ:  "
+        f"{metrics.catboost_vs_rules_pnl_delta:.6f} {args.base_currency} "
+        f"(catboost={metrics.catboost_realized_pnl:.6f}, rules={metrics.rules_realized_pnl:.6f})"
+    )
     print(f"VERDICT:              {result.verdict}")
     print("\nReason(s):")
     for r in result.reasons:
