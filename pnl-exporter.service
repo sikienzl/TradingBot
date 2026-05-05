@@ -1,0 +1,17 @@
+[Unit]
+Description=Trading Bot PnL Metrics Exporter for Prometheus
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=siegfried
+WorkingDirectory=/opt/trading_2
+ExecStart=/opt/trading_2/.venv/bin/python3 /opt/trading_2/pnl_exporter.py
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
