@@ -1,0 +1,32 @@
+Trading Bot Pi Release Notes - v1.0.18
+
+Date: 2026-05-05
+
+Highlights
+- c9c3494 feat: require higher CatBoost confidence for buys
+- 17f35e4 feat: gate CatBoost signals against rules
+- Added source-gating so CatBoost no longer overrides rules on weak contradictory signals.
+- Added a separate minimum confidence only for CatBoost BUY entries.
+- The bot now remains more defensive on entries while still allowing earlier sell/block signals.
+
+Operational Impact
+- CatBoost BUY signals are now filtered more aggressively than CatBoost SELL or sell-block signals.
+- Rules remain the default decision path unless CatBoost clearly confirms or strongly overrides them.
+- This release is intended to reduce weak model-driven entries and improve realized PnL quality, not to increase trade count.
+- Existing deployments can tune the new behavior with TABULAR_SOURCE_GATE_ENABLED, TABULAR_BUY_MIN_CONFIDENCE, TABULAR_OVERRIDE_MIN_CONFIDENCE, and TABULAR_OVERRIDE_MARGIN.
+
+Changed Components
+- trading_bot.py
+- tests/test_trading_bot_risk.py
+- .env.example
+
+Verification Checklist
+- Bot starts successfully after upgrade.
+- Bot log shows CatBoost gating messages for neutral or weak contradictory signals.
+- TABULAR_BUY_MIN_CONFIDENCE is present in .env/.env.example.
+- Trading continues normally with rules-first behavior and stricter CatBoost BUY filtering.
+
+Notes
+- This is a tuning/safety patch for signal quality and entry discipline.
+- It should be evaluated against realized PnL, trade frequency, and CatBoost-vs-rules performance over the next 24-72 hours.
+- Revoke and rotate any credentials that may have been exposed in logs, terminals, or chat history.
