@@ -245,6 +245,12 @@ class BotConfig:
             'TABULAR_RESEARCH_SIGNAL_PATH', './data/research_signal_latest.json')
         self.tabular_min_confidence = float(
             os.getenv('TABULAR_MIN_CONFIDENCE', 0.45))
+        self.tabular_source_gate_enabled = _env_bool(
+            'TABULAR_SOURCE_GATE_ENABLED', False)
+        self.tabular_override_min_confidence = float(
+            os.getenv('TABULAR_OVERRIDE_MIN_CONFIDENCE', 0.60))
+        self.tabular_override_margin = float(
+            os.getenv('TABULAR_OVERRIDE_MARGIN', 0.15))
         # Optional safety filter: block new entries when CatBoost signals a strong sell
         self.tabular_block_on_sell = _env_bool('TABULAR_BLOCK_ON_SELL', False)
         self.tabular_sell_block_min_proba = float(
@@ -939,6 +945,48 @@ class CryptoTradingBot:
             return np.nan
         return self._calculate_atr(ohlcv_df, period=period)
 
+    @staticmethod
+    def _recommendation_bias(recommendation: str) -> int:
+        normalized = (recommendation or '').strip().upper()
+        if normalized in {'STRONG BUY', 'BUY', 'HOLD (UP-TREND)'}:
+            return 1
+        if normalized in {'SELL', 'WEAK SELL', 'HOLD (DOWN-TREND)'}:
+            return -1
+        return 0
+
+    def _should_apply_tabular_signal(
+        self,
+        rule_recommendation: str,
+        rule_score: int,
+        tab_decision: str,
+        tab_confidence: float,
+    ) -> Tuple[bool, str]:
+        if tab_confidence < self.config.tabular_min_confidence:
+            return False, 'below_min_confidence'
+
+        if not self.config.tabular_source_gate_enabled:
+            return True, 'gate_disabled'
+
+        tab_bias = 1 if tab_decision == 'kaufen' else - \
+            1 if tab_decision == 'verkaufen' else 0
+        rule_bias = self._recommendation_bias(rule_recommendation)
+
+        if tab_bias == 0:
+            return False, 'neutral_tabular_signal'
+
+        if tab_bias == rule_bias:
+            return True, 'rule_confirmed'
+
+        rule_strength = abs(float(rule_score) - 50.0) / 50.0
+        advantage = tab_confidence - rule_strength
+        if (
+            tab_confidence >= self.config.tabular_override_min_confidence
+            and advantage >= self.config.tabular_override_margin
+        ):
+            return True, 'strong_override'
+
+        return False, 'gated_by_rules'
+
     def _analyze_coin(self, coin: str, current_price: float) -> Optional[Dict]:
         """Performs a detailed analysis for a single coin."""
         symbol = f"{coin}/{self.config.base_currency}"
@@ -983,6 +1031,9 @@ class CryptoTradingBot:
             elif sma_short < sma_long:
                 recommendation = "HOLD (Down-Trend)"
                 score = 40
+
+        rule_recommendation = recommendation
+        rule_score = score
 
         # ML model analysis (optional, only if loaded and data is valid)
         if self.ml_predictor is not None:
@@ -1142,7 +1193,20 @@ class CryptoTradingBot:
                             f"P(sell)={tab_sell_proba*100:.0f}% >= "
                             f"{self.config.tabular_sell_block_min_proba*100:.0f}%")
 
-                if tab_confidence >= self.config.tabular_min_confidence:
+                should_apply, gate_reason = self._should_apply_tabular_signal(
+                    rule_recommendation=rule_recommendation,
+                    rule_score=rule_score,
+                    tab_decision=tab_decision,
+                    tab_confidence=tab_confidence,
+                )
+                if tab_confidence >= self.config.tabular_min_confidence and not should_apply:
+                    logger.info(
+                        f"  🚧 CatBoost gated for {coin}: {gate_reason} "
+                        f"(rule={rule_recommendation}, rule_score={rule_score}, "
+                        f"tab_decision={tab_decision}, tab_confidence={tab_confidence*100:.0f}%)"
+                    )
+
+                if should_apply:
                     signal_source = 'catboost'
                     signal_confidence = tab_confidence
                     if tab_decision == 'kaufen':

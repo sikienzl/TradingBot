@@ -60,3 +60,55 @@ def test_loss_streak_sets_pause(monkeypatch):
     can_open, reason = bot._can_open_new_positions(100.0)
     assert can_open is False
     assert "BUY pause" in reason
+
+
+def test_tabular_gate_allows_same_direction_confirmation(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.tabular_source_gate_enabled = True
+    bot.config.tabular_min_confidence = 0.45
+
+    allowed, gate_reason = bot._should_apply_tabular_signal(
+        rule_recommendation="HOLD (Up-Trend)",
+        rule_score=60,
+        tab_decision="kaufen",
+        tab_confidence=0.48,
+    )
+
+    assert allowed is True
+    assert gate_reason == "rule_confirmed"
+
+
+def test_tabular_gate_blocks_weak_contradiction(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.tabular_source_gate_enabled = True
+    bot.config.tabular_min_confidence = 0.45
+    bot.config.tabular_override_min_confidence = 0.60
+    bot.config.tabular_override_margin = 0.15
+
+    allowed, gate_reason = bot._should_apply_tabular_signal(
+        rule_recommendation="HOLD (Up-Trend)",
+        rule_score=60,
+        tab_decision="verkaufen",
+        tab_confidence=0.52,
+    )
+
+    assert allowed is False
+    assert gate_reason == "gated_by_rules"
+
+
+def test_tabular_gate_allows_strong_override(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.tabular_source_gate_enabled = True
+    bot.config.tabular_min_confidence = 0.45
+    bot.config.tabular_override_min_confidence = 0.60
+    bot.config.tabular_override_margin = 0.15
+
+    allowed, gate_reason = bot._should_apply_tabular_signal(
+        rule_recommendation="HOLD (Up-Trend)",
+        rule_score=60,
+        tab_decision="verkaufen",
+        tab_confidence=0.85,
+    )
+
+    assert allowed is True
+    assert gate_reason == "strong_override"
