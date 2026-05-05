@@ -141,6 +141,9 @@ class Portfolio:
             'amount_coin': amount_coin,
             'amount_base': amount_base,  # Invested amount in base currency
             'timestamp': datetime.now(),
+            'peak_price': buy_price,
+            'partial_tp_taken': False,
+            'partial_tp_timestamp': None,
             'signal_source': signal_source,
             'signal_confidence': signal_confidence,
             'recommendation': recommendation,
@@ -214,6 +217,18 @@ class BotConfig:
         self.force_fill_slots = _env_bool('FORCE_FILL_SLOTS', False)
         # Minimum score for forced slot filling (without RSI limit)
         self.force_fill_min_score = int(os.getenv('FORCE_FILL_MIN_SCORE', 35))
+        # Optional momentum quality filter for new BUY entries.
+        self.entry_momentum_filter_enabled = _env_bool(
+            'ENTRY_MOMENTUM_FILTER_ENABLED', True)
+        self.entry_min_ret_3 = float(os.getenv('ENTRY_MIN_RET_3', -0.01))
+        self.entry_require_price_above_ema20 = _env_bool(
+            'ENTRY_REQUIRE_PRICE_ABOVE_EMA20', True)
+        self.entry_sharp_pump_filter_enabled = _env_bool(
+            'ENTRY_SHARP_PUMP_FILTER_ENABLED', True)
+        self.entry_max_ret_1 = float(os.getenv('ENTRY_MAX_RET_1', 0.04))
+        self.entry_max_ret_3 = float(os.getenv('ENTRY_MAX_RET_3', 0.08))
+        self.reentry_cooldown_seconds = int(
+            os.getenv('REENTRY_COOLDOWN_SECONDS', 900))
         # Enables additional exit signals from market analysis
         self.enable_signal_exits = _env_bool('ENABLE_SIGNAL_EXITS', True)
         # Close positions also on HOLD (Down-Trend) signal
@@ -221,6 +236,24 @@ class BotConfig:
         # ATR multipliers for stop-loss and take-profit
         self.atr_stop_mult = float(os.getenv('ATR_STOP_MULT', 1.5))
         self.atr_tp_mult = float(os.getenv('ATR_TP_MULT', 2.0))
+        self.partial_take_profit_enabled = _env_bool(
+            'PARTIAL_TAKE_PROFIT_ENABLED', True)
+        self.partial_take_profit_atr_mult = float(
+            os.getenv('PARTIAL_TAKE_PROFIT_ATR_MULT', 1.0))
+        self.partial_take_profit_fraction = float(
+            os.getenv('PARTIAL_TAKE_PROFIT_FRACTION', 0.5))
+        self.partial_take_profit_remainder_max_hold_seconds = int(
+            os.getenv('PARTIAL_TAKE_PROFIT_REMAINDER_MAX_HOLD_SECONDS', 300))
+        self.partial_take_profit_exit_on_weak_signal = _env_bool(
+            'PARTIAL_TAKE_PROFIT_EXIT_ON_WEAK_SIGNAL', True)
+        self.trailing_stop_enabled = _env_bool('TRAILING_STOP_ENABLED', True)
+        self.trailing_stop_atr_mult = float(
+            os.getenv('TRAILING_STOP_ATR_MULT', 1.0))
+        self.break_even_enabled = _env_bool('BREAK_EVEN_ENABLED', True)
+        self.break_even_trigger_pct = float(
+            os.getenv('BREAK_EVEN_TRIGGER_PCT', 1.0))
+        self.break_even_buffer_pct = float(
+            os.getenv('BREAK_EVEN_BUFFER_PCT', 0.1))
         # Maximum hold time in seconds (0 = disabled)
         self.max_hold_seconds = int(os.getenv('MAX_HOLD_SECONDS', 0))
         # Allow smaller trades when cash is below TRADE_AMOUNT
@@ -312,6 +345,7 @@ class CryptoTradingBot:
         self.daily_anchor_date = None
         self.daily_anchor_value: float = 0.0
         self.buy_timestamps_utc: List[datetime] = []
+        self.last_sell_timestamps_utc: Dict[str, datetime] = {}
         self.consecutive_losses: int = 0
         self.buy_pause_until_utc: Optional[datetime] = None
         self.exchange = self._initialize_exchange()
@@ -586,6 +620,24 @@ class CryptoTradingBot:
         cutoff = now_utc - timedelta(hours=1)
         self.buy_timestamps_utc = [
             ts for ts in self.buy_timestamps_utc if ts >= cutoff]
+
+    def _register_sell_timestamp(self, coin: str):
+        self.last_sell_timestamps_utc[coin] = datetime.now(timezone.utc)
+
+    def _is_coin_in_reentry_cooldown(self, coin: str) -> Tuple[bool, int]:
+        cooldown = max(0, self.config.reentry_cooldown_seconds)
+        if cooldown <= 0:
+            return False, 0
+
+        last_sell = self.last_sell_timestamps_utc.get(coin)
+        if last_sell is None:
+            return False, 0
+
+        elapsed = (datetime.now(timezone.utc) - last_sell).total_seconds()
+        remaining = int(max(0, cooldown - elapsed))
+        if remaining > 0:
+            return True, remaining
+        return False, 0
 
     def _refresh_daily_anchor(self, portfolio_value: float):
         today_utc = datetime.now(timezone.utc).date()
@@ -993,6 +1045,67 @@ class CryptoTradingBot:
 
         return False, 'gated_by_rules'
 
+    def _effective_stop_loss_level(self, trade_info: Dict, current_price: float, atr: float) -> float:
+        """Builds a dynamic stop level combining base ATR stop, trailing stop and break-even protection."""
+        buy_price = float(trade_info.get('buy_price', 0.0))
+        if buy_price <= 0:
+            return current_price
+
+        peak_price = float(trade_info.get('peak_price', buy_price))
+        peak_price = max(peak_price, current_price, buy_price)
+        trade_info['peak_price'] = peak_price
+
+        stop_loss_level = buy_price - self.config.atr_stop_mult * atr
+
+        if self.config.trailing_stop_enabled:
+            trailing_level = peak_price - self.config.trailing_stop_atr_mult * atr
+            stop_loss_level = max(stop_loss_level, trailing_level)
+
+        if self.config.break_even_enabled and buy_price > 0:
+            runup_pct = (peak_price - buy_price) / buy_price * 100.0
+            if runup_pct >= self.config.break_even_trigger_pct:
+                break_even_level = buy_price * \
+                    (1.0 + self.config.break_even_buffer_pct / 100.0)
+                stop_loss_level = max(stop_loss_level, break_even_level)
+
+        return stop_loss_level
+
+    def _passes_entry_momentum_filter(self, coin_data: Dict) -> Tuple[bool, str]:
+        """Checks if an entry candidate has acceptable short-term momentum."""
+        if not self.config.entry_momentum_filter_enabled:
+            return True, 'disabled'
+
+        recommendation = str(coin_data.get('recommendation', ''))
+        if recommendation not in {'BUY', 'STRONG BUY', 'HOLD (Up-Trend)'}:
+            return True, 'not_buy_signal'
+
+        ret_3 = coin_data.get('ret_3')
+        if ret_3 is not None and not np.isnan(ret_3):
+            if float(ret_3) < self.config.entry_min_ret_3:
+                return False, f"ret_3_below_min ({float(ret_3):.4f} < {self.config.entry_min_ret_3:.4f})"
+
+        if self.config.entry_require_price_above_ema20:
+            price = coin_data.get('price')
+            ema20 = coin_data.get('ema_20')
+            if (
+                price is not None and ema20 is not None
+                and not np.isnan(price) and not np.isnan(ema20)
+                and float(price) < float(ema20)
+            ):
+                return False, f"price_below_ema20 ({float(price):.4f} < {float(ema20):.4f})"
+
+        if self.config.entry_sharp_pump_filter_enabled:
+            ret_1 = coin_data.get('ret_1')
+            if ret_1 is not None and not np.isnan(ret_1):
+                if float(ret_1) > self.config.entry_max_ret_1:
+                    return False, f"sharp_pump_ret_1 ({float(ret_1):.4f} > {self.config.entry_max_ret_1:.4f})"
+
+            if ret_3 is not None and not np.isnan(ret_3):
+                if float(ret_3) > self.config.entry_max_ret_3:
+                    return False, f"sharp_pump_ret_3 ({float(ret_3):.4f} > {self.config.entry_max_ret_3:.4f})"
+
+        return True, 'ok'
+
     def _analyze_coin(self, coin: str, current_price: float) -> Optional[Dict]:
         """Performs a detailed analysis for a single coin."""
         symbol = f"{coin}/{self.config.base_currency}"
@@ -1011,6 +1124,12 @@ class CryptoTradingBot:
             ohlcv_df['close'], self.config.sma_period_short)
         sma_long = self._calculate_sma(
             ohlcv_df['close'], self.config.sma_period_long)
+        close = ohlcv_df['close']
+        ema_20 = float(close.ewm(span=20, adjust=False).mean().iloc[-1])
+        ret_1 = float(close.pct_change(
+            1).iloc[-1]) if len(ohlcv_df) >= 2 else 0.0
+        ret_3 = float(close.pct_change(
+            3).iloc[-1]) if len(ohlcv_df) >= 4 else 0.0
 
         # Simple strategy based on indicators
         recommendation = "HOLD"
@@ -1087,7 +1206,6 @@ class CryptoTradingBot:
         # Fast tabular model analysis (optional)
         if self.tabular_predictor is not None:
             try:
-                close = ohlcv_df['close']
                 n = len(ohlcv_df)
                 latest = ohlcv_df.iloc[-1]
 
@@ -1236,6 +1354,9 @@ class CryptoTradingBot:
             'rsi': rsi,
             'sma_short': sma_short,
             'sma_long': sma_long,
+            'ema_20': ema_20,
+            'ret_1': ret_1,
+            'ret_3': ret_3,
             'recommendation': recommendation,
             'score': score,
             'signal_source': signal_source,
@@ -1363,6 +1484,14 @@ class CryptoTradingBot:
                     del self.portfolio.holdings[coin]
 
                 entry_trade = self.portfolio.open_trades.get(coin, {})
+                original_amount_coin = float(
+                    entry_trade.get('amount_coin', sell_amount))
+                remaining_open_amount = max(
+                    0.0, original_amount_coin - sell_amount)
+                remaining_ratio = (
+                    remaining_open_amount / original_amount_coin
+                    if original_amount_coin > 0 else 0.0
+                )
                 pnl_base, pnl_pct, hold_seconds = self._record_close_performance(
                     entry_trade, price, sell_amount)
                 self._append_trade_journal({
@@ -1380,7 +1509,13 @@ class CryptoTradingBot:
                     'reason': reason,
                     'dry_run': True,
                 })
-                self.portfolio.remove_trade(coin)
+                self._register_sell_timestamp(coin)
+                if remaining_open_amount > 1e-12 and coin in self.portfolio.open_trades:
+                    self.portfolio.open_trades[coin]['amount_coin'] = remaining_open_amount
+                    self.portfolio.open_trades[coin]['amount_base'] = float(
+                        entry_trade.get('amount_base', 0.0)) * remaining_ratio
+                else:
+                    self.portfolio.remove_trade(coin)
                 # Persist portfolio state after successful dry-run sell
                 if self.config.dry_run:
                     self.portfolio.save_state()
@@ -1441,13 +1576,23 @@ class CryptoTradingBot:
                     f"✅ REAL TRADE (SELL): {order['amount']:.4f} {coin} @ {order['price']:.4f} {self.config.base_currency} (proceeds: {order['cost']:.2f} {self.config.base_currency}, ID: {order['id']})")
 
                 entry_trade = self.portfolio.open_trades.get(coin, {})
+                original_amount_coin = float(
+                    entry_trade.get('amount_coin', amount_in_base_currency / price))
+                sold_amount_coin = float(
+                    order.get('amount', amount_in_base_currency / price))
+                remaining_open_amount = max(
+                    0.0, original_amount_coin - sold_amount_coin)
+                remaining_ratio = (
+                    remaining_open_amount / original_amount_coin
+                    if original_amount_coin > 0 else 0.0
+                )
                 pnl_base, pnl_pct, hold_seconds = self._record_close_performance(
-                    entry_trade, float(order.get('price', price)), float(order.get('amount', amount_in_base_currency / price)))
+                    entry_trade, float(order.get('price', price)), sold_amount_coin)
                 self._append_trade_journal({
                     'coin': coin,
                     'action': 'sell',
                     'price': order.get('price', price),
-                    'amount_coin': order.get('amount', amount_in_base_currency / price),
+                    'amount_coin': sold_amount_coin,
                     'amount_base': order.get('cost', amount_in_base_currency),
                     'pnl_base': pnl_base,
                     'pnl_pct': pnl_pct,
@@ -1458,7 +1603,13 @@ class CryptoTradingBot:
                     'reason': reason,
                     'dry_run': False,
                 })
-                self.portfolio.remove_trade(coin)
+                self._register_sell_timestamp(coin)
+                if remaining_open_amount > 1e-12 and coin in self.portfolio.open_trades:
+                    self.portfolio.open_trades[coin]['amount_coin'] = remaining_open_amount
+                    self.portfolio.open_trades[coin]['amount_base'] = float(
+                        entry_trade.get('amount_base', 0.0)) * remaining_ratio
+                else:
+                    self.portfolio.remove_trade(coin)
             self._update_portfolio_balance()
             return True
         except ccxt.InsufficientFunds as e:
@@ -1483,6 +1634,8 @@ class CryptoTradingBot:
         for coin, trade_info in list(self.portfolio.open_trades.items()):
             buy_price = trade_info['buy_price']
             amount_coin = trade_info['amount_coin']
+            partial_tp_taken = bool(trade_info.get('partial_tp_taken', False))
+            partial_tp_timestamp = trade_info.get('partial_tp_timestamp')
             current_price_data = current_market_data.get(coin)
             if current_price_data is None:
                 logger.warning(
@@ -1496,16 +1649,74 @@ class CryptoTradingBot:
             atr = self._get_atr_for_coin(coin, period=14)
             if np.isnan(atr) or atr == 0:
                 atr = buy_price * 0.02  # Fallback: 2% of price
-            stop_loss_level = buy_price - self.config.atr_stop_mult * atr
+            stop_loss_level = self._effective_stop_loss_level(
+                trade_info, current_price, atr)
             take_profit_level = buy_price + self.config.atr_tp_mult * atr
+            partial_take_profit_level = buy_price + \
+                self.config.partial_take_profit_atr_mult * atr
+            peak_price = float(trade_info.get('peak_price', buy_price))
             logger.info(
                 f"  📊 {coin}: Buy {buy_price:.4f} → Current {current_price:.4f} "
                 f"({pnl_pct:+.2f}%) | SL {stop_loss_level:.4f} | TP {take_profit_level:.4f} "
-                f"| Hold time {int(hold_seconds)}s")
+                f"| Peak {peak_price:.4f} | Hold time {int(hold_seconds)}s")
             exit_reason = None
+            partial_fraction = min(
+                max(self.config.partial_take_profit_fraction, 0.0), 1.0)
+            if (
+                self.config.partial_take_profit_enabled
+                and not partial_tp_taken
+                and 0.0 < partial_fraction < 1.0
+                and current_price >= partial_take_profit_level
+            ):
+                partial_amount_coin = amount_coin * partial_fraction
+                if partial_amount_coin > 1e-12:
+                    partial_reason = (
+                        f"💸 PARTIAL-TAKE-PROFIT ({partial_fraction*100:.0f}% @ "
+                        f"{partial_take_profit_level:.4f})"
+                    )
+                    logger.info(
+                        f"{partial_reason} → Teilverkauf {coin} @ {current_price:.4f}")
+                    if self._execute_trade(
+                        coin,
+                        "sell",
+                        current_price,
+                        partial_amount_coin * current_price,
+                        atr=atr,
+                        reason=partial_reason,
+                    ):
+                        if coin in self.portfolio.open_trades:
+                            self.portfolio.open_trades[coin]['partial_tp_taken'] = True
+                            self.portfolio.open_trades[coin]['partial_tp_timestamp'] = datetime.now(
+                            )
+                            if self.config.dry_run:
+                                self.portfolio.save_state()
+                    continue
+            if partial_tp_taken and partial_tp_timestamp:
+                partial_tp_elapsed_seconds = (
+                    datetime.now() - partial_tp_timestamp).total_seconds()
+                if (
+                    self.config.partial_take_profit_remainder_max_hold_seconds > 0
+                    and partial_tp_elapsed_seconds >= self.config.partial_take_profit_remainder_max_hold_seconds
+                ):
+                    exit_reason = (
+                        "⏱️ PARTIAL-TP-REMAINDER-TIMEOUT "
+                        f"({int(partial_tp_elapsed_seconds)}s >= "
+                        f"{self.config.partial_take_profit_remainder_max_hold_seconds}s)"
+                    )
+                elif (
+                    self.config.partial_take_profit_exit_on_weak_signal
+                    and market_analysis is not None
+                ):
+                    signal = market_analysis.get(
+                        coin, {}).get('recommendation', '')
+                    if signal in {'SELL', 'WEAK SELL', 'HOLD (Down-Trend)'}:
+                        exit_reason = (
+                            '📉 PARTIAL-TP-REMAINDER-WEAK-SIGNAL '
+                            f'(recommendation: {signal})'
+                        )
             if current_price <= stop_loss_level:
                 exit_reason = f"🚨 ATR-STOP-LOSS (Stop: {stop_loss_level:.4f})"
-            elif current_price >= take_profit_level:
+            elif (not self.config.partial_take_profit_enabled) and current_price >= take_profit_level:
                 exit_reason = f"🎉 ATR-TAKE-PROFIT (TP: {take_profit_level:.4f})"
             elif self.config.max_hold_seconds > 0 and hold_seconds >= self.config.max_hold_seconds:
                 exit_reason = f"⏰ MAX-HOLD-TIME reached ({int(hold_seconds)}s >= {self.config.max_hold_seconds}s)"
@@ -1707,6 +1918,18 @@ class CryptoTradingBot:
                                         'signal_source', 'rules')
                                     signal_confidence = coin_data.get(
                                         'signal_confidence')
+                                    passes_filter, filter_reason = self._passes_entry_momentum_filter(
+                                        coin_data)
+                                    if not passes_filter:
+                                        logger.info(
+                                            f"⛔ Momentum filter blocked entry for {coin}: {filter_reason}")
+                                        continue
+                                    in_cooldown, cooldown_remaining = self._is_coin_in_reentry_cooldown(
+                                        coin)
+                                    if in_cooldown:
+                                        logger.info(
+                                            f"⛔ Re-entry cooldown active for {coin}: {cooldown_remaining}s remaining")
+                                        continue
                                     if self._execute_trade(
                                         coin,
                                         "buy",
