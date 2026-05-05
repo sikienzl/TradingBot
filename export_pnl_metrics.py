@@ -9,6 +9,9 @@ import sys
 from datetime import datetime, timedelta
 
 
+MIN_DRAWDOWN_PCT_BASE_USD = 1.0
+
+
 def read_trades(journal_path):
     """Read all trades from journal"""
     trades = []
@@ -123,7 +126,9 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
             if drawdown_usd > max_drawdown_usd:
                 max_drawdown_usd = drawdown_usd
             if peak_equity > 0:
-                drawdown_pct = drawdown_usd / peak_equity
+                # Prevent unrealistic percentages when peak equity is near zero.
+                drawdown_pct = drawdown_usd / \
+                    max(peak_equity, MIN_DRAWDOWN_PCT_BASE_USD)
                 if drawdown_pct > max_drawdown_pct:
                     max_drawdown_pct = drawdown_pct
         except Exception:

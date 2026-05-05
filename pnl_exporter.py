@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 JOURNAL_PATH = '/opt/trading_2/trade_journal.csv'
+MIN_DRAWDOWN_PCT_BASE_USD = 1.0
 
 
 class MetricsHandler(BaseHTTPRequestHandler):
@@ -138,7 +139,8 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 if drawdown_usd > max_drawdown_usd:
                     max_drawdown_usd = drawdown_usd
                 if peak_equity > 0:
-                    drawdown_pct = drawdown_usd / peak_equity
+                    # Prevent unrealistic percentages when peak equity is near zero.
+                    drawdown_pct = drawdown_usd / max(peak_equity, MIN_DRAWDOWN_PCT_BASE_USD)
                     if drawdown_pct > max_drawdown_pct:
                         max_drawdown_pct = drawdown_pct
             except Exception:
