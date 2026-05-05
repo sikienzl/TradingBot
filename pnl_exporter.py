@@ -37,7 +37,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 reader = csv.DictReader(f)
                 for row in reader:
                     trades.append(row)
-        except Exception as e:
+        except Exception:
             pass
         return trades
 
