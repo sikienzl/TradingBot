@@ -66,6 +66,7 @@ def test_tabular_gate_allows_same_direction_confirmation(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.tabular_source_gate_enabled = True
     bot.config.tabular_min_confidence = 0.45
+    bot.config.tabular_buy_min_confidence = 0.45
 
     allowed, gate_reason = bot._should_apply_tabular_signal(
         rule_recommendation="HOLD (Up-Trend)",
@@ -82,6 +83,7 @@ def test_tabular_gate_blocks_weak_contradiction(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.tabular_source_gate_enabled = True
     bot.config.tabular_min_confidence = 0.45
+    bot.config.tabular_buy_min_confidence = 0.45
     bot.config.tabular_override_min_confidence = 0.60
     bot.config.tabular_override_margin = 0.15
 
@@ -100,6 +102,7 @@ def test_tabular_gate_allows_strong_override(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.tabular_source_gate_enabled = True
     bot.config.tabular_min_confidence = 0.45
+    bot.config.tabular_buy_min_confidence = 0.45
     bot.config.tabular_override_min_confidence = 0.60
     bot.config.tabular_override_margin = 0.15
 
@@ -112,3 +115,37 @@ def test_tabular_gate_allows_strong_override(monkeypatch):
 
     assert allowed is True
     assert gate_reason == "strong_override"
+
+
+def test_tabular_gate_uses_stricter_buy_threshold(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.tabular_source_gate_enabled = False
+    bot.config.tabular_min_confidence = 0.45
+    bot.config.tabular_buy_min_confidence = 0.55
+
+    allowed, gate_reason = bot._should_apply_tabular_signal(
+        rule_recommendation="HOLD (Up-Trend)",
+        rule_score=60,
+        tab_decision="kaufen",
+        tab_confidence=0.50,
+    )
+
+    assert allowed is False
+    assert gate_reason == "below_min_confidence"
+
+
+def test_tabular_gate_keeps_sell_threshold_independent(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.tabular_source_gate_enabled = False
+    bot.config.tabular_min_confidence = 0.45
+    bot.config.tabular_buy_min_confidence = 0.55
+
+    allowed, gate_reason = bot._should_apply_tabular_signal(
+        rule_recommendation="HOLD (Up-Trend)",
+        rule_score=60,
+        tab_decision="verkaufen",
+        tab_confidence=0.50,
+    )
+
+    assert allowed is True
+    assert gate_reason == "gate_disabled"

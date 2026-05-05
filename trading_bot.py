@@ -245,6 +245,8 @@ class BotConfig:
             'TABULAR_RESEARCH_SIGNAL_PATH', './data/research_signal_latest.json')
         self.tabular_min_confidence = float(
             os.getenv('TABULAR_MIN_CONFIDENCE', 0.45))
+        self.tabular_buy_min_confidence = float(
+            os.getenv('TABULAR_BUY_MIN_CONFIDENCE', str(self.tabular_min_confidence)))
         self.tabular_source_gate_enabled = _env_bool(
             'TABULAR_SOURCE_GATE_ENABLED', False)
         self.tabular_override_min_confidence = float(
@@ -961,7 +963,11 @@ class CryptoTradingBot:
         tab_decision: str,
         tab_confidence: float,
     ) -> Tuple[bool, str]:
-        if tab_confidence < self.config.tabular_min_confidence:
+        required_confidence = self.config.tabular_buy_min_confidence
+        if tab_decision == 'verkaufen':
+            required_confidence = self.config.tabular_min_confidence
+
+        if tab_confidence < required_confidence:
             return False, 'below_min_confidence'
 
         if not self.config.tabular_source_gate_enabled:
@@ -1199,7 +1205,8 @@ class CryptoTradingBot:
                     tab_decision=tab_decision,
                     tab_confidence=tab_confidence,
                 )
-                if tab_confidence >= self.config.tabular_min_confidence and not should_apply:
+                required_confidence = self.config.tabular_buy_min_confidence if tab_decision == 'kaufen' else self.config.tabular_min_confidence
+                if tab_confidence >= required_confidence and not should_apply:
                     logger.info(
                         f"  🚧 CatBoost gated for {coin}: {gate_reason} "
                         f"(rule={rule_recommendation}, rule_score={rule_score}, "
