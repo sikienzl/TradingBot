@@ -234,7 +234,7 @@ class BotConfig:
         # Close positions also on HOLD (Down-Trend) signal
         self.exit_on_downtrend = _env_bool('EXIT_ON_DOWNTREND', True)
         # ATR multipliers for stop-loss and take-profit
-        self.atr_stop_mult = float(os.getenv('ATR_STOP_MULT', 1.5))
+        self.atr_stop_mult = float(os.getenv('ATR_STOP_MULT', 1.0))
         self.atr_tp_mult = float(os.getenv('ATR_TP_MULT', 2.0))
         self.partial_take_profit_enabled = _env_bool(
             'PARTIAL_TAKE_PROFIT_ENABLED', True)
@@ -255,7 +255,7 @@ class BotConfig:
         self.break_even_buffer_pct = float(
             os.getenv('BREAK_EVEN_BUFFER_PCT', 0.1))
         # Maximum hold time in seconds (0 = disabled)
-        self.max_hold_seconds = int(os.getenv('MAX_HOLD_SECONDS', 0))
+        self.max_hold_seconds = int(os.getenv('MAX_HOLD_SECONDS', 120))
         # Allow smaller trades when cash is below TRADE_AMOUNT
         self.allow_partial_trades = _env_bool('ALLOW_PARTIAL_TRADES', True)
         # Fraction of cash kept in reserve (safety buffer)
@@ -1725,6 +1725,11 @@ class CryptoTradingBot:
                     coin, {}).get('recommendation', '')
                 if signal == 'HOLD (Down-Trend)':
                     exit_reason = f"📉 Down-trend signal detected (recommendation: {signal})"
+            elif pnl_pct < 0 and market_analysis is not None:
+                signal = market_analysis.get(
+                    coin, {}).get('recommendation', '')
+                if signal not in {'BUY', 'STRONG BUY', 'HOLD (Up-Trend)'}:
+                    exit_reason = f"🔻 PnL-NEG-WEAK-SIGNAL ({pnl_pct:+.2f}% | signal: {signal})"
             if exit_reason:
                 logger.info(
                     f"{exit_reason} → Verkauf {coin} @ {current_price:.4f}")
