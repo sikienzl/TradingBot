@@ -217,6 +217,27 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
     return snapshot
 
 
+def read_portfolio_start_value(log_path=BOT_LOG_PATH):
+    """Read initial dry-run portfolio cash from first initialization log line."""
+    if not os.path.exists(log_path):
+        return 0.0
+
+    marker = 'Portfolio initialized from exchange (dry-run mode). Cash:'
+    try:
+        with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                if marker not in line:
+                    continue
+                try:
+                    cash_part = line.split('Cash:', 1)[1].strip()
+                    return float(cash_part.split(' ')[0])
+                except Exception:
+                    continue
+    except Exception:
+        return 0.0
+    return 0.0
+
+
 def format_prometheus_metrics(metrics):
     """Format metrics as Prometheus lines"""
     output = []
@@ -288,6 +309,12 @@ def format_prometheus_metrics(metrics):
         f'trading_portfolio_cash_eur {metrics.get("portfolio_cash_eur", 0.0)}')
 
     output.append(
+        '# HELP trading_portfolio_start_value_eur Initial dry-run portfolio value from startup log (EUR)')
+    output.append('# TYPE trading_portfolio_start_value_eur gauge')
+    output.append(
+        f'trading_portfolio_start_value_eur {metrics.get("portfolio_start_value_eur", 0.0)}')
+
+    output.append(
         '# HELP trading_coin_realized_pnl_usd Realized PnL per coin in USD (last 24h)')
     output.append('# TYPE trading_coin_realized_pnl_usd gauge')
     for coin, pnl in sorted(metrics['coin_pnl'].items()):
@@ -315,6 +342,7 @@ if __name__ == '__main__':
     trades = read_trades(journal_path)
     metrics = calculate_pnl_metrics(trades, time_window_hours=24)
     metrics.update(read_latest_portfolio_snapshot())
+    metrics['portfolio_start_value_eur'] = read_portfolio_start_value()
     output = format_prometheus_metrics(metrics)
 
     print(output)

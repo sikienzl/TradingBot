@@ -14,6 +14,10 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 JOURNAL_PATH = '/opt/trading_2/trade_journal.csv'
 BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
 MIN_DRAWDOWN_PCT_BASE_USD = 1.0
+START_VALUE_CACHE = {
+    'log_mtime': None,
+    'value': 0.0,
+}
 
 
 class MetricsHandler(BaseHTTPRequestHandler):
@@ -34,6 +38,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
         snapshot = self.read_latest_portfolio_snapshot()
         metrics_dict['portfolio_value_eur'] = snapshot['portfolio_value_eur']
         metrics_dict['portfolio_cash_eur'] = snapshot['portfolio_cash_eur']
+        metrics_dict['portfolio_start_value_eur'] = self.read_portfolio_start_value()
         return self.format_prometheus_metrics(metrics_dict)
 
     def read_trades(self):
@@ -112,6 +117,35 @@ class MetricsHandler(BaseHTTPRequestHandler):
             return snapshot
 
         return snapshot
+
+    def read_portfolio_start_value(self):
+        """Read initial dry-run portfolio cash from first initialization log line."""
+        if not os.path.exists(BOT_LOG_PATH):
+            return 0.0
+
+        try:
+            mtime = os.path.getmtime(BOT_LOG_PATH)
+            if START_VALUE_CACHE['log_mtime'] == mtime:
+                return START_VALUE_CACHE['value']
+
+            value = 0.0
+            marker = 'Portfolio initialized from exchange (dry-run mode). Cash:'
+            with open(BOT_LOG_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    if marker not in line:
+                        continue
+                    try:
+                        cash_part = line.split('Cash:', 1)[1].strip()
+                        value = float(cash_part.split(' ')[0])
+                        break
+                    except Exception:
+                        continue
+
+            START_VALUE_CACHE['log_mtime'] = mtime
+            START_VALUE_CACHE['value'] = value
+            return value
+        except Exception:
+            return 0.0
 
     def calculate_pnl_metrics(self, trades, time_window_hours=24):
         """Calculate PnL metrics from trades"""
@@ -307,6 +341,12 @@ class MetricsHandler(BaseHTTPRequestHandler):
         output.append('# TYPE trading_portfolio_cash_eur gauge')
         output.append(
             f'trading_portfolio_cash_eur {metrics.get("portfolio_cash_eur", 0.0)}')
+
+        output.append(
+            '# HELP trading_portfolio_start_value_eur Initial dry-run portfolio value from startup log (EUR)')
+        output.append('# TYPE trading_portfolio_start_value_eur gauge')
+        output.append(
+            f'trading_portfolio_start_value_eur {metrics.get("portfolio_start_value_eur", 0.0)}')
 
         output.append(
             '# HELP trading_coin_realized_pnl_usd Realized PnL per coin in USD (last 24h)')
