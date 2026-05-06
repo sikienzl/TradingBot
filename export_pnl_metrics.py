@@ -7,12 +7,15 @@ import csv
 import math
 import os
 import sys
+import json
 from collections import deque
 from datetime import datetime, timedelta
 
 
 MIN_DRAWDOWN_PCT_BASE_USD = 1.0
 BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
+ENV_PATH = '/opt/trading_2/.env'
+AI_COPILOT_STATE_PATH = '/opt/trading_2/ai_copilot_state.json'
 
 
 def read_trades(journal_path):
@@ -238,6 +241,53 @@ def read_portfolio_start_value(log_path=BOT_LOG_PATH):
     return 0.0
 
 
+def read_ai_copilot_usage(env_path=ENV_PATH, state_path=AI_COPILOT_STATE_PATH):
+    """Read AI co-pilot caps and monthly usage state for monitoring."""
+    result = {
+        'ai_copilot_budget_cap_usd': 0.0,
+        'ai_copilot_budget_used_usd': 0.0,
+        'ai_copilot_calls_used_monthly': 0.0,
+        'ai_copilot_calls_cap_monthly': 0.0,
+    }
+
+    try:
+        if os.path.exists(env_path):
+            with open(env_path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#') or '=' not in line:
+                        continue
+                    key, value = line.split('=', 1)
+                    key = key.strip()
+                    value = value.strip().strip('"').strip("'")
+                    if key == 'AI_COPILOT_MAX_BUDGET_USD_PER_MONTH':
+                        result['ai_copilot_budget_cap_usd'] = float(value)
+                    elif key == 'AI_COPILOT_MAX_CALLS_PER_MONTH':
+                        result['ai_copilot_calls_cap_monthly'] = float(value)
+    except Exception:
+        pass
+
+    try:
+        if os.path.exists(state_path):
+            with open(state_path, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+            now = datetime.utcnow()
+            month_key = f"{now.year:04d}-{now.month:02d}"
+            if state.get('month_key') == month_key:
+                result['ai_copilot_budget_cap_usd'] = float(
+                    state.get('budget_cap_usd', result['ai_copilot_budget_cap_usd']) or result['ai_copilot_budget_cap_usd'])
+                result['ai_copilot_calls_cap_monthly'] = float(
+                    state.get('calls_cap_monthly', result['ai_copilot_calls_cap_monthly']) or result['ai_copilot_calls_cap_monthly'])
+                result['ai_copilot_budget_used_usd'] = float(
+                    state.get('monthly_spend_usd', 0.0) or 0.0)
+                result['ai_copilot_calls_used_monthly'] = float(
+                    state.get('monthly_calls', 0) or 0)
+    except Exception:
+        pass
+
+    return result
+
+
 def format_prometheus_metrics(metrics):
     """Format metrics as Prometheus lines"""
     output = []
@@ -315,6 +365,30 @@ def format_prometheus_metrics(metrics):
         f'trading_portfolio_start_value_eur {metrics.get("portfolio_start_value_eur", 0.0)}')
 
     output.append(
+        '# HELP trading_ai_copilot_budget_cap_usd Configured AI co-pilot monthly budget cap in USD')
+    output.append('# TYPE trading_ai_copilot_budget_cap_usd gauge')
+    output.append(
+        f'trading_ai_copilot_budget_cap_usd {metrics.get("ai_copilot_budget_cap_usd", 0.0)}')
+
+    output.append(
+        '# HELP trading_ai_copilot_budget_used_usd AI co-pilot monthly spend in USD (current month)')
+    output.append('# TYPE trading_ai_copilot_budget_used_usd gauge')
+    output.append(
+        f'trading_ai_copilot_budget_used_usd {metrics.get("ai_copilot_budget_used_usd", 0.0)}')
+
+    output.append(
+        '# HELP trading_ai_copilot_calls_used_monthly AI co-pilot monthly API calls used (current month)')
+    output.append('# TYPE trading_ai_copilot_calls_used_monthly gauge')
+    output.append(
+        f'trading_ai_copilot_calls_used_monthly {metrics.get("ai_copilot_calls_used_monthly", 0.0)}')
+
+    output.append(
+        '# HELP trading_ai_copilot_calls_cap_monthly Configured AI co-pilot monthly API call cap')
+    output.append('# TYPE trading_ai_copilot_calls_cap_monthly gauge')
+    output.append(
+        f'trading_ai_copilot_calls_cap_monthly {metrics.get("ai_copilot_calls_cap_monthly", 0.0)}')
+
+    output.append(
         '# HELP trading_coin_realized_pnl_usd Realized PnL per coin in USD (last 24h)')
     output.append('# TYPE trading_coin_realized_pnl_usd gauge')
     for coin, pnl in sorted(metrics['coin_pnl'].items()):
@@ -343,6 +417,7 @@ if __name__ == '__main__':
     metrics = calculate_pnl_metrics(trades, time_window_hours=24)
     metrics.update(read_latest_portfolio_snapshot())
     metrics['portfolio_start_value_eur'] = read_portfolio_start_value()
+    metrics.update(read_ai_copilot_usage())
     output = format_prometheus_metrics(metrics)
 
     print(output)

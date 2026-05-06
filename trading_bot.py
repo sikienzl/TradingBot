@@ -3,7 +3,7 @@ import sys
 import logging
 import csv
 import json
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import time
 from datetime import datetime, timedelta, timezone
@@ -11,6 +11,8 @@ import ccxt
 import numpy as np
 from dotenv import load_dotenv
 from collections import defaultdict
+import urllib.request
+import urllib.error
 
 
 # Logging configuration
@@ -325,6 +327,46 @@ class BotConfig:
         self.loss_streak_pause_seconds = int(
             os.getenv('LOSS_STREAK_PAUSE_SECONDS', 0))
 
+        # Optional external AI co-pilot (budget-limited, disabled by default)
+        self.ai_copilot_enabled = _env_bool('AI_COPILOT_ENABLED', False)
+        self.ai_copilot_api_url = os.getenv(
+            'AI_COPILOT_API_URL', 'https://api.mammouth.ai/v1/chat/completions')
+        self.ai_copilot_api_key = os.getenv('MAMMOUTH_API_KEY', '')
+        self.ai_copilot_model = os.getenv('AI_COPILOT_MODEL', 'gpt-5.4-nano')
+        self.ai_copilot_interval_minutes = int(
+            os.getenv('AI_COPILOT_INTERVAL_MINUTES', 60))
+        self.ai_copilot_state_file = os.getenv(
+            'AI_COPILOT_STATE_FILE', 'ai_copilot_state.json')
+        self.ai_copilot_shadow_mode = _env_bool('AI_COPILOT_SHADOW_MODE', True)
+        self.ai_copilot_max_calls_per_day = int(
+            os.getenv('AI_COPILOT_MAX_CALLS_PER_DAY', 24))
+        self.ai_copilot_max_calls_per_month = int(
+            os.getenv('AI_COPILOT_MAX_CALLS_PER_MONTH', 720))
+        self.ai_copilot_max_budget_usd_per_month = float(
+            os.getenv('AI_COPILOT_MAX_BUDGET_USD_PER_MONTH', 5.0))
+        self.ai_copilot_max_output_tokens = int(
+            os.getenv('AI_COPILOT_MAX_OUTPUT_TOKENS', 300))
+        self.ai_copilot_temperature = float(
+            os.getenv('AI_COPILOT_TEMPERATURE', 0.1))
+        self.ai_copilot_max_consecutive_errors = int(
+            os.getenv('AI_COPILOT_MAX_CONSECUTIVE_ERRORS', 3))
+        self.ai_copilot_cost_input_per_mtok = float(
+            os.getenv('AI_COPILOT_COST_INPUT_PER_MTOK', 0.2))
+        self.ai_copilot_cost_output_per_mtok = float(
+            os.getenv('AI_COPILOT_COST_OUTPUT_PER_MTOK', 1.25))
+        self.ai_copilot_min_entry_score_min = int(
+            os.getenv('AI_COPILOT_MIN_ENTRY_SCORE_MIN', 55))
+        self.ai_copilot_min_entry_score_max = int(
+            os.getenv('AI_COPILOT_MIN_ENTRY_SCORE_MAX', 70))
+        self.ai_copilot_reentry_cooldown_min = int(
+            os.getenv('AI_COPILOT_REENTRY_COOLDOWN_MIN', 300))
+        self.ai_copilot_reentry_cooldown_max = int(
+            os.getenv('AI_COPILOT_REENTRY_COOLDOWN_MAX', 1200))
+        self.ai_copilot_tabular_buy_conf_min = float(
+            os.getenv('AI_COPILOT_TABULAR_BUY_CONF_MIN', 0.50))
+        self.ai_copilot_tabular_buy_conf_max = float(
+            os.getenv('AI_COPILOT_TABULAR_BUY_CONF_MAX', 0.65))
+
 
 class CryptoTradingBot:
     """Main class of the trading bot."""
@@ -572,6 +614,359 @@ class CryptoTradingBot:
         else:
             logger.info(
                 f"ℹ️ AUTO_TUNE disabled. Recommended TABULAR_MIN_CONFIDENCE: {recommended:.2f}")
+
+    def _read_ai_copilot_state(self) -> Dict:
+        path = self.config.ai_copilot_state_file
+        if not path or not os.path.exists(path):
+            return {}
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _write_ai_copilot_state(self, state: Dict):
+        path = self.config.ai_copilot_state_file
+        if not path:
+            return
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(state, f, ensure_ascii=True, indent=2)
+        except Exception as e:
+            logger.warning(f"AI co-pilot state could not be saved: {e}")
+
+    def _current_month_key(self) -> str:
+        now = datetime.now(timezone.utc)
+        return f"{now.year:04d}-{now.month:02d}"
+
+    def _current_day_key(self) -> str:
+        now = datetime.now(timezone.utc)
+        return f"{now.year:04d}-{now.month:02d}-{now.day:02d}"
+
+    def _normalize_ai_state(self, state: Dict) -> Dict:
+        month_key = self._current_month_key()
+        day_key = self._current_day_key()
+        state['budget_cap_usd'] = float(
+            self.config.ai_copilot_max_budget_usd_per_month)
+        state['calls_cap_monthly'] = int(self.config.ai_copilot_max_calls_per_month)
+        if state.get('month_key') != month_key:
+            state['month_key'] = month_key
+            state['monthly_calls'] = 0
+            state['monthly_spend_usd'] = 0.0
+        if state.get('day_key') != day_key:
+            state['day_key'] = day_key
+            state['daily_calls'] = 0
+        state.setdefault('monthly_calls', 0)
+        state.setdefault('daily_calls', 0)
+        state.setdefault('monthly_spend_usd', 0.0)
+        state.setdefault('consecutive_errors', 0)
+        return state
+
+    def _estimate_ai_cost_usd(self, prompt_tokens: int, completion_tokens: int) -> float:
+        input_cost = (max(0, prompt_tokens) / 1_000_000.0) * \
+            self.config.ai_copilot_cost_input_per_mtok
+        output_cost = (max(0, completion_tokens) / 1_000_000.0) * \
+            self.config.ai_copilot_cost_output_per_mtok
+        return float(input_cost + output_cost)
+
+    def _can_run_ai_copilot(self, state: Dict) -> Tuple[bool, str]:
+        if not self.config.ai_copilot_enabled:
+            return False, 'disabled'
+        if not self.config.ai_copilot_api_key:
+            return False, 'missing_api_key'
+        if self.config.ai_copilot_max_calls_per_day > 0 and state.get('daily_calls', 0) >= self.config.ai_copilot_max_calls_per_day:
+            return False, 'daily_call_limit'
+        if self.config.ai_copilot_max_calls_per_month > 0 and state.get('monthly_calls', 0) >= self.config.ai_copilot_max_calls_per_month:
+            return False, 'monthly_call_limit'
+        if self.config.ai_copilot_max_budget_usd_per_month > 0 and state.get('monthly_spend_usd', 0.0) >= self.config.ai_copilot_max_budget_usd_per_month:
+            return False, 'monthly_budget_limit'
+
+        last_run_raw = state.get('last_run_at')
+        if last_run_raw and self.config.ai_copilot_interval_minutes > 0:
+            try:
+                last_run = datetime.fromisoformat(last_run_raw)
+                if last_run.tzinfo is None:
+                    last_run = last_run.replace(tzinfo=timezone.utc)
+                elapsed_min = (datetime.now(timezone.utc) -
+                               last_run).total_seconds() / 60.0
+                if elapsed_min < self.config.ai_copilot_interval_minutes:
+                    return False, 'interval_not_reached'
+            except Exception:
+                pass
+        return True, 'ok'
+
+    def _ai_copilot_snapshot(self) -> Dict[str, Any]:
+        trades_recent = []
+        if self.config.performance_log_enabled and os.path.exists(self.config.performance_log_file):
+            try:
+                df = pd.read_csv(self.config.performance_log_file)
+                if not df.empty:
+                    cols = [
+                        'timestamp', 'coin', 'action', 'pnl_base', 'pnl_pct',
+                        'signal_source', 'signal_confidence', 'reason'
+                    ]
+                    cols = [c for c in cols if c in df.columns]
+                    trades_recent = df.tail(30)[cols].to_dict(orient='records')
+            except Exception:
+                trades_recent = []
+
+        by_source = {}
+        for source, data in self.performance['by_source'].items():
+            by_source[source] = {
+                'buys': int(data.get('buys', 0)),
+                'sells': int(data.get('sells', 0)),
+                'pnl': float(data.get('pnl', 0.0)),
+            }
+
+        return {
+            'timestamp_utc': datetime.now(timezone.utc).isoformat(),
+            'iteration': int(self.iteration),
+            'config': {
+                'min_entry_score': int(self.config.min_entry_score),
+                'reentry_cooldown_seconds': int(self.config.reentry_cooldown_seconds),
+                'tabular_buy_min_confidence': float(self.config.tabular_buy_min_confidence),
+                'tabular_min_confidence': float(self.config.tabular_min_confidence),
+            },
+            'performance': {
+                'buys': int(self.performance['buys']),
+                'sells': int(self.performance['sells']),
+                'wins': int(self.performance['wins']),
+                'losses': int(self.performance['losses']),
+                'closed_trades': int(self.performance['closed_trades']),
+                'realized_pnl_base': float(self.performance['realized_pnl_base']),
+                'consecutive_losses': int(self.consecutive_losses),
+                'by_source': by_source,
+            },
+            'portfolio': {
+                'cash': float(self.portfolio.cash),
+                'open_trades_count': int(len(self.portfolio.open_trades)),
+            },
+            'recent_trades': trades_recent,
+            'guardrails': {
+                'min_entry_score_min': self.config.ai_copilot_min_entry_score_min,
+                'min_entry_score_max': self.config.ai_copilot_min_entry_score_max,
+                'reentry_cooldown_min': self.config.ai_copilot_reentry_cooldown_min,
+                'reentry_cooldown_max': self.config.ai_copilot_reentry_cooldown_max,
+                'tabular_buy_conf_min': self.config.ai_copilot_tabular_buy_conf_min,
+                'tabular_buy_conf_max': self.config.ai_copilot_tabular_buy_conf_max,
+            },
+        }
+
+    def _extract_json_object(self, text: str) -> Optional[Dict[str, Any]]:
+        if not text:
+            return None
+        start = text.find('{')
+        end = text.rfind('}')
+        if start < 0 or end <= start:
+            return None
+        try:
+            parsed = json.loads(text[start:end + 1])
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return None
+        return None
+
+    def _call_ai_copilot(self, snapshot: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], int, int]:
+        system_prompt = (
+            "You are a conservative trading bot co-pilot. "
+            "Return ONLY JSON with keys: proposed_changes (object), reason (string), confidence (0..1), risk_level (low|medium|high). "
+            "Allowed proposed_changes keys: min_entry_score, reentry_cooldown_seconds, tabular_buy_min_confidence. "
+            "Respect provided guardrails. Propose at most one parameter change at a time."
+        )
+        user_payload = json.dumps(snapshot, ensure_ascii=True)
+        request_body = {
+            'model': self.config.ai_copilot_model,
+            'messages': [
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': user_payload},
+            ],
+            'temperature': self.config.ai_copilot_temperature,
+            'max_tokens': self.config.ai_copilot_max_output_tokens,
+        }
+
+        req = urllib.request.Request(
+            self.config.ai_copilot_api_url,
+            data=json.dumps(request_body).encode('utf-8'),
+            headers={
+                'Authorization': f"Bearer {self.config.ai_copilot_api_key}",
+                'Content-Type': 'application/json',
+            },
+            method='POST',
+        )
+
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            raw = resp.read().decode('utf-8', errors='replace')
+        parsed = json.loads(raw)
+        usage = parsed.get('usage', {}) if isinstance(parsed, dict) else {}
+        prompt_tokens = int(usage.get('prompt_tokens', 0) or 0)
+        completion_tokens = int(usage.get('completion_tokens', 0) or 0)
+
+        content = ''
+        if isinstance(parsed, dict):
+            choices = parsed.get('choices', [])
+            if choices and isinstance(choices[0], dict):
+                message = choices[0].get('message', {})
+                if isinstance(message, dict):
+                    content = str(message.get('content', '') or '')
+
+        result = self._extract_json_object(content)
+        return result, prompt_tokens, completion_tokens
+
+    def _clamp_ai_changes(self, raw_changes: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(raw_changes, dict):
+            return {}
+        out: Dict[str, Any] = {}
+
+        if 'min_entry_score' in raw_changes:
+            try:
+                v = int(round(float(raw_changes['min_entry_score'])))
+                v = min(max(v, self.config.ai_copilot_min_entry_score_min),
+                        self.config.ai_copilot_min_entry_score_max)
+                out['min_entry_score'] = v
+            except Exception:
+                pass
+
+        if 'reentry_cooldown_seconds' in raw_changes:
+            try:
+                v = int(round(float(raw_changes['reentry_cooldown_seconds'])))
+                v = min(max(v, self.config.ai_copilot_reentry_cooldown_min),
+                        self.config.ai_copilot_reentry_cooldown_max)
+                out['reentry_cooldown_seconds'] = v
+            except Exception:
+                pass
+
+        if 'tabular_buy_min_confidence' in raw_changes:
+            try:
+                v = float(raw_changes['tabular_buy_min_confidence'])
+                v = min(max(v, self.config.ai_copilot_tabular_buy_conf_min),
+                        self.config.ai_copilot_tabular_buy_conf_max)
+                out['tabular_buy_min_confidence'] = round(v, 4)
+            except Exception:
+                pass
+
+        return out
+
+    def _apply_ai_changes(self, changes: Dict[str, Any]) -> Dict[str, Tuple[Any, Any]]:
+        applied: Dict[str, Tuple[Any, Any]] = {}
+
+        if 'min_entry_score' in changes:
+            old = self.config.min_entry_score
+            new = int(changes['min_entry_score'])
+            if old != new:
+                self.config.min_entry_score = new
+                applied['min_entry_score'] = (old, new)
+
+        if 'reentry_cooldown_seconds' in changes:
+            old = self.config.reentry_cooldown_seconds
+            new = int(changes['reentry_cooldown_seconds'])
+            if old != new:
+                self.config.reentry_cooldown_seconds = new
+                applied['reentry_cooldown_seconds'] = (old, new)
+
+        if 'tabular_buy_min_confidence' in changes:
+            old = self.config.tabular_buy_min_confidence
+            new = float(changes['tabular_buy_min_confidence'])
+            if abs(old - new) > 1e-9:
+                self.config.tabular_buy_min_confidence = new
+                applied['tabular_buy_min_confidence'] = (old, new)
+
+        return applied
+
+    def _maybe_run_ai_copilot(self):
+        state = self._normalize_ai_state(self._read_ai_copilot_state())
+        can_run, reason = self._can_run_ai_copilot(state)
+        if not can_run:
+            if reason not in {'interval_not_reached', 'disabled'}:
+                logger.info(f"AI co-pilot skipped: {reason}")
+            self._write_ai_copilot_state(state)
+            return
+
+        snapshot = self._ai_copilot_snapshot()
+        try:
+            result, prompt_tokens, completion_tokens = self._call_ai_copilot(
+                snapshot)
+            estimated_cost = self._estimate_ai_cost_usd(
+                prompt_tokens, completion_tokens)
+
+            # Final budget check before recording the call.
+            projected = state.get('monthly_spend_usd', 0.0) + estimated_cost
+            if (
+                self.config.ai_copilot_max_budget_usd_per_month > 0
+                and projected > self.config.ai_copilot_max_budget_usd_per_month
+            ):
+                logger.warning(
+                    f"AI co-pilot call ignored due to monthly budget cap: projected {projected:.4f} USD")
+                state['last_run_at'] = datetime.now(timezone.utc).isoformat()
+                self._write_ai_copilot_state(state)
+                return
+
+            state['monthly_calls'] = int(state.get('monthly_calls', 0)) + 1
+            state['daily_calls'] = int(state.get('daily_calls', 0)) + 1
+            state['monthly_spend_usd'] = projected
+            state['last_run_at'] = datetime.now(timezone.utc).isoformat()
+            state['last_prompt_tokens'] = prompt_tokens
+            state['last_completion_tokens'] = completion_tokens
+            state['last_estimated_cost_usd'] = round(estimated_cost, 6)
+            state['consecutive_errors'] = 0
+
+            if not result:
+                logger.warning('AI co-pilot returned no valid JSON payload')
+                self._write_ai_copilot_state(state)
+                return
+
+            changes = self._clamp_ai_changes(
+                result.get('proposed_changes', {}))
+            reason_text = str(result.get('reason', ''))
+            risk_level = str(result.get('risk_level', 'unknown'))
+            confidence = result.get('confidence', None)
+
+            if not changes:
+                logger.info(
+                    f"AI co-pilot suggestion: no change (risk={risk_level}, confidence={confidence}, reason={reason_text})")
+                self._write_ai_copilot_state(state)
+                return
+
+            # Keep adaptation conservative: apply at most one parameter per run.
+            first_key = next(iter(changes.keys()))
+            single_change = {first_key: changes[first_key]}
+
+            if self.config.ai_copilot_shadow_mode:
+                logger.info(
+                    f"AI co-pilot shadow suggestion: {single_change} "
+                    f"(risk={risk_level}, confidence={confidence}, reason={reason_text})")
+            else:
+                applied = self._apply_ai_changes(single_change)
+                if applied:
+                    logger.info(
+                        f"AI co-pilot applied: {applied} "
+                        f"(risk={risk_level}, confidence={confidence}, reason={reason_text})")
+                    state['last_applied_at'] = datetime.now(
+                        timezone.utc).isoformat()
+                    state['last_applied_changes'] = {
+                        k: {'old': v[0], 'new': v[1]} for k, v in applied.items()
+                    }
+                else:
+                    logger.info(
+                        f"AI co-pilot suggested unchanged values: {single_change}")
+
+            self._write_ai_copilot_state(state)
+
+        except Exception as e:
+            state['consecutive_errors'] = int(
+                state.get('consecutive_errors', 0)) + 1
+            state['last_error'] = str(e)
+            state['last_error_at'] = datetime.now(timezone.utc).isoformat()
+            logger.warning(f"AI co-pilot call failed: {e}")
+            if (
+                self.config.ai_copilot_max_consecutive_errors > 0
+                and state['consecutive_errors'] >= self.config.ai_copilot_max_consecutive_errors
+            ):
+                logger.error(
+                    f"AI co-pilot suspended after {state['consecutive_errors']} consecutive errors")
+                state['last_suspended_at'] = datetime.now(
+                    timezone.utc).isoformat()
+            self._write_ai_copilot_state(state)
 
     def _record_close_performance(self, entry_trade: Dict, sell_price: float, sell_amount: float):
         buy_price = float(entry_trade.get('buy_price', 0.0))
@@ -1764,6 +2159,8 @@ class CryptoTradingBot:
         safe_config['api_key'] = _mask_secret(safe_config.get('api_key', ''))
         safe_config['api_secret'] = _mask_secret(
             safe_config.get('api_secret', ''))
+        safe_config['ai_copilot_api_key'] = _mask_secret(
+            safe_config.get('ai_copilot_api_key', ''))
         logger.info(f"Configuration: {safe_config}")
         if self.config.dry_run:
             logger.warning(
@@ -2009,7 +2406,10 @@ class CryptoTradingBot:
                 if self.iteration % max(1, self.config.performance_report_every) == 0:
                     self._log_performance_report()
 
-                # Step 8: Wait
+                # Step 8: Optional external AI co-pilot (rate- and budget-limited)
+                self._maybe_run_ai_copilot()
+
+                # Step 9: Wait
                 logger.info(
                     f"⏳ Next analysis in {self.config.check_interval} seconds...")
                 time.sleep(self.config.check_interval)
