@@ -237,6 +237,27 @@ class BotConfig:
         self.entry_max_ret_3 = float(os.getenv('ENTRY_MAX_RET_3', 0.08))
         self.reentry_cooldown_seconds = int(
             os.getenv('REENTRY_COOLDOWN_SECONDS', 900))
+        self.reentry_dynamic_enabled = _env_bool(
+            'REENTRY_DYNAMIC_ENABLED', True)
+        self.reentry_cooldown_min_seconds = int(
+            os.getenv('REENTRY_COOLDOWN_MIN_SECONDS', 300))
+        self.reentry_cooldown_max_seconds = int(
+            os.getenv(
+                'REENTRY_COOLDOWN_MAX_SECONDS',
+                max(1200, self.reentry_cooldown_seconds),
+            ))
+        if self.reentry_cooldown_max_seconds < self.reentry_cooldown_min_seconds:
+            self.reentry_cooldown_max_seconds = self.reentry_cooldown_min_seconds
+        self.reentry_volatility_low_atr_pct = float(
+            os.getenv('REENTRY_VOLATILITY_LOW_ATR_PCT', 0.008))
+        self.reentry_volatility_high_atr_pct = float(
+            os.getenv('REENTRY_VOLATILITY_HIGH_ATR_PCT', 0.018))
+        self.reentry_cooldown_mult_low_vol = float(
+            os.getenv('REENTRY_COOLDOWN_MULT_LOW_VOL', 0.70))
+        self.reentry_cooldown_mult_mid_vol = float(
+            os.getenv('REENTRY_COOLDOWN_MULT_MID_VOL', 1.00))
+        self.reentry_cooldown_mult_high_vol = float(
+            os.getenv('REENTRY_COOLDOWN_MULT_HIGH_VOL', 1.30))
         # Enables additional exit signals from market analysis
         self.enable_signal_exits = _env_bool('ENABLE_SIGNAL_EXITS', True)
         # Close positions also on HOLD (Down-Trend) signal
@@ -1040,8 +1061,51 @@ class CryptoTradingBot:
     def _register_sell_timestamp(self, coin: str):
         self.last_sell_timestamps_utc[coin] = datetime.now(timezone.utc)
 
-    def _is_coin_in_reentry_cooldown(self, coin: str) -> Tuple[bool, int]:
-        cooldown = max(0, self.config.reentry_cooldown_seconds)
+    def _resolve_reentry_cooldown_seconds(self, current_price: float, atr: float) -> Tuple[int, str]:
+        """Returns an effective re-entry cooldown (seconds), optionally adjusted by volatility."""
+        base = max(0, int(self.config.reentry_cooldown_seconds))
+        minimum = max(0, int(self.config.reentry_cooldown_min_seconds))
+        maximum = max(minimum, int(self.config.reentry_cooldown_max_seconds))
+
+        if base <= 0:
+            return 0, 'base_zero'
+
+        if not self.config.reentry_dynamic_enabled:
+            return min(max(base, minimum), maximum), 'static'
+
+        if (
+            current_price is None
+            or current_price <= 0
+            or atr is None
+            or np.isnan(atr)
+            or atr <= 0
+        ):
+            return min(max(base, minimum), maximum), 'fallback_no_atr'
+
+        atr_pct = float(atr) / float(current_price)
+        low = max(0.0, float(self.config.reentry_volatility_low_atr_pct))
+        high = max(low, float(self.config.reentry_volatility_high_atr_pct))
+
+        if atr_pct < low:
+            mult = float(self.config.reentry_cooldown_mult_low_vol)
+            regime = 'low_vol'
+        elif atr_pct > high:
+            mult = float(self.config.reentry_cooldown_mult_high_vol)
+            regime = 'high_vol'
+        else:
+            mult = float(self.config.reentry_cooldown_mult_mid_vol)
+            regime = 'mid_vol'
+
+        effective = int(round(base * mult))
+        effective = min(max(effective, minimum), maximum)
+        reason = f'{regime},atr_pct={atr_pct:.4f},mult={mult:.2f}'
+        return effective, reason
+
+    def _is_coin_in_reentry_cooldown(self, coin: str, cooldown_seconds: Optional[int] = None) -> Tuple[bool, int]:
+        cooldown = max(
+            0,
+            int(self.config.reentry_cooldown_seconds if cooldown_seconds is None else cooldown_seconds),
+        )
         if cooldown <= 0:
             return False, 0
 
@@ -2364,11 +2428,14 @@ class CryptoTradingBot:
                                         logger.info(
                                             f"⛔ Momentum filter blocked entry for {coin}: {filter_reason}")
                                         continue
+                                    effective_cooldown, cooldown_mode = self._resolve_reentry_cooldown_seconds(
+                                        current_price, atr)
                                     in_cooldown, cooldown_remaining = self._is_coin_in_reentry_cooldown(
-                                        coin)
+                                        coin, cooldown_seconds=effective_cooldown)
                                     if in_cooldown:
                                         logger.info(
-                                            f"⛔ Re-entry cooldown active for {coin}: {cooldown_remaining}s remaining")
+                                            f"⛔ Re-entry cooldown active for {coin}: {cooldown_remaining}s remaining "
+                                            f"(effective={effective_cooldown}s, base={self.config.reentry_cooldown_seconds}s, {cooldown_mode})")
                                         continue
                                     if self._execute_trade(
                                         coin,
