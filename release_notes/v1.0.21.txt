@@ -1,0 +1,19 @@
+v1.0.21 - Mammouth API hotfix (Cloudflare 403/1010)
+
+Date: 2026-05-06
+
+Changes
+- Fix AI copilot Mammouth API calls from Raspberry Pi by setting explicit HTTP headers in trading_bot.py:
+  - Accept: application/json
+  - User-Agent: custom bot user agent (instead of Python-urllib default)
+- This avoids Cloudflare edge blocking (error 1010) seen with default Python-urllib/* user-agent.
+
+Impact
+- AI copilot calls now execute successfully again in live runtime.
+- Suspended/error loops caused by repeated HTTP 403 are resolved once the bot is restarted with this version.
+
+Validation
+- Endpoint behavior validated on Pi with user-agent A/B test:
+  - Python-urllib/3.11 -> HTTP 403 (blocked)
+  - curl/Mozilla custom UA -> HTTP 200
+- Post-deploy AI state confirms successful run and applied configuration updates.
