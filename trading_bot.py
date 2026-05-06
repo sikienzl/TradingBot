@@ -222,7 +222,7 @@ class BotConfig:
             'ENTRY_MOMENTUM_FILTER_ENABLED', True)
         self.entry_min_ret_3 = float(os.getenv('ENTRY_MIN_RET_3', -0.01))
         self.entry_require_price_above_ema20 = _env_bool(
-            'ENTRY_REQUIRE_PRICE_ABOVE_EMA20', True)
+            'ENTRY_REQUIRE_PRICE_ABOVE_EMA20', False)
         self.entry_sharp_pump_filter_enabled = _env_bool(
             'ENTRY_SHARP_PUMP_FILTER_ENABLED', True)
         self.entry_max_ret_1 = float(os.getenv('ENTRY_MAX_RET_1', 0.04))
