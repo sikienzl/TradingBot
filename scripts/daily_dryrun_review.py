@@ -187,7 +187,7 @@ def _read_ai_state(path: str) -> Dict[str, Any]:
 
 def _build_text(report: Dict[str, Any]) -> str:
     t = report["trades"]
-    l = report["log_activity"]
+    log_activity = report["log_activity"]
     a = report["ai_copilot"]
 
     lines = [
@@ -203,11 +203,11 @@ def _build_text(report: Dict[str, Any]) -> str:
         f"avg_pnl_per_trade: {t['avg_pnl_per_trade']}",
         "",
         "[Execution Activity]",
-        f"buy_attempts: {l['buy_attempts']}",
-        f"reentry_blocks: {l['reentry_blocks']}",
-        f"momentum_blocks: {l['momentum_blocks']}",
-        f"reentry_block_ratio: {l['reentry_block_ratio']}",
-        f"error_lines: {l['error_lines']}",
+        f"buy_attempts: {log_activity['buy_attempts']}",
+        f"reentry_blocks: {log_activity['reentry_blocks']}",
+        f"momentum_blocks: {log_activity['momentum_blocks']}",
+        f"reentry_block_ratio: {log_activity['reentry_block_ratio']}",
+        f"error_lines: {log_activity['error_lines']}",
         "",
         "[AI Copilot]",
         f"available: {a['available']}",
