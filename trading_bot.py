@@ -762,6 +762,31 @@ class CryptoTradingBot:
 
     def _update_portfolio_balance(self):
         """Updates the portfolio with current balances from the exchange."""
+        def _currency_aliases(currency: str) -> List[str]:
+            base = currency.upper().strip()
+            aliases = [base, f"Z{base}", f"X{base}"]
+            if base == 'BTC':
+                aliases.extend(['XBT', 'XXBT'])
+            return list(dict.fromkeys(aliases))
+
+        def _extract_cash_and_holdings(free_balances: Dict[str, float]) -> Tuple[float, Dict[str, float]]:
+            cash = 0.0
+            aliases = _currency_aliases(self.config.base_currency)
+            for key in aliases:
+                value = free_balances.get(key)
+                if value is not None:
+                    cash = float(value)
+                    break
+
+            holdings: Dict[str, float] = {}
+            for currency, amount in free_balances.items():
+                if amount <= 0:
+                    continue
+                if currency in aliases:
+                    continue
+                holdings[currency] = float(amount)
+            return cash, holdings
+
         if self.config.simulate_data or self.exchange is None:
             # For simulate_data mode: initialize dry-run cash once, then respect persistence
             if self.portfolio.cash == 0.0 and not self.portfolio.holdings:
@@ -789,31 +814,23 @@ class CryptoTradingBot:
             # No persistent state, load initial balance from exchange
             try:
                 balance = self.exchange.fetch_balance()
-                self.portfolio.cash = balance['free'].get(
-                    self.config.base_currency, 1000.0)  # Fallback to 1000 if not found
-                self.portfolio.holdings = {}
-                for currency, amounts in balance['free'].items():
-                    if currency != self.config.base_currency and amounts > 0:
-                        self.portfolio.holdings[currency] = amounts
+                free_balances = balance.get('free', {})
+                self.portfolio.cash, self.portfolio.holdings = _extract_cash_and_holdings(
+                    free_balances)
                 self.portfolio.last_update = datetime.now()
                 logger.info(
                     f"Portfolio initialized from exchange (dry-run mode). Cash: {self.portfolio.cash:.2f} {self.config.base_currency}, Holdings: {self.portfolio.holdings}")
             except Exception as e:
                 logger.warning(
-                    f"Failed to load initial balance from exchange, using default starting capital: {e}")
-                self.portfolio.cash = 1000.0
-                self.portfolio.last_update = datetime.now()
+                    f"Failed to load initial balance from exchange in dry-run mode: {e}")
             return
 
         # Live trading mode: always fetch current balance
         try:
             balance = self.exchange.fetch_balance()
-            self.portfolio.cash = balance['free'].get(
-                self.config.base_currency, 0.0)
-            self.portfolio.holdings = {}
-            for currency, amounts in balance['free'].items():
-                if currency != self.config.base_currency and amounts > 0:
-                    self.portfolio.holdings[currency] = amounts
+            free_balances = balance.get('free', {})
+            self.portfolio.cash, self.portfolio.holdings = _extract_cash_and_holdings(
+                free_balances)
             self.portfolio.last_update = datetime.now()
             logger.info(
                 f"Portfolio balance updated. Cash: {self.portfolio.cash:.2f} {self.config.base_currency}, Holdings: {self.portfolio.holdings}")
