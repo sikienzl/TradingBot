@@ -5,11 +5,14 @@ Listens on http://localhost:9200/metrics
 """
 import csv
 import math
+import os
 import sys
+from collections import deque
 from datetime import datetime, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 JOURNAL_PATH = '/opt/trading_2/trade_journal.csv'
+BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
 MIN_DRAWDOWN_PCT_BASE_USD = 1.0
 
 
@@ -28,6 +31,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
     def get_metrics(self):
         trades = self.read_trades()
         metrics_dict = self.calculate_pnl_metrics(trades)
+        snapshot = self.read_latest_portfolio_snapshot()
+        metrics_dict['portfolio_value_eur'] = snapshot['portfolio_value_eur']
+        metrics_dict['portfolio_cash_eur'] = snapshot['portfolio_cash_eur']
         return self.format_prometheus_metrics(metrics_dict)
 
     def read_trades(self):
@@ -67,6 +73,45 @@ class MetricsHandler(BaseHTTPRequestHandler):
             except ValueError:
                 continue
         return 0.0
+
+    def read_latest_portfolio_snapshot(self):
+        """Read latest portfolio value and cash from bot log."""
+        snapshot = {
+            'portfolio_value_eur': 0.0,
+            'portfolio_cash_eur': 0.0,
+        }
+
+        if not os.path.exists(BOT_LOG_PATH):
+            return snapshot
+
+        try:
+            with open(BOT_LOG_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+                tail_lines = list(deque(f, maxlen=800))
+
+            for line in reversed(tail_lines):
+                if snapshot['portfolio_value_eur'] == 0.0 and 'Portfolio value:' in line:
+                    try:
+                        value_part = line.split(
+                            'Portfolio value:', 1)[1].strip()
+                        snapshot['portfolio_value_eur'] = float(
+                            value_part.split(' ')[0])
+                    except Exception:
+                        pass
+
+                if snapshot['portfolio_cash_eur'] == 0.0 and '  - Cash:' in line:
+                    try:
+                        cash_part = line.split('Cash:', 1)[1].strip()
+                        snapshot['portfolio_cash_eur'] = float(
+                            cash_part.split(' ')[0])
+                    except Exception:
+                        pass
+
+                if snapshot['portfolio_value_eur'] != 0.0 and snapshot['portfolio_cash_eur'] != 0.0:
+                    break
+        except Exception:
+            return snapshot
+
+        return snapshot
 
     def calculate_pnl_metrics(self, trades, time_window_hours=24):
         """Calculate PnL metrics from trades"""
@@ -140,7 +185,8 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     max_drawdown_usd = drawdown_usd
                 if peak_equity > 0:
                     # Prevent unrealistic percentages when peak equity is near zero.
-                    drawdown_pct = drawdown_usd / max(peak_equity, MIN_DRAWDOWN_PCT_BASE_USD)
+                    drawdown_pct = drawdown_usd / \
+                        max(peak_equity, MIN_DRAWDOWN_PCT_BASE_USD)
                     if drawdown_pct > max_drawdown_pct:
                         max_drawdown_pct = drawdown_pct
             except Exception:
@@ -249,6 +295,18 @@ class MetricsHandler(BaseHTTPRequestHandler):
         output.append('# TYPE trading_max_drawdown_pct gauge')
         output.append(
             f'trading_max_drawdown_pct {metrics["max_drawdown_pct"]}')
+
+        output.append(
+            '# HELP trading_portfolio_value_eur Latest portfolio total value from bot log (EUR)')
+        output.append('# TYPE trading_portfolio_value_eur gauge')
+        output.append(
+            f'trading_portfolio_value_eur {metrics.get("portfolio_value_eur", 0.0)}')
+
+        output.append(
+            '# HELP trading_portfolio_cash_eur Latest portfolio cash from bot log (EUR)')
+        output.append('# TYPE trading_portfolio_cash_eur gauge')
+        output.append(
+            f'trading_portfolio_cash_eur {metrics.get("portfolio_cash_eur", 0.0)}')
 
         output.append(
             '# HELP trading_coin_realized_pnl_usd Realized PnL per coin in USD (last 24h)')

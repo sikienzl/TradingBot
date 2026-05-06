@@ -5,11 +5,14 @@ Reads trade_journal.csv and exports current balance status as Prometheus metrics
 """
 import csv
 import math
+import os
 import sys
+from collections import deque
 from datetime import datetime, timedelta
 
 
 MIN_DRAWDOWN_PCT_BASE_USD = 1.0
+BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
 
 
 def read_trades(journal_path):
@@ -175,6 +178,45 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
     }
 
 
+def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
+    """Read latest portfolio value and cash from bot log."""
+    snapshot = {
+        'portfolio_value_eur': 0.0,
+        'portfolio_cash_eur': 0.0,
+    }
+
+    if not os.path.exists(log_path):
+        return snapshot
+
+    try:
+        with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+            tail_lines = list(deque(f, maxlen=800))
+
+        for line in reversed(tail_lines):
+            if snapshot['portfolio_value_eur'] == 0.0 and 'Portfolio value:' in line:
+                try:
+                    value_part = line.split('Portfolio value:', 1)[1].strip()
+                    snapshot['portfolio_value_eur'] = float(
+                        value_part.split(' ')[0])
+                except Exception:
+                    pass
+
+            if snapshot['portfolio_cash_eur'] == 0.0 and '  - Cash:' in line:
+                try:
+                    cash_part = line.split('Cash:', 1)[1].strip()
+                    snapshot['portfolio_cash_eur'] = float(
+                        cash_part.split(' ')[0])
+                except Exception:
+                    pass
+
+            if snapshot['portfolio_value_eur'] != 0.0 and snapshot['portfolio_cash_eur'] != 0.0:
+                break
+    except Exception:
+        return snapshot
+
+    return snapshot
+
+
 def format_prometheus_metrics(metrics):
     """Format metrics as Prometheus lines"""
     output = []
@@ -234,6 +276,18 @@ def format_prometheus_metrics(metrics):
     output.append(f'trading_max_drawdown_pct {metrics["max_drawdown_pct"]}')
 
     output.append(
+        '# HELP trading_portfolio_value_eur Latest portfolio total value from bot log (EUR)')
+    output.append('# TYPE trading_portfolio_value_eur gauge')
+    output.append(
+        f'trading_portfolio_value_eur {metrics.get("portfolio_value_eur", 0.0)}')
+
+    output.append(
+        '# HELP trading_portfolio_cash_eur Latest portfolio cash from bot log (EUR)')
+    output.append('# TYPE trading_portfolio_cash_eur gauge')
+    output.append(
+        f'trading_portfolio_cash_eur {metrics.get("portfolio_cash_eur", 0.0)}')
+
+    output.append(
         '# HELP trading_coin_realized_pnl_usd Realized PnL per coin in USD (last 24h)')
     output.append('# TYPE trading_coin_realized_pnl_usd gauge')
     for coin, pnl in sorted(metrics['coin_pnl'].items()):
@@ -260,6 +314,7 @@ if __name__ == '__main__':
 
     trades = read_trades(journal_path)
     metrics = calculate_pnl_metrics(trades, time_window_hours=24)
+    metrics.update(read_latest_portfolio_snapshot())
     output = format_prometheus_metrics(metrics)
 
     print(output)
