@@ -806,6 +806,8 @@ class CryptoTradingBot:
             headers={
                 'Authorization': f"Bearer {self.config.ai_copilot_api_key}",
                 'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'User-Agent': 'trading-bot/1.0 (+https://github.com/siegfried/trading_2)',
             },
             method='POST',
         )
