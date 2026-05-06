@@ -1,0 +1,38 @@
+Trading Bot Pi Release Notes - v1.0.19
+
+Date: 2026-05-06
+
+Highlights
+- b4a8474 Add budget-capped AI copilot with Grafana cap metrics.
+- a38e6ac Relax default EMA20 entry requirement for more candidate entries.
+- 5872bbb Retrain CatBoost model with latest market data.
+- Added strict AI usage governance with daily/monthly call caps, budget cap, interval throttling, and error-based suspension.
+- Added Prometheus/Grafana visibility for AI cap and usage metrics.
+
+Operational Impact
+- Trading behavior can be adjusted by the optional AI copilot, but only within bounded guardrail limits.
+- Monthly API budget control is now first-class and observable in monitoring.
+- Entry filtering is less restrictive by default due to relaxed EMA20 requirement.
+- CatBoost model artifact is refreshed and packaged in Pi release assets.
+
+Changed Components
+- trading_bot.py
+- pnl_exporter.py
+- export_pnl_metrics.py
+- .env.example
+- .env.live.example
+- .env.paper_kraken.example
+- model/catboost_trading_model/catboost_model.cbm
+- model/catboost_trading_model/metadata.json
+- .github/workflows/release.yml
+
+Verification Checklist
+- Bot starts cleanly and writes expected runtime logs after deployment.
+- AI cap/usage metrics are visible in Prometheus and Grafana.
+- Scorecard and monitoring services continue to run without regression.
+- Release package checksum validation passes before installation.
+
+Notes
+- Keep AI copilot in shadow mode initially and validate behavior for 24-48 hours.
+- Review monthly cap utilization before enabling automatic parameter application in production.
+- Revoke and rotate any credentials that may have been exposed in logs, terminals, or chat history.
