@@ -172,6 +172,12 @@ class BotConfig:
                 return default
             return raw.strip().lower() in ("1", "true", "yes", "y", "on")
 
+        def _env_str(name: str, default: str = "") -> str:
+            raw = os.getenv(name)
+            if raw is None:
+                return default
+            return raw.strip().strip('"').strip("'")
+
         self.exchange_name = os.getenv('EXCHANGE_NAME', 'kraken').lower()
         self.api_key = os.getenv(
             'KRAKEN_API_KEY', '')
@@ -329,10 +335,10 @@ class BotConfig:
 
         # Optional external AI co-pilot (budget-limited, disabled by default)
         self.ai_copilot_enabled = _env_bool('AI_COPILOT_ENABLED', False)
-        self.ai_copilot_api_url = os.getenv(
+        self.ai_copilot_api_url = _env_str(
             'AI_COPILOT_API_URL', 'https://api.mammouth.ai/v1/chat/completions')
-        self.ai_copilot_api_key = os.getenv('MAMMOUTH_API_KEY', '')
-        self.ai_copilot_model = os.getenv('AI_COPILOT_MODEL', 'gpt-5.4-nano')
+        self.ai_copilot_api_key = _env_str('MAMMOUTH_API_KEY', '')
+        self.ai_copilot_model = _env_str('AI_COPILOT_MODEL', 'gpt-5.4-nano')
         self.ai_copilot_interval_minutes = int(
             os.getenv('AI_COPILOT_INTERVAL_MINUTES', 62))
         self.ai_copilot_state_file = os.getenv(
@@ -657,6 +663,8 @@ class CryptoTradingBot:
         if state.get('day_key') != day_key:
             state['day_key'] = day_key
             state['daily_calls'] = 0
+            state['consecutive_errors'] = 0
+            state.pop('last_suspended_at', None)
         state.setdefault('monthly_calls', 0)
         state.setdefault('daily_calls', 0)
         state.setdefault('monthly_spend_usd', 0.0)
@@ -675,6 +683,12 @@ class CryptoTradingBot:
             return False, 'disabled'
         if not self.config.ai_copilot_api_key:
             return False, 'missing_api_key'
+        if (
+            self.config.ai_copilot_max_consecutive_errors > 0
+            and state.get('consecutive_errors', 0) >= self.config.ai_copilot_max_consecutive_errors
+            and state.get('last_suspended_at')
+        ):
+            return False, 'suspended_after_errors'
         if self.config.ai_copilot_max_calls_per_day > 0 and state.get('daily_calls', 0) >= self.config.ai_copilot_max_calls_per_day:
             return False, 'daily_call_limit'
         if self.config.ai_copilot_max_calls_per_month > 0 and state.get('monthly_calls', 0) >= self.config.ai_copilot_max_calls_per_month:
@@ -682,7 +696,7 @@ class CryptoTradingBot:
         if self.config.ai_copilot_max_budget_usd_per_month > 0 and state.get('monthly_spend_usd', 0.0) >= self.config.ai_copilot_max_budget_usd_per_month:
             return False, 'monthly_budget_limit'
 
-        last_run_raw = state.get('last_run_at')
+        last_run_raw = state.get('last_attempt_at') or state.get('last_run_at')
         if last_run_raw and self.config.ai_copilot_interval_minutes > 0:
             try:
                 last_run = datetime.fromisoformat(last_run_raw)
@@ -898,7 +912,8 @@ class CryptoTradingBot:
             ):
                 logger.warning(
                     f"AI co-pilot call ignored due to monthly budget cap: projected {projected:.4f} USD")
-                state['last_run_at'] = datetime.now(timezone.utc).isoformat()
+                state['last_attempt_at'] = datetime.now(
+                    timezone.utc).isoformat()
                 self._write_ai_copilot_state(state)
                 return
 
@@ -906,10 +921,12 @@ class CryptoTradingBot:
             state['daily_calls'] = int(state.get('daily_calls', 0)) + 1
             state['monthly_spend_usd'] = projected
             state['last_run_at'] = datetime.now(timezone.utc).isoformat()
+            state['last_attempt_at'] = state['last_run_at']
             state['last_prompt_tokens'] = prompt_tokens
             state['last_completion_tokens'] = completion_tokens
             state['last_estimated_cost_usd'] = round(estimated_cost, 6)
             state['consecutive_errors'] = 0
+            state.pop('last_suspended_at', None)
 
             if not result:
                 logger.warning('AI co-pilot returned no valid JSON payload')
@@ -954,10 +971,11 @@ class CryptoTradingBot:
             self._write_ai_copilot_state(state)
 
         except Exception as e:
+            state['last_attempt_at'] = datetime.now(timezone.utc).isoformat()
             state['consecutive_errors'] = int(
                 state.get('consecutive_errors', 0)) + 1
             state['last_error'] = str(e)
-            state['last_error_at'] = datetime.now(timezone.utc).isoformat()
+            state['last_error_at'] = state['last_attempt_at']
             logger.warning(f"AI co-pilot call failed: {e}")
             if (
                 self.config.ai_copilot_max_consecutive_errors > 0
