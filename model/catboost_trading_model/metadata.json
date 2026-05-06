@@ -35,14 +35,14 @@
     "kaufen": 2
   },
   "class_weights": [
-    0.8159334928882351,
-    0.41680531396655607,
-    1.7672611931452087
+    0.9042469765204424,
+    0.45931700750649884,
+    1.636436015973059
   ],
   "recommended_confidence_threshold": 0.4,
   "recommended_confidence_threshold_stats": {
-    "macro_f1": 0.45721588610202923,
-    "coverage": 0.7820368327658146
+    "macro_f1": 0.4717523701471655,
+    "coverage": 0.7569978985289703
   },
   "margin_threshold": 0.03
 }
