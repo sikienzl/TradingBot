@@ -1,0 +1,31 @@
+Trading Bot Pi Release Notes - v1.0.20
+
+Date: 2026-05-06
+
+Highlights
+- Updated the AI co-pilot cadence to a month-safe 62-minute interval.
+- Prevented the default 720-call monthly cap from expiring early in 31-day months.
+- Aligned repository defaults and deployment templates with the live Raspberry Pi configuration.
+- Deployed the updated bot configuration and code to the Raspberry Pi host.
+
+Operational Impact
+- The Mammouth AI co-pilot remains active, but now spaces calls slightly wider to fit the monthly cap.
+- A configured limit of 720 monthly calls now lasts across 31-day months.
+- New deployments inherit the safer interval automatically from code defaults and example env files.
+
+Changed Components
+- trading_bot.py
+- .env.example
+- .env.live.example
+- .env.paper_kraken.example
+
+Verification Checklist
+- Trading bot starts cleanly after deployment.
+- AI co-pilot interval is set to 62 minutes in the live environment.
+- AI co-pilot remains enabled and not in shadow mode where intended.
+- Monthly cap metrics continue to report correctly in monitoring.
+
+Notes
+- This release is a configuration-hardening update for AI copilot budget governance.
+- It does not expand AI permissions beyond the already configured guardrails.
+- Revoke and rotate any credentials that may have been exposed in logs, terminals, or chat history.

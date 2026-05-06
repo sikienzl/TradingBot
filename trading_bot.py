@@ -334,7 +334,7 @@ class BotConfig:
         self.ai_copilot_api_key = os.getenv('MAMMOUTH_API_KEY', '')
         self.ai_copilot_model = os.getenv('AI_COPILOT_MODEL', 'gpt-5.4-nano')
         self.ai_copilot_interval_minutes = int(
-            os.getenv('AI_COPILOT_INTERVAL_MINUTES', 60))
+            os.getenv('AI_COPILOT_INTERVAL_MINUTES', 62))
         self.ai_copilot_state_file = os.getenv(
             'AI_COPILOT_STATE_FILE', 'ai_copilot_state.json')
         self.ai_copilot_shadow_mode = _env_bool('AI_COPILOT_SHADOW_MODE', True)
@@ -648,7 +648,8 @@ class CryptoTradingBot:
         day_key = self._current_day_key()
         state['budget_cap_usd'] = float(
             self.config.ai_copilot_max_budget_usd_per_month)
-        state['calls_cap_monthly'] = int(self.config.ai_copilot_max_calls_per_month)
+        state['calls_cap_monthly'] = int(
+            self.config.ai_copilot_max_calls_per_month)
         if state.get('month_key') != month_key:
             state['month_key'] = month_key
             state['monthly_calls'] = 0
