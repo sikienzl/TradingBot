@@ -4,6 +4,17 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (example: v1.0.19)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark release as pre-release'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write   # needed to create GitHub Releases
@@ -20,9 +31,18 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Extract version from tag
+      - name: Resolve release metadata
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            INPUT_VERSION="${{ github.event.inputs.version }}"
+            [[ "$INPUT_VERSION" == v* ]] || INPUT_VERSION="v${INPUT_VERSION}"
+            echo "VERSION=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "PRERELEASE=${{ github.event.inputs.prerelease }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Stage runtime files
         run: |
@@ -38,7 +58,7 @@ jobs:
              requirements.txt requirements-pi.txt \
              "${PKG}/"
 
-           # Documentation and env templates used at runtime on Pi
+          # Documentation and env templates used at runtime on Pi
            cp README.md SERVER_README.md .env.example .env.live.example "${PKG}/"
 
           # Scripts & deploy (installer + systemd units)
@@ -264,7 +284,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.VERSION }}
+          target_commitish: ${{ github.sha }}
           name: "Crypto Trading Bot ${{ steps.version.outputs.VERSION }}"
+          prerelease: ${{ steps.version.outputs.PRERELEASE }}
           body_path: release_body.md
           files: |
             ${{ env.PKG }}.tar.gz
