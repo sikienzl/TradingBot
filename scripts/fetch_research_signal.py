@@ -143,7 +143,43 @@ def _fetch_fng_signal() -> Dict[str, Any]:
     if not data:
         raise ValueError("Fear & Greed API returned empty data array")
     entry = data[0]
+    if not isinstance(entry, dict):
+        raise ValueError("Fear & Greed API entry is not an object")
+    return _fetch_fng_signal_from_entry(entry)
 
+
+def _map_fng(entry: Dict[str, Any]) -> Dict[str, Any]:
+    raw_value = int(entry.get("value", 50))
+    provider_signal = _fetch_fng_signal_from_entry(entry)
+    market_regime = provider_signal["market_regime"]
+
+    normalized_features = {
+        "research_sentiment_score": provider_signal["sentiment_score"],
+        "research_confidence": provider_signal["confidence"],
+        "research_risk_score": provider_signal["risk_score"],
+        "research_regime_bull": 1.0 if market_regime == "bull" else 0.0,
+        "research_regime_bear": 1.0 if market_regime == "bear" else 0.0,
+        "research_regime_sideways": 1.0 if market_regime == "sideways" else 0.0,
+    }
+
+    return {
+        "timestamp_utc": provider_signal["timestamp_utc"],
+        "sentiment_score": provider_signal["sentiment_score"],
+        "confidence": provider_signal["confidence"],
+        "risk_score": provider_signal["risk_score"],
+        "market_regime": market_regime,
+        "citations": provider_signal["citations"],
+        "normalized_features": normalized_features,
+        "integration": {
+            "source": "fetch_research_signal",
+            "source_type": "fear_and_greed_index",
+            "provider": "fng",
+            "raw_value": raw_value,
+        },
+    }
+
+
+def _fetch_fng_signal_from_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
     raw_value = int(entry.get("value", 50))
     classification = str(entry.get("value_classification", "")).lower()
     ts_epoch = entry.get("timestamp")
@@ -180,6 +216,17 @@ def _fetch_fng_signal() -> Dict[str, Any]:
     }
 
 
+def _fetch_fng() -> Dict[str, Any]:
+    payload = _fetch_json(FNG_URL)
+    data = payload.get("data", [])
+    if not data:
+        raise ValueError("Fear & Greed API returned empty data array")
+    entry = data[0]
+    if not isinstance(entry, dict):
+        raise ValueError("Fear & Greed API entry is not an object")
+    return entry
+
+
 def _extract_rss_items(xml_bytes: bytes) -> List[Dict[str, str]]:
     root = ET.fromstring(xml_bytes)
     items: List[Dict[str, str]] = []
@@ -190,13 +237,15 @@ def _extract_rss_items(xml_bytes: bytes) -> List[Dict[str, str]]:
         link = (item.findtext("link") or "").strip()
         published = (item.findtext("pubDate") or "").strip()
         if title:
-            items.append({"title": title, "link": link, "published": published})
+            items.append(
+                {"title": title, "link": link, "published": published})
 
     # Atom format fallback
     if not items:
         atom_entries = root.findall(".//{http://www.w3.org/2005/Atom}entry")
         for entry in atom_entries:
-            title = (entry.findtext("{http://www.w3.org/2005/Atom}title") or "").strip()
+            title = (entry.findtext(
+                "{http://www.w3.org/2005/Atom}title") or "").strip()
             published = (
                 entry.findtext("{http://www.w3.org/2005/Atom}updated")
                 or entry.findtext("{http://www.w3.org/2005/Atom}published")
@@ -207,7 +256,8 @@ def _extract_rss_items(xml_bytes: bytes) -> List[Dict[str, str]]:
             if link_el is not None:
                 link = (link_el.attrib.get("href") or "").strip()
             if title:
-                items.append({"title": title, "link": link, "published": published})
+                items.append(
+                    {"title": title, "link": link, "published": published})
     return items
 
 
@@ -256,7 +306,8 @@ def _fetch_news_signal(
                 recent_titles.append(title)
 
     if not scored:
-        raise ValueError("No recent RSS news items available for sentiment scoring")
+        raise ValueError(
+            "No recent RSS news items available for sentiment scoring")
 
     sentiment_score = _clamp(sum(scored) / len(scored), -1.0, 1.0)
     signal_strength = min(1.0, abs(sentiment_score) * 1.8)
@@ -415,9 +466,11 @@ def main() -> None:
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    providers = [p.strip().lower() for p in args.providers.split(",") if p.strip()]
+    providers = [p.strip().lower()
+                 for p in args.providers.split(",") if p.strip()]
     if not providers:
-        print("ERROR: No providers configured. Use --providers fng,news", file=sys.stderr)
+        print("ERROR: No providers configured. Use --providers fng,news",
+              file=sys.stderr)
         sys.exit(1)
 
     news_feeds = [u.strip() for u in args.news_feeds.split(",") if u.strip()]
@@ -441,7 +494,8 @@ def main() -> None:
                     _fetch_news_signal(
                         feeds=news_feeds,
                         lookback_hours=max(1, args.news_lookback_hours),
-                        max_items_per_feed=max(1, args.news_max_items_per_feed),
+                        max_items_per_feed=max(
+                            1, args.news_max_items_per_feed),
                     )
                 )
             else:
@@ -459,7 +513,8 @@ def main() -> None:
 
     signal = _combine_provider_signals(provider_signals, provider_weights)
     if provider_errors:
-        signal.setdefault("source_details", {})["provider_errors"] = provider_errors
+        signal.setdefault("source_details", {})[
+            "provider_errors"] = provider_errors
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(signal, f, indent=2)
