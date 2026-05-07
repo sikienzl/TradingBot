@@ -1,0 +1,14 @@
+[Unit]
+Description=Trading Bot - Weekly Tuning Cycle
+After=network-online.target scorecard.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=trading
+Group=trading
+WorkingDirectory=/opt/trading_2
+EnvironmentFile=/opt/trading_2/.env
+ExecStart=/bin/bash /opt/trading_2/scripts/run_weekly_tuning_cycle.sh
+StandardOutput=append:/opt/trading_2/logs/tuning_cycle.log
+StandardError=append:/opt/trading_2/logs/tuning_cycle.log

@@ -237,7 +237,7 @@ install_or_update_monitoring() {
 SYSTEMD_DIR="/etc/systemd/system"
 info "Installing systemd services..."
 
-for svc_file in trading-bot.service scorecard.service scorecard.timer research-signal.service research-signal.timer; do
+for svc_file in trading-bot.service scorecard.service scorecard.timer research-signal.service research-signal.timer tuning-cycle.service tuning-cycle.timer; do
   SRC="${INSTALL_DIR}/deploy/${svc_file}"
   DEST="${SYSTEMD_DIR}/${svc_file}"
   if [[ -f "$SRC" ]]; then
@@ -271,6 +271,12 @@ fi
 if [[ -f "${SYSTEMD_DIR}/scorecard.timer" ]]; then
   systemctl enable --now scorecard.timer
   ok "Scorecard timer enabled (runs every Sunday 09:00)."
+fi
+
+# Enable & start tuning-cycle timer (runs weekly after scorecard)
+if [[ -f "${SYSTEMD_DIR}/tuning-cycle.timer" ]]; then
+  systemctl enable --now tuning-cycle.timer
+  ok "Tuning-cycle timer enabled (runs every Sunday 09:20)."
 fi
 
 # Enable & start research-signal timer (runs hourly, fetches Fear & Greed Index)

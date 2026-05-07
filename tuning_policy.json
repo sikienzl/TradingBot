@@ -1,0 +1,122 @@
+{
+  "version": "1.0.0",
+  "created_utc": "2026-05-07T22:00:00Z",
+  "description": "Autonomous tuning policy for trading bot with hard guardrails, weekly one-parameter optimization, rollback rules, and capital step-up criteria.",
+  "hard_guardrails": {
+    "max_drawdown_pct_hard": 3.0,
+    "max_daily_loss_pct_hard": 1.5,
+    "max_open_trades_hard": 3,
+    "cash_reserve_pct_hard": 0.1,
+    "immutable_by_bot": true
+  },
+  "tunable_parameters": [
+    {
+      "name": "MAX_HOLD_SECONDS",
+      "type": "int",
+      "min": 240,
+      "max": 600,
+      "step": 60,
+      "direction_allowed": "both"
+    },
+    {
+      "name": "REENTRY_COOLDOWN_MAX_SECONDS",
+      "type": "int",
+      "min": 600,
+      "max": 1500,
+      "step": 120,
+      "direction_allowed": "both"
+    },
+    {
+      "name": "ENTRY_MIN_RET_3",
+      "type": "float",
+      "min": -0.02,
+      "max": -0.005,
+      "step": 0.0025,
+      "direction_allowed": "both"
+    },
+    {
+      "name": "MIN_ENTRY_SCORE",
+      "type": "int",
+      "min": 45,
+      "max": 65,
+      "step": 2,
+      "direction_allowed": "both"
+    },
+    {
+      "name": "TABULAR_BUY_MIN_CONFIDENCE",
+      "type": "float",
+      "min": 0.5,
+      "max": 0.7,
+      "step": 0.02,
+      "direction_allowed": "both"
+    }
+  ],
+  "optimization_cycle": {
+    "cadence": "weekly",
+    "max_parameter_changes_per_cycle": 1,
+    "evaluation_window_days": 7,
+    "acceptance_criteria": {
+      "profit_factor_vs_previous": {
+        "operator": ">=",
+        "value": 0.0,
+        "compare_mode": "delta"
+      },
+      "avg_pnl_vs_previous_pct": {
+        "operator": ">=",
+        "value": 10.0,
+        "compare_mode": "percent_change"
+      },
+      "max_drawdown_pct_vs_previous": {
+        "operator": "<=",
+        "value": 0.3,
+        "compare_mode": "delta"
+      }
+    },
+    "rollback_on_reject": true
+  },
+  "safety_brakes": {
+    "if_verdict_no_go": {
+      "allow_new_tuning": false,
+      "rollback_to_last_stable": true
+    },
+    "if_hold_streak": {
+      "hold_count": 2,
+      "allow_new_tuning": false
+    },
+    "if_hard_drawdown_breach": {
+      "freeze_tuning_days": 14,
+      "rollback_to_last_stable": true
+    }
+  },
+  "capital_step_up": {
+    "enabled": true,
+    "criteria": {
+      "required_go_streak": 3,
+      "min_profit_factor": 1.25,
+      "max_drawdown_pct": 2.0
+    },
+    "ladder": [20, 25, 32, 40, 50, 63, 79, 100, 130, 170, 220, 290, 380, 500, 650, 820, 1000],
+    "on_no_go_after_step_up": "downgrade_one_step"
+  },
+  "activation_plan": {
+    "phase_1": {
+      "description": "Only allow one tunable parameter initially.",
+      "enabled_parameters": ["MAX_HOLD_SECONDS"],
+      "required_successful_cycles_before_next_phase": 2
+    },
+    "phase_2": {
+      "description": "Unlock all tunable parameters.",
+      "enabled_parameters": [
+        "MAX_HOLD_SECONDS",
+        "REENTRY_COOLDOWN_MAX_SECONDS",
+        "ENTRY_MIN_RET_3",
+        "MIN_ENTRY_SCORE",
+        "TABULAR_BUY_MIN_CONFIDENCE"
+      ]
+    }
+  },
+  "state_files": {
+    "last_stable_snapshot": "auto_tune_state.json",
+    "optional_test_snapshot": "auto_tune_state_test.json"
+  }
+}

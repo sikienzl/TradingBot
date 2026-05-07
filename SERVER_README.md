@@ -72,6 +72,36 @@ Reports are written to:
 - results/scorecards/
 - results/scorecards/latest_scorecard.txt
 
+## 4b. Weekly Auto-Tuning Cycle
+
+The repository includes a weekly tuning cycle that:
+1. Computes one recommended parameter change from scorecard metrics
+2. Optionally applies it to `.env` with automatic backup
+
+Manual run:
+
+```sh
+bash scripts/run_weekly_tuning_cycle.sh
+```
+
+Default mode is dry-run. To allow actual `.env` updates, set in `/opt/trading_2/.env`:
+
+```sh
+TUNING_APPLY_CHANGES=true
+```
+
+Systemd units:
+- `tuning-cycle.service`
+- `tuning-cycle.timer` (Sunday 09:20, after scorecard)
+
+Useful commands:
+
+```sh
+sudo systemctl status tuning-cycle.timer
+sudo systemctl start tuning-cycle.service
+sudo journalctl -u tuning-cycle.service -f
+```
+
 ## 5. Updating From New Package
 Before replacing code, keep a backup of:
 - .env
