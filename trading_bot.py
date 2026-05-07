@@ -50,6 +50,7 @@ class Portfolio:
         # Offene Trades: {'BTC': {'buy_price': 30000, 'amount_coin': 0.001, 'amount_base': 30, 'timestamp': datetime}}
         self.open_trades: Dict[str, Dict] = {}
         self.last_update: Optional[datetime] = None
+        self.initial_portfolio_value: Optional[float] = None
         self.state_file: str = ".portfolio_state.json"  # Persistency file for dry-run
 
     def save_state(self, filepath: Optional[str] = None) -> bool:
@@ -61,6 +62,7 @@ class Portfolio:
                 'holdings': self.holdings,
                 'open_trades': self.open_trades,
                 'base_currency': self.base_currency,
+                'initial_portfolio_value': self.initial_portfolio_value,
                 'timestamp': datetime.now().isoformat(),
             }
             with open(state_file, 'w') as f:
@@ -85,6 +87,9 @@ class Portfolio:
             self.holdings = {k: float(v)
                              for k, v in state.get('holdings', {}).items()}
             self.open_trades = state.get('open_trades', {})
+            initial_value = state.get('initial_portfolio_value')
+            self.initial_portfolio_value = float(
+                initial_value) if initial_value not in (None, '') else None
             for trade in self.open_trades.values():
                 ts = trade.get('timestamp')
                 if isinstance(ts, str):
@@ -1274,6 +1279,7 @@ class CryptoTradingBot:
                 if not self.portfolio.load_state():
                     # No state file, initialize with default dry-run capital
                     self.portfolio.cash = 1000.0
+                    self.portfolio.initial_portfolio_value = self.portfolio.cash
                     logger.info(
                         f"Simulated starting capital: {self.portfolio.cash:.2f} {self.config.base_currency}")
             self.portfolio.last_update = datetime.now()
@@ -1297,6 +1303,8 @@ class CryptoTradingBot:
                 free_balances = balance.get('free', {})
                 self.portfolio.cash, self.portfolio.holdings = _extract_cash_and_holdings(
                     free_balances)
+                if not self.portfolio.holdings:
+                    self.portfolio.initial_portfolio_value = self.portfolio.cash
                 self.portfolio.last_update = datetime.now()
                 logger.info(
                     f"Portfolio initialized from exchange (dry-run mode). Cash: {self.portfolio.cash:.2f} {self.config.base_currency}, Holdings: {self.portfolio.holdings}")
@@ -2483,6 +2491,10 @@ class CryptoTradingBot:
                 # Step 7: Display portfolio status
                 portfolio_value = self.portfolio.get_value(
                     {coin: data['price'] for coin, data in current_market_data.items()})
+                if self.portfolio.initial_portfolio_value is None:
+                    self.portfolio.initial_portfolio_value = portfolio_value
+                    if self.config.dry_run:
+                        self.portfolio.save_state()
                 logger.info(
                     f"📈 Portfolio value: {portfolio_value:.2f} {self.config.base_currency}")
                 logger.info(

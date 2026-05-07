@@ -393,6 +393,9 @@ if [[ "${STATUS_PROM_ENABLED,,}" == "true" ]]; then
   STATUS_PROM_TMP_FILE="${STATUS_PROM_FILE}.tmp"
   STATUS_PROM_DIR="$(dirname "$STATUS_PROM_FILE")"
   mkdir -p "$STATUS_PROM_DIR"
+  AI_STATE_FILE="${AI_COPILOT_STATE_FILE:-$ROOT_DIR/ai_copilot_state.json}"
+  PORTFOLIO_STATE_FILE="${PORTFOLIO_STATE_FILE:-$ROOT_DIR/.portfolio_state.json}"
+  BOT_LOG_FILE="${BOT_LOG_FILE:-$ROOT_DIR/logs/bot.log}"
 
   TS_UNIX="$(date -u +%s)"
   PROM_REASON_ESCAPED="${PRIMARY_REASON//\\/\\\\}"
@@ -438,6 +441,149 @@ if [[ "${STATUS_PROM_ENABLED,,}" == "true" ]]; then
     echo "# HELP trading_scorecard_max_drawdown_pct Maximum realized drawdown as percentage of starting capital"
     echo "# TYPE trading_scorecard_max_drawdown_pct gauge"
     echo "trading_scorecard_max_drawdown_pct $METRICS_MAX_DRAWDOWN_PCT"
+
+    STATUS_TS_UNIX="$TS_UNIX" \
+    SCORECARD_STARTING_CAPITAL="$STARTING_CAPITAL" \
+    AI_STATE_FILE="$AI_STATE_FILE" \
+    PORTFOLIO_STATE_FILE="$PORTFOLIO_STATE_FILE" \
+    BOT_LOG_FILE="$BOT_LOG_FILE" \
+    "$PYTHON_CMD" - <<'PY'
+import json
+import os
+import re
+from pathlib import Path
+
+
+def _read_json(path: str):
+    file_path = Path(path)
+    if not file_path.exists():
+        return {}
+    try:
+        return json.loads(file_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _as_float(value, default=0.0):
+    try:
+        if value in (None, ""):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _read_latest_portfolio_value(log_path: str) -> float:
+    file_path = Path(log_path)
+    if not file_path.exists():
+        return 0.0
+    pattern = re.compile(r"Portfolio value:\s*([0-9]+(?:\.[0-9]+)?)")
+    latest = 0.0
+    try:
+        with file_path.open("r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                match = pattern.search(line)
+                if match:
+                    latest = _as_float(match.group(1), latest)
+    except OSError:
+        return 0.0
+    return latest
+
+
+def _read_portfolio_book_value(path: str) -> float:
+    state = _read_json(path)
+    cash = _as_float(state.get("cash"), 0.0)
+    open_trades = state.get("open_trades") or {}
+    invested_cost = 0.0
+    if isinstance(open_trades, dict):
+        for trade in open_trades.values():
+            if isinstance(trade, dict):
+                invested_cost += _as_float(trade.get("amount_base"), 0.0)
+    return cash + invested_cost
+
+
+def _read_portfolio_values_from_log(log_path: str):
+    file_path = Path(log_path)
+    if not file_path.exists():
+        return 0.0, 0.0
+
+    simulated_pattern = re.compile(r"Simulated starting capital:\s*([0-9]+(?:\.[0-9]+)?)")
+    portfolio_pattern = re.compile(r"Portfolio value:\s*([0-9]+(?:\.[0-9]+)?)")
+    marker_pattern = re.compile(r"Portfolio state loaded from|Portfolio initialized from exchange")
+
+    session_start = 0.0
+    latest_value = 0.0
+    awaiting_first_value = False
+
+    try:
+        with file_path.open("r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                simulated_match = simulated_pattern.search(line)
+                if simulated_match:
+                    session_start = _as_float(simulated_match.group(1), session_start)
+                    awaiting_first_value = False
+                    continue
+
+                if marker_pattern.search(line):
+                    session_start = 0.0
+                    awaiting_first_value = True
+                    continue
+
+                portfolio_match = portfolio_pattern.search(line)
+                if portfolio_match:
+                    latest_value = _as_float(portfolio_match.group(1), latest_value)
+                    if awaiting_first_value and session_start <= 0:
+                        session_start = latest_value
+                        awaiting_first_value = False
+    except OSError:
+        return 0.0, 0.0
+
+    return session_start, latest_value
+
+
+ai_state = _read_json(os.environ["AI_STATE_FILE"])
+portfolio_state = _read_json(os.environ["PORTFOLIO_STATE_FILE"])
+session_start_value, latest_portfolio_value = _read_portfolio_values_from_log(os.environ["BOT_LOG_FILE"])
+portfolio_value = latest_portfolio_value
+if portfolio_value <= 0:
+    portfolio_value = _read_portfolio_book_value(os.environ["PORTFOLIO_STATE_FILE"])
+
+starting_capital = _as_float(portfolio_state.get("initial_portfolio_value"), 0.0)
+if starting_capital <= 0:
+    starting_capital = session_start_value
+if starting_capital <= 0:
+    starting_capital = _as_float(os.environ.get("SCORECARD_STARTING_CAPITAL"), 0.0)
+monthly_calls = int(_as_float(ai_state.get("monthly_calls"), 0.0))
+daily_calls = int(_as_float(ai_state.get("daily_calls"), 0.0))
+monthly_spend = _as_float(ai_state.get("monthly_spend_usd"), 0.0)
+monthly_budget = _as_float(ai_state.get("budget_cap_usd"), 0.0)
+budget_used_pct = 0.0
+if monthly_budget > 0:
+    budget_used_pct = (monthly_spend / monthly_budget) * 100.0
+
+lines = [
+    "# HELP trading_ai_copilot_daily_calls AI copilot calls used in the current day",
+    "# TYPE trading_ai_copilot_daily_calls gauge",
+    f"trading_ai_copilot_daily_calls {daily_calls}",
+    "# HELP trading_ai_copilot_monthly_calls AI copilot calls used in the current month",
+    "# TYPE trading_ai_copilot_monthly_calls gauge",
+    f"trading_ai_copilot_monthly_calls {monthly_calls}",
+    "# HELP trading_ai_copilot_monthly_spend_usd Estimated AI copilot spend in USD for the current month",
+    "# TYPE trading_ai_copilot_monthly_spend_usd gauge",
+    f"trading_ai_copilot_monthly_spend_usd {monthly_spend:.6f}",
+    "# HELP trading_ai_copilot_budget_used_pct Estimated percentage of AI copilot monthly budget already used",
+    "# TYPE trading_ai_copilot_budget_used_pct gauge",
+    f"trading_ai_copilot_budget_used_pct {budget_used_pct:.4f}",
+    "# HELP trading_runtime_portfolio_value Latest portfolio value seen by the trading bot",
+    "# TYPE trading_runtime_portfolio_value gauge",
+    f"trading_runtime_portfolio_value {portfolio_value:.6f}",
+    "# HELP trading_runtime_portfolio_start_value Configured starting portfolio value used for scorecard evaluation",
+    "# TYPE trading_runtime_portfolio_start_value gauge",
+    f"trading_runtime_portfolio_start_value {starting_capital:.6f}",
+]
+
+print("\n".join(lines))
+PY
   } > "$STATUS_PROM_TMP_FILE"
 
   mv "$STATUS_PROM_TMP_FILE" "$STATUS_PROM_FILE"

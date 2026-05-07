@@ -384,6 +384,106 @@
         { "expr": "trading_scorecard_profit_factor", "legendFormat": "Profit Factor", "refId": "B" },
         { "expr": "trading_scorecard_realized_pnl", "legendFormat": "Realized PnL", "refId": "C" }
       ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 5 },
+            { "color": "red", "value": 10 }
+          ] },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 44 },
+      "id": 19,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "title": "AI Daily Calls",
+      "type": "stat",
+      "targets": [{ "expr": "trading_ai_copilot_daily_calls", "legendFormat": "Daily", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 250 },
+            { "color": "red", "value": 500 }
+          ] },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 44 },
+      "id": 20,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "title": "AI Monthly Calls",
+      "type": "stat",
+      "targets": [{ "expr": "trading_ai_copilot_monthly_calls", "legendFormat": "Monthly", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 1 },
+            { "color": "red", "value": 3 }
+          ] },
+          "unit": "currencyUSD"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 44 },
+      "id": 21,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "title": "Mammouth Spend",
+      "type": "stat",
+      "targets": [{ "expr": "trading_ai_copilot_monthly_spend_usd", "legendFormat": "Spend", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "decimals": 2,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "yellow", "value": 0 },
+            { "color": "green", "value": 20 }
+          ] },
+          "unit": "currencyEUR"
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 44 },
+      "id": 22,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "title": "Portfolio Value",
+      "type": "stat",
+      "targets": [{ "expr": "trading_runtime_portfolio_value", "legendFormat": "Current", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "decimals": 2,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "blue", "value": null }
+          ] },
+          "unit": "currencyEUR"
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 44 },
+      "id": 23,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "title": "Portfolio Start",
+      "type": "stat",
+      "targets": [{ "expr": "trading_runtime_portfolio_start_value", "legendFormat": "Start", "refId": "A" }]
     }
   ],
   "refresh": "30s",
@@ -393,5 +493,5 @@
   "timepicker": {},
   "title": "Trading Bot — Pi Ops",
   "uid": "trading-bot-pi-ops",
-  "version": 4
+  "version": 5
 }
