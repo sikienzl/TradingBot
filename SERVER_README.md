@@ -146,6 +146,12 @@ This enables:
 - Prometheus scraping on port 9090
 - Grafana dashboard at port 3000 (Login: admin / admin)
 
+Low-RAM Pi defaults applied by the installer:
+- Grafana memory cap via `deploy/grafana-memory-limit.conf`
+- Grafana analytics and update checks disabled via `deploy/grafana-low-power.conf`
+- Dashboard provisioning refresh reduced to every 300 seconds
+- Dashboard auto-refresh set to 30 seconds
+
 Browser endpoints in local network:
 
 ```text

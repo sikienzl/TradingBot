@@ -5,6 +5,6 @@ providers:
     orgId: 1
     type: file
     disableDeletion: true
-    updateIntervalSeconds: 30
+    updateIntervalSeconds: 300
     options:
       path: /etc/grafana/dashboards

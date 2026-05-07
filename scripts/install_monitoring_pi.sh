@@ -66,7 +66,13 @@ cp "${INSTALL_DIR}/deploy/grafana-datasource.yml"              /etc/grafana/prov
 cp "${INSTALL_DIR}/deploy/grafana-dashboard-provisioning.yml"  /etc/grafana/provisioning/dashboards/trading.yml
 cp "${INSTALL_DIR}/deploy/grafana-dashboard.json"              /etc/grafana/dashboards/trading-bot.json
 
+mkdir -p /etc/systemd/system/grafana-server.service.d
+cp "${INSTALL_DIR}/deploy/grafana-memory-limit.conf" /etc/systemd/system/grafana-server.service.d/memory-limit.conf
+cp "${INSTALL_DIR}/deploy/grafana-low-power.conf" /etc/systemd/system/grafana-server.service.d/low-power.conf
+
+systemctl daemon-reload
 systemctl enable --now grafana-server
+systemctl restart grafana-server
 _ok "Grafana enabled. Dashboard will be available at http://<raspi-ip>:3000"
 # Default login: admin / admin  (change on first login)
 
