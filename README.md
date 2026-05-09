@@ -25,6 +25,8 @@ Copy and edit the example config:
 cp .env.example .env        # default / dry-run profile
 # or
 cp .env.live.example .env   # conservative live profile
+# or
+cp .env.small_account.example .env   # conservative small-account profile
 ```
 
 Optional AutoResearch overlay for servers:
