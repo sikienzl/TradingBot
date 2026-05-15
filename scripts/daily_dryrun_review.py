@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import urllib.request
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -125,7 +127,8 @@ def _scan_bot_log(path: str, cutoff_utc: datetime) -> Dict[str, Any]:
             continue
         ts_text = line[:23]
         try:
-            ts = datetime.strptime(ts_text, "%Y-%m-%d %H:%M:%S,%f").replace(tzinfo=timezone.utc)
+            ts = datetime.strptime(
+                ts_text, "%Y-%m-%d %H:%M:%S,%f").replace(tzinfo=timezone.utc)
         except ValueError:
             continue
         if ts < cutoff_utc:
@@ -153,36 +156,88 @@ def _scan_bot_log(path: str, cutoff_utc: datetime) -> Dict[str, Any]:
 
 
 def _read_ai_state(path: str) -> Dict[str, Any]:
-    if not os.path.exists(path):
-        return {
-            "available": False,
-            "monthly_calls": 0,
-            "daily_calls": 0,
-            "consecutive_errors": 0,
-            "last_run_at": "",
-            "last_applied_at": "",
-        }
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            state = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {
-            "available": False,
-            "monthly_calls": 0,
-            "daily_calls": 0,
-            "consecutive_errors": 0,
-            "last_run_at": "",
-            "last_applied_at": "",
-        }
+    empty = {
+        "available": False,
+        "monthly_calls": 0,
+        "monthly_spend_usd": 0.0,
+        "daily_calls": 0,
+        "consecutive_errors": 0,
+        "last_run_at": "",
+        "last_applied_at": "",
+    }
+    candidates = [path, f"{path}.bak"]
+    state = None
+    for candidate in candidates:
+        if not os.path.exists(candidate):
+            continue
+        try:
+            with open(candidate, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            break
+        except (OSError, json.JSONDecodeError):
+            continue
+    if state is None:
+        return empty
 
     return {
         "available": True,
         "monthly_calls": int(state.get("monthly_calls", 0) or 0),
+        "monthly_spend_usd": float(state.get("monthly_spend_usd", 0.0) or 0.0),
         "daily_calls": int(state.get("daily_calls", 0) or 0),
         "consecutive_errors": int(state.get("consecutive_errors", 0) or 0),
         "last_run_at": str(state.get("last_run_at", "") or ""),
         "last_applied_at": str(state.get("last_applied_at", "") or ""),
     }
+
+
+def _read_env_value(path: str, env_key: str) -> str:
+    if not path or not os.path.exists(path):
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                if key.strip() != env_key:
+                    continue
+                return value.strip().strip('"').strip("'")
+    except OSError:
+        return ""
+    return ""
+
+
+def _read_ai_spend_from_api(env_path: str) -> Dict[str, Any]:
+    api_key = _read_env_value(env_path, "MAMMOUTH_API_KEY")
+    api_url = _read_env_value(
+        env_path, "AI_COPILOT_API_URL") or "https://api.mammouth.ai/v1/chat/completions"
+    if not api_key:
+        return {}
+
+    api_root = re.sub(r"/v1/chat/completions$", "", api_url).rstrip("/")
+    req = urllib.request.Request(
+        f"{api_root}/key/info",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+            "User-Agent": "trading-bot-daily-review/1.0",
+        },
+        method="GET",
+    )
+
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+
+    info = payload.get("info", {}) if isinstance(payload, dict) else {}
+    result = {}
+    if info.get("spend") is not None:
+        result["monthly_spend_usd"] = float(info.get("spend"))
+    if info.get("max_budget") is not None:
+        result["budget_cap_usd"] = float(info.get("max_budget"))
+    if info.get("budget_reset_at") is not None:
+        result["budget_reset_at"] = str(info.get("budget_reset_at") or "")
+    return result
 
 
 def _build_text(report: Dict[str, Any]) -> str:
@@ -213,6 +268,7 @@ def _build_text(report: Dict[str, Any]) -> str:
         f"available: {a['available']}",
         f"daily_calls: {a['daily_calls']}",
         f"monthly_calls: {a['monthly_calls']}",
+        f"monthly_spend_usd: {a['monthly_spend_usd']}",
         f"consecutive_errors: {a['consecutive_errors']}",
         f"last_run_at: {a['last_run_at']}",
         f"last_applied_at: {a['last_applied_at']}",
@@ -221,13 +277,17 @@ def _build_text(report: Dict[str, Any]) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate daily dry-run review report")
+    parser = argparse.ArgumentParser(
+        description="Generate daily dry-run review report")
     parser.add_argument("--journal", default="trade_journal.csv")
     parser.add_argument("--bot-log", default="logs/bot.log")
     parser.add_argument("--ai-state", default="ai_copilot_state.json")
+    parser.add_argument("--env-file", default=".env")
     parser.add_argument("--lookback-hours", type=int, default=24)
-    parser.add_argument("--output-json", default="results/daily_review/latest_review.json")
-    parser.add_argument("--output-txt", default="results/daily_review/latest_review.txt")
+    parser.add_argument(
+        "--output-json", default="results/daily_review/latest_review.json")
+    parser.add_argument(
+        "--output-txt", default="results/daily_review/latest_review.txt")
     args = parser.parse_args()
 
     now_utc = datetime.now(timezone.utc)
@@ -237,6 +297,13 @@ def main() -> None:
     trades = _review_trades(rows, cutoff_utc)
     log_activity = _scan_bot_log(args.bot_log, cutoff_utc)
     ai_copilot = _read_ai_state(args.ai_state)
+    try:
+        api_usage = _read_ai_spend_from_api(args.env_file)
+        if api_usage:
+            ai_copilot.update(api_usage)
+            ai_copilot["available"] = True
+    except Exception:
+        pass
 
     report = {
         "generated_at_utc": now_utc.isoformat().replace("+00:00", "Z"),

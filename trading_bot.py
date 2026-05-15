@@ -3,6 +3,7 @@ import sys
 import logging
 import csv
 import json
+import shutil
 from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import time
@@ -649,22 +650,51 @@ class CryptoTradingBot:
 
     def _read_ai_copilot_state(self) -> Dict:
         path = self.config.ai_copilot_state_file
-        if not path or not os.path.exists(path):
+        if not path:
             return {}
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            return {}
+
+        candidates = [path, f'{path}.bak']
+        last_error = None
+        for candidate in candidates:
+            if not os.path.exists(candidate):
+                continue
+            try:
+                with open(candidate, 'r', encoding='utf-8') as f:
+                    state = json.load(f)
+                if candidate != path:
+                    logger.warning(
+                        'Recovered AI co-pilot state from backup file')
+                return state
+            except Exception as exc:
+                last_error = exc
+
+        if last_error is not None:
+            logger.warning(
+                f'AI co-pilot state could not be loaded: {last_error}')
+        return {}
 
     def _write_ai_copilot_state(self, state: Dict):
         path = self.config.ai_copilot_state_file
         if not path:
             return
+        tmp_path = f'{path}.tmp'
+        backup_path = f'{path}.bak'
         try:
-            with open(path, 'w', encoding='utf-8') as f:
+            if os.path.exists(path):
+                try:
+                    shutil.copyfile(path, backup_path)
+                except Exception as exc:
+                    logger.warning(
+                        f'AI co-pilot state backup could not be updated: {exc}')
+            with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(state, f, ensure_ascii=True, indent=2)
+            os.replace(tmp_path, path)
         except Exception as e:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
             logger.warning(f"AI co-pilot state could not be saved: {e}")
 
     def _current_month_key(self) -> str:

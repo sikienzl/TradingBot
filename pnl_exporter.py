@@ -10,6 +10,8 @@ import os
 import sys
 import json
 import re
+import urllib.request
+import urllib.error
 from collections import deque
 from datetime import datetime, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -38,6 +40,53 @@ SHADOW_SUGGESTION_META_RE = re.compile(
 
 
 class MetricsHandler(BaseHTTPRequestHandler):
+    def _read_env_value(self, env_key):
+        try:
+            if os.path.exists(ENV_PATH):
+                with open(ENV_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith('#') or '=' not in line:
+                            continue
+                        key, value = line.split('=', 1)
+                        if key.strip() != env_key:
+                            continue
+                        return value.strip().strip('"').strip("'")
+        except Exception:
+            pass
+        return ''
+
+    def _read_ai_spend_from_api(self):
+        api_key = self._read_env_value('MAMMOUTH_API_KEY')
+        api_url = self._read_env_value(
+            'AI_COPILOT_API_URL') or 'https://api.mammouth.ai/v1/chat/completions'
+        if not api_key:
+            return None
+
+        api_root = api_url.split('/v1/', 1)[0].rstrip('/')
+        req = urllib.request.Request(
+            f'{api_root}/key/info',
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Accept': 'application/json',
+                'User-Agent': 'trading-bot-pnl-exporter/1.0',
+            },
+            method='GET',
+        )
+
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = json.loads(resp.read().decode('utf-8', errors='replace'))
+
+        info = payload.get('info', {}) if isinstance(payload, dict) else {}
+        spend = info.get('spend')
+        max_budget = info.get('max_budget')
+        result = {}
+        if spend is not None:
+            result['ai_copilot_budget_used_usd'] = float(spend)
+        if max_budget is not None:
+            result['ai_copilot_budget_cap_usd'] = float(max_budget)
+        return result or None
+
     def do_GET(self):
         if self.path == '/metrics':
             metrics = self.get_metrics()
@@ -258,26 +307,28 @@ class MetricsHandler(BaseHTTPRequestHandler):
         }
 
         try:
-            if os.path.exists(ENV_PATH):
-                with open(ENV_PATH, 'r', encoding='utf-8', errors='ignore') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith('#') or '=' not in line:
-                            continue
-                        key, value = line.split('=', 1)
-                        key = key.strip()
-                        value = value.strip().strip('"').strip("'")
-                        if key == 'AI_COPILOT_MAX_BUDGET_USD_PER_MONTH':
-                            result['ai_copilot_budget_cap_usd'] = float(value)
-                        elif key == 'AI_COPILOT_MAX_CALLS_PER_MONTH':
-                            result['ai_copilot_calls_cap_monthly'] = float(
-                                value)
+            budget_cap = self._read_env_value(
+                'AI_COPILOT_MAX_BUDGET_USD_PER_MONTH')
+            calls_cap = self._read_env_value('AI_COPILOT_MAX_CALLS_PER_MONTH')
+            if budget_cap:
+                result['ai_copilot_budget_cap_usd'] = float(budget_cap)
+            if calls_cap:
+                result['ai_copilot_calls_cap_monthly'] = float(calls_cap)
         except Exception:
             pass
 
         try:
-            if os.path.exists(AI_COPILOT_STATE_PATH):
-                with open(AI_COPILOT_STATE_PATH, 'r', encoding='utf-8') as f:
+            api_usage = self._read_ai_spend_from_api()
+            if api_usage:
+                result.update(api_usage)
+        except Exception:
+            pass
+
+        try:
+            for candidate in (AI_COPILOT_STATE_PATH, f'{AI_COPILOT_STATE_PATH}.bak'):
+                if not os.path.exists(candidate):
+                    continue
+                with open(candidate, 'r', encoding='utf-8') as f:
                     state = json.load(f)
                 now = datetime.utcnow()
                 month_key = f"{now.year:04d}-{now.month:02d}"
@@ -286,10 +337,12 @@ class MetricsHandler(BaseHTTPRequestHandler):
                         state.get('budget_cap_usd', result['ai_copilot_budget_cap_usd']) or result['ai_copilot_budget_cap_usd'])
                     result['ai_copilot_calls_cap_monthly'] = float(
                         state.get('calls_cap_monthly', result['ai_copilot_calls_cap_monthly']) or result['ai_copilot_calls_cap_monthly'])
-                    result['ai_copilot_budget_used_usd'] = float(
-                        state.get('monthly_spend_usd', 0.0) or 0.0)
+                    if result['ai_copilot_budget_used_usd'] <= 0.0:
+                        result['ai_copilot_budget_used_usd'] = float(
+                            state.get('monthly_spend_usd', 0.0) or 0.0)
                     result['ai_copilot_calls_used_monthly'] = float(
                         state.get('monthly_calls', 0) or 0)
+                    break
         except Exception:
             pass
 
