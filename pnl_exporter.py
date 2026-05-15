@@ -3,11 +3,13 @@
 Simple Prometheus exporter for Trading Bot PnL metrics
 Listens on http://localhost:9200/metrics
 """
+import ast
 import csv
 import math
 import os
 import sys
 import json
+import re
 from collections import deque
 from datetime import datetime, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -21,6 +23,12 @@ START_VALUE_CACHE = {
     'log_mtime': None,
     'value': 0.0,
 }
+CURRENT_PRICE_RE = re.compile(
+    r'📊\s+([A-Z0-9]+):\s+Buy\s+[0-9.]+\s+→\s+Current\s+([0-9.]+)'
+)
+OPEN_TRADE_AMOUNT_BASE_RE = re.compile(
+    r"'([A-Z0-9]+)'\s*:\s*\{[^}]*'amount_base'\s*:\s*([0-9.eE+-]+)"
+)
 
 
 class MetricsHandler(BaseHTTPRequestHandler):
@@ -41,6 +49,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
         snapshot = self.read_latest_portfolio_snapshot()
         metrics_dict['portfolio_value_eur'] = snapshot['portfolio_value_eur']
         metrics_dict['portfolio_cash_eur'] = snapshot['portfolio_cash_eur']
+        metrics_dict['holdings_value_eur'] = snapshot['holdings_value_eur']
         metrics_dict['portfolio_start_value_eur'] = self.read_portfolio_start_value()
         metrics_dict.update(self.read_ai_copilot_usage())
         return self.format_prometheus_metrics(metrics_dict)
@@ -88,6 +97,8 @@ class MetricsHandler(BaseHTTPRequestHandler):
         snapshot = {
             'portfolio_value_eur': 0.0,
             'portfolio_cash_eur': 0.0,
+            'holdings_amount_coin': {},
+            'holdings_value_eur': {},
         }
 
         if not os.path.exists(BOT_LOG_PATH):
@@ -96,6 +107,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
         try:
             with open(BOT_LOG_PATH, 'r', encoding='utf-8', errors='ignore') as f:
                 tail_lines = list(deque(f, maxlen=800))
+
+            current_prices = {}
+            open_trade_amount_base = {}
 
             for line in reversed(tail_lines):
                 if snapshot['portfolio_value_eur'] == 0.0 and 'Portfolio value:' in line:
@@ -115,10 +129,58 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     except Exception:
                         pass
 
+                if not snapshot['holdings_amount_coin'] and '  - Holdings:' in line:
+                    try:
+                        holdings_part = line.split('Holdings:', 1)[1].strip()
+                        parsed = ast.literal_eval(holdings_part)
+                        if isinstance(parsed, dict):
+                            snapshot['holdings_amount_coin'] = {
+                                str(coin).upper(): float(amount)
+                                for coin, amount in parsed.items()
+                                if float(amount) > 0.0
+                            }
+                    except Exception:
+                        pass
+
+                if '  - Open trades details:' in line:
+                    for coin, amount_base in OPEN_TRADE_AMOUNT_BASE_RE.findall(line):
+                        current_coin = coin.upper()
+                        if current_coin not in open_trade_amount_base:
+                            try:
+                                open_trade_amount_base[current_coin] = float(
+                                    amount_base)
+                            except ValueError:
+                                pass
+
+                if '→ Current ' in line:
+                    match = CURRENT_PRICE_RE.search(line)
+                    if match:
+                        coin, current_price = match.groups()
+                        current_coin = coin.upper()
+                        if current_coin not in current_prices:
+                            try:
+                                current_prices[current_coin] = float(
+                                    current_price)
+                            except ValueError:
+                                pass
+
                 if snapshot['portfolio_value_eur'] != 0.0 and snapshot['portfolio_cash_eur'] != 0.0:
-                    break
+                    if not snapshot['holdings_amount_coin']:
+                        break
+                    if all(
+                        coin in current_prices or coin in open_trade_amount_base
+                        for coin in snapshot['holdings_amount_coin']
+                    ):
+                        break
         except Exception:
             return snapshot
+
+        for coin, amount_coin in snapshot['holdings_amount_coin'].items():
+            if coin in current_prices:
+                snapshot['holdings_value_eur'][coin] = amount_coin * \
+                    current_prices[coin]
+            elif coin in open_trade_amount_base:
+                snapshot['holdings_value_eur'][coin] = open_trade_amount_base[coin]
 
         return snapshot
 
@@ -416,6 +478,13 @@ class MetricsHandler(BaseHTTPRequestHandler):
         output.append('# TYPE trading_portfolio_start_value_eur gauge')
         output.append(
             f'trading_portfolio_start_value_eur {metrics.get("portfolio_start_value_eur", 0.0)}')
+
+        output.append(
+            '# HELP trading_current_holding_value_eur Current mark-to-market holding value per coin in EUR')
+        output.append('# TYPE trading_current_holding_value_eur gauge')
+        for coin, value in sorted(metrics.get('holdings_value_eur', {}).items()):
+            output.append(
+                f'trading_current_holding_value_eur{{coin="{coin}"}} {value}')
 
         output.append(
             '# HELP trading_ai_copilot_budget_cap_usd Configured AI co-pilot monthly budget cap in USD')

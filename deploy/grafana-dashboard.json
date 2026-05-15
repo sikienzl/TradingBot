@@ -487,6 +487,7 @@
     },
     {
       "datasource": "Prometheus",
+      "description": "Summed buy turnover over the last 24 hours. This is not the current portfolio allocation.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -496,7 +497,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 48 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
       "id": 24,
       "options": {
         "displayMode": "basic",
@@ -505,9 +506,34 @@
         "showUnfilled": false,
         "text": {}
       },
-      "title": "Bought Coins (24h EUR)",
+      "title": "Bought Coins Turnover (24h EUR)",
       "type": "bargauge",
       "targets": [{ "expr": "sort_desc(trading_coin_buy_volume_eur)", "legendFormat": "{{coin}}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Current mark-to-market value of open holdings by coin based on the latest logged holdings and current trade-monitor price.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "decimals": 2,
+          "min": 0,
+          "unit": "currencyEUR"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 48 },
+      "id": 25,
+      "options": {
+        "displayMode": "basic",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showUnfilled": false,
+        "text": {}
+      },
+      "title": "Current Holdings (EUR)",
+      "type": "bargauge",
+      "targets": [{ "expr": "sort_desc(trading_current_holding_value_eur)", "legendFormat": "{{coin}}", "refId": "A" }]
     }
   ],
   "refresh": "30s",
