@@ -215,6 +215,8 @@ class MetricsHandler(BaseHTTPRequestHandler):
         coin_pnl = {}
         coin_closed = {}
         coin_wins = {}
+        coin_buy_volume = {}
+        coin_buy_count = {}
 
         # Equity curve from closed-trade realized PnL over the window.
         equity = 0.0
@@ -225,12 +227,27 @@ class MetricsHandler(BaseHTTPRequestHandler):
         for trade in trades:
             try:
                 timestamp_str = trade.get('timestamp', '')
-                action = trade.get('action', '').lower()
-                if action != 'sell':
-                    continue
-
                 ts = self._parse_timestamp(timestamp_str)
                 if ts is None:
+                    continue
+
+                action = trade.get('action', '').lower()
+                coin = (trade.get('coin') or 'UNKNOWN').upper()
+
+                if action == 'buy':
+                    if ts < cutoff:
+                        continue
+                    try:
+                        buy_volume = float(
+                            trade.get('amount_base', '0') or 0.0)
+                    except ValueError:
+                        buy_volume = 0.0
+                    coin_buy_volume[coin] = coin_buy_volume.get(
+                        coin, 0.0) + max(buy_volume, 0.0)
+                    coin_buy_count[coin] = coin_buy_count.get(coin, 0) + 1
+                    continue
+
+                if action != 'sell':
                     continue
 
                 pnl_str = trade.get('pnl_base', '0')
@@ -247,7 +264,6 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 total_trades += 1
                 total_realized_pnl += pnl
 
-                coin = (trade.get('coin') or 'UNKNOWN').upper()
                 coin_pnl[coin] = coin_pnl.get(coin, 0.0) + pnl
                 coin_closed[coin] = coin_closed.get(coin, 0) + 1
 
@@ -317,6 +333,8 @@ class MetricsHandler(BaseHTTPRequestHandler):
             'coin_pnl': coin_pnl,
             'coin_closed': coin_closed,
             'coin_win_rate': coin_win_rate,
+            'coin_buy_volume': coin_buy_volume,
+            'coin_buy_count': coin_buy_count,
         }
 
     def format_prometheus_metrics(self, metrics):
@@ -442,6 +460,19 @@ class MetricsHandler(BaseHTTPRequestHandler):
         output.append('# TYPE trading_coin_win_rate gauge')
         for coin, rate in sorted(metrics['coin_win_rate'].items()):
             output.append(f'trading_coin_win_rate{{coin="{coin}"}} {rate}')
+
+        output.append(
+            '# HELP trading_coin_buy_volume_eur Buy volume per coin in EUR (last 24h)')
+        output.append('# TYPE trading_coin_buy_volume_eur gauge')
+        for coin, volume in sorted(metrics['coin_buy_volume'].items()):
+            output.append(
+                f'trading_coin_buy_volume_eur{{coin="{coin}"}} {volume}')
+
+        output.append(
+            '# HELP trading_coin_buy_count Buy count per coin (last 24h)')
+        output.append('# TYPE trading_coin_buy_count gauge')
+        for coin, count in sorted(metrics['coin_buy_count'].items()):
+            output.append(f'trading_coin_buy_count{{coin="{coin}"}} {count}')
 
         return '\n'.join(output)
 

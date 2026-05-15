@@ -464,7 +464,7 @@
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
       "title": "Portfolio Value",
       "type": "stat",
-      "targets": [{ "expr": "trading_runtime_portfolio_value", "legendFormat": "Current", "refId": "A" }]
+      "targets": [{ "expr": "trading_portfolio_value_eur", "legendFormat": "Current", "refId": "A" }]
     },
     {
       "datasource": "Prometheus",
@@ -483,7 +483,31 @@
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
       "title": "Portfolio Start",
       "type": "stat",
-      "targets": [{ "expr": "trading_runtime_portfolio_start_value", "legendFormat": "Start", "refId": "A" }]
+      "targets": [{ "expr": "trading_portfolio_start_value_eur", "legendFormat": "Start", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "decimals": 2,
+          "min": 0,
+          "unit": "currencyEUR"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 48 },
+      "id": 24,
+      "options": {
+        "displayMode": "basic",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showUnfilled": false,
+        "text": {}
+      },
+      "title": "Bought Coins (24h EUR)",
+      "type": "bargauge",
+      "targets": [{ "expr": "sort_desc(trading_coin_buy_volume_eur)", "legendFormat": "{{coin}}", "refId": "A" }]
     }
   ],
   "refresh": "30s",

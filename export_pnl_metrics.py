@@ -77,6 +77,8 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
     coin_pnl = {}
     coin_closed = {}
     coin_wins = {}
+    coin_buy_volume = {}
+    coin_buy_count = {}
 
     equity = 0.0
     peak_equity = 0.0
@@ -89,12 +91,26 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
             if not timestamp_str:
                 continue
 
-            action = trade.get('action', '').lower()
-            if action != 'sell':
-                continue
-
             ts = parse_timestamp(timestamp_str)
             if ts is None:
+                continue
+
+            action = trade.get('action', '').lower()
+            coin = (trade.get('coin') or 'UNKNOWN').upper()
+
+            if action == 'buy':
+                if ts < cutoff:
+                    continue
+                try:
+                    buy_volume = float(trade.get('amount_base', '0') or 0.0)
+                except ValueError:
+                    buy_volume = 0.0
+                coin_buy_volume[coin] = coin_buy_volume.get(
+                    coin, 0.0) + max(buy_volume, 0.0)
+                coin_buy_count[coin] = coin_buy_count.get(coin, 0) + 1
+                continue
+
+            if action != 'sell':
                 continue
 
             pnl_str = trade.get('pnl_base', '0')
@@ -111,7 +127,6 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
             total_trades += 1
             total_realized_pnl += pnl
 
-            coin = (trade.get('coin') or 'UNKNOWN').upper()
             coin_pnl[coin] = coin_pnl.get(coin, 0.0) + pnl
             coin_closed[coin] = coin_closed.get(coin, 0) + 1
 
@@ -178,6 +193,8 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
         'coin_pnl': coin_pnl,
         'coin_closed': coin_closed,
         'coin_win_rate': coin_win_rate,
+        'coin_buy_volume': coin_buy_volume,
+        'coin_buy_count': coin_buy_count,
     }
 
 
@@ -405,6 +422,18 @@ def format_prometheus_metrics(metrics):
     output.append('# TYPE trading_coin_win_rate gauge')
     for coin, rate in sorted(metrics['coin_win_rate'].items()):
         output.append(f'trading_coin_win_rate{{coin="{coin}"}} {rate}')
+
+    output.append(
+        '# HELP trading_coin_buy_volume_eur Buy volume per coin in EUR (last 24h)')
+    output.append('# TYPE trading_coin_buy_volume_eur gauge')
+    for coin, volume in sorted(metrics['coin_buy_volume'].items()):
+        output.append(f'trading_coin_buy_volume_eur{{coin="{coin}"}} {volume}')
+
+    output.append(
+        '# HELP trading_coin_buy_count Buy count per coin (last 24h)')
+    output.append('# TYPE trading_coin_buy_count gauge')
+    for coin, count in sorted(metrics['coin_buy_count'].items()):
+        output.append(f'trading_coin_buy_count{{coin="{coin}"}} {count}')
 
     return '\n'.join(output)
 
