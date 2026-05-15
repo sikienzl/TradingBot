@@ -194,6 +194,15 @@ def _compute_metrics(df: pd.DataFrame, starting_capital: float, recent_trades_wi
     )
 
 
+def _print_hold_due_to_missing_data(file_path: str, reason: str) -> None:
+    print("=== Go/No-Go Scorecard ===")
+    print(f"File:                 {file_path}")
+    print("Closed trades:        0")
+    print("VERDICT:              HOLD")
+    print("\nReason(s):")
+    print(f"- {reason}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Go/No-Go scorecard based on the trade journal")
@@ -235,12 +244,18 @@ def main() -> None:
     try:
         df = pd.read_csv(args.file)
     except FileNotFoundError:
-        print(f"File not found: {args.file}")
-        raise SystemExit(1)
+        _print_hold_due_to_missing_data(
+            args.file,
+            "Journal file not found; scorecard cannot evaluate recent trading data in this environment.",
+        )
+        raise SystemExit(2)
 
     if df.empty or "action" not in df.columns:
-        print("Invalid or empty journal (column 'action' missing).")
-        raise SystemExit(1)
+        _print_hold_due_to_missing_data(
+            args.file,
+            "Journal file is empty or invalid (required column 'action' missing); collect valid trades before evaluating the scorecard.",
+        )
+        raise SystemExit(2)
 
     if "timestamp" in df.columns:
         df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
@@ -250,18 +265,16 @@ def main() -> None:
             df = df[df["timestamp"] >= cutoff].copy()
 
     if df.empty:
-        print("=== Go/No-Go Scorecard ===")
-        print(f"File:                 {args.file}")
-        print("Closed trades:        0")
-        print(f"VERDICT:              HOLD")
-        print("\nReason(s):")
         if args.lookback_days > 0:
-            print(
-                f"- No data in the selected lookback window (last {args.lookback_days} day(s)); collect more recent trades or use --lookback-days 0."
+            _print_hold_due_to_missing_data(
+                args.file,
+                f"No data in the selected lookback window (last {args.lookback_days} day(s)); collect more recent trades or use --lookback-days 0.",
             )
         else:
-            print(
-                "- No data available in the journal yet; collect trades before evaluating the scorecard.")
+            _print_hold_due_to_missing_data(
+                args.file,
+                "No data available in the journal yet; collect trades before evaluating the scorecard.",
+            )
         raise SystemExit(2)
 
     df["pnl_base"] = _safe_float(df.get("pnl_base", pd.Series(dtype=float)))
