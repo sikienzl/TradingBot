@@ -738,18 +738,118 @@ class CryptoTradingBot:
 
     def _ai_copilot_snapshot(self) -> Dict[str, Any]:
         trades_recent = []
+        recent_trade_summary: Dict[str, Any] = {
+            'window_rows': 0,
+            'recent_buy_count': 0,
+            'recent_sell_count': 0,
+            'recent_win_rate_pct': 0.0,
+            'recent_avg_pnl_base': 0.0,
+            'recent_avg_hold_seconds': 0.0,
+            'recent_max_hold_exit_ratio': 0.0,
+            'recent_exit_reasons': {},
+            'coin_sell_summary': {},
+            'top_winners': [],
+            'top_losers': [],
+        }
         if self.config.performance_log_enabled and os.path.exists(self.config.performance_log_file):
             try:
                 df = pd.read_csv(self.config.performance_log_file)
                 if not df.empty:
                     cols = [
                         'timestamp', 'coin', 'action', 'pnl_base', 'pnl_pct',
-                        'signal_source', 'signal_confidence', 'reason'
+                        'signal_source', 'signal_confidence', 'reason', 'hold_seconds'
                     ]
                     cols = [c for c in cols if c in df.columns]
-                    trades_recent = df.tail(30)[cols].to_dict(orient='records')
+                    recent_window = df.tail(80).copy()
+                    trades_recent = recent_window.tail(40)[cols].where(
+                        pd.notna(recent_window.tail(40)[cols]), None
+                    ).to_dict(orient='records')
+
+                    if 'action' in recent_window.columns:
+                        actions = recent_window['action'].fillna('').astype(str).str.lower()
+                        recent_trade_summary['window_rows'] = int(len(recent_window))
+                        recent_trade_summary['recent_buy_count'] = int((actions == 'buy').sum())
+                        sells = recent_window.loc[actions == 'sell'].copy()
+                        recent_trade_summary['recent_sell_count'] = int(len(sells))
+
+                        if not sells.empty:
+                            pnl = pd.to_numeric(sells.get('pnl_base'), errors='coerce').fillna(0.0)
+                            recent_trade_summary['recent_win_rate_pct'] = round(
+                                float((pnl > 0).mean() * 100.0), 2
+                            )
+                            recent_trade_summary['recent_avg_pnl_base'] = round(
+                                float(pnl.mean()), 6
+                            )
+
+                            hold_seconds = pd.to_numeric(
+                                sells.get('hold_seconds'), errors='coerce'
+                            ).fillna(0.0)
+                            recent_trade_summary['recent_avg_hold_seconds'] = round(
+                                float(hold_seconds.mean()), 2
+                            )
+
+                            reasons = sells.get('reason', pd.Series(dtype=object)).fillna('').astype(str)
+                            reason_counts = reasons[reasons != ''].value_counts().head(6)
+                            recent_trade_summary['recent_exit_reasons'] = {
+                                str(reason): int(count) for reason, count in reason_counts.items()
+                            }
+                            max_hold_exits = int(
+                                reasons.str.contains('MAX-HOLD-TIME', case=False, na=False).sum()
+                            )
+                            recent_trade_summary['recent_max_hold_exit_ratio'] = round(
+                                max_hold_exits / max(len(sells), 1), 4
+                            )
+
+                            if 'coin' in sells.columns:
+                                coin_summary: Dict[str, Any] = {}
+                                for coin, group in sells.groupby('coin', dropna=True):
+                                    coin_pnl = pd.to_numeric(
+                                        group.get('pnl_base'), errors='coerce'
+                                    ).fillna(0.0)
+                                    coin_reasons = group.get('reason', pd.Series(dtype=object)).fillna('').astype(str)
+                                    coin_summary[str(coin)] = {
+                                        'sell_count': int(len(group)),
+                                        'pnl_sum': round(float(coin_pnl.sum()), 6),
+                                        'avg_pnl': round(float(coin_pnl.mean()), 6),
+                                        'win_rate_pct': round(float((coin_pnl > 0).mean() * 100.0), 2),
+                                        'max_hold_exit_ratio': round(
+                                            float(
+                                                coin_reasons.str.contains(
+                                                    'MAX-HOLD-TIME', case=False, na=False
+                                                ).mean()
+                                            ),
+                                            4,
+                                        ),
+                                    }
+                                recent_trade_summary['coin_sell_summary'] = coin_summary
+
+                                ordered_coins = sorted(
+                                    coin_summary.items(),
+                                    key=lambda item: item[1]['pnl_sum'],
+                                )
+                                recent_trade_summary['top_losers'] = [
+                                    {'coin': coin, 'pnl_sum': data['pnl_sum']}
+                                    for coin, data in ordered_coins[:3]
+                                ]
+                                recent_trade_summary['top_winners'] = [
+                                    {'coin': coin, 'pnl_sum': data['pnl_sum']}
+                                    for coin, data in reversed(ordered_coins[-3:])
+                                ]
             except Exception:
                 trades_recent = []
+                recent_trade_summary = {
+                    'window_rows': 0,
+                    'recent_buy_count': 0,
+                    'recent_sell_count': 0,
+                    'recent_win_rate_pct': 0.0,
+                    'recent_avg_pnl_base': 0.0,
+                    'recent_avg_hold_seconds': 0.0,
+                    'recent_max_hold_exit_ratio': 0.0,
+                    'recent_exit_reasons': {},
+                    'coin_sell_summary': {},
+                    'top_winners': [],
+                    'top_losers': [],
+                }
 
         by_source = {}
         for source, data in self.performance['by_source'].items():
@@ -765,8 +865,11 @@ class CryptoTradingBot:
             'config': {
                 'min_entry_score': int(self.config.min_entry_score),
                 'reentry_cooldown_seconds': int(self.config.reentry_cooldown_seconds),
+                'reentry_cooldown_max_seconds': int(self.config.reentry_cooldown_max_seconds),
                 'tabular_buy_min_confidence': float(self.config.tabular_buy_min_confidence),
                 'tabular_min_confidence': float(self.config.tabular_min_confidence),
+                'max_hold_seconds': int(self.config.max_hold_seconds),
+                'fallback_min_score': int(self.config.fallback_min_score),
             },
             'performance': {
                 'buys': int(self.performance['buys']),
@@ -781,7 +884,10 @@ class CryptoTradingBot:
             'portfolio': {
                 'cash': float(self.portfolio.cash),
                 'open_trades_count': int(len(self.portfolio.open_trades)),
+                'open_trade_coins': sorted(list(self.portfolio.open_trades.keys())),
+                'holding_coins': sorted(list(self.portfolio.holdings.keys())),
             },
+            'recent_trade_summary': recent_trade_summary,
             'recent_trades': trades_recent,
             'guardrails': {
                 'min_entry_score_min': self.config.ai_copilot_min_entry_score_min,
@@ -813,7 +919,8 @@ class CryptoTradingBot:
             "You are a conservative trading bot co-pilot. "
             "Return ONLY JSON with keys: proposed_changes (object), reason (string), confidence (0..1), risk_level (low|medium|high). "
             "Allowed proposed_changes keys: min_entry_score, reentry_cooldown_seconds, tabular_buy_min_confidence. "
-            "Respect provided guardrails. Propose at most one parameter change at a time."
+            "Use the recent_trade_summary, exit-reason mix, churn indicators, and per-coin sell summary to reason from observed behavior instead of generic advice. "
+            "Prefer no change when evidence is weak or sample size is small. Respect provided guardrails. Propose at most one parameter change at a time."
         )
         user_payload = json.dumps(snapshot, ensure_ascii=True)
         request_body = {
