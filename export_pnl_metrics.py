@@ -27,6 +27,9 @@ OPEN_TRADE_AMOUNT_BASE_RE = re.compile(
 OPEN_TRADE_AMOUNT_COIN_RE = re.compile(
     r"'([A-Z0-9]+)'\s*:\s*\{[^}]*'amount_coin'\s*:\s*([0-9.eE+-]+)"
 )
+SHADOW_SUGGESTION_META_RE = re.compile(
+    r'^([a-z]+),\s+confidence=([0-9.]+),\s+reason='
+)
 
 
 def read_trades(journal_path):
@@ -391,6 +394,66 @@ def read_ai_copilot_usage(env_path=ENV_PATH, state_path=AI_COPILOT_STATE_PATH):
     return result
 
 
+def read_ai_shadow_suggestions(log_path=BOT_LOG_PATH):
+    result = {'ai_copilot_shadow_suggestions': []}
+
+    if not os.path.exists(log_path):
+        return result
+
+    try:
+        with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+            tail_lines = list(deque(f, maxlen=4000))
+
+        now = datetime.utcnow()
+        suggestions = []
+        rank = 1
+
+        for line in reversed(tail_lines):
+            if 'AI co-pilot shadow suggestion:' not in line:
+                continue
+
+            try:
+                timestamp_raw, remainder = line.split(' - ', 1)
+                payload = remainder.split(
+                    'AI co-pilot shadow suggestion:', 1)[1].strip()
+                changes_text, meta_text = payload.split(' (risk=', 1)
+                changes = ast.literal_eval(changes_text.strip())
+                meta_text = meta_text.rstrip(')')
+                meta_match = SHADOW_SUGGESTION_META_RE.match(meta_text)
+                confidence = float(meta_match.group(2)) if meta_match else 0.0
+                ts = datetime.strptime(
+                    timestamp_raw.strip(), '%Y-%m-%d %H:%M:%S,%f')
+                age_minutes = max(0.0, (now - ts).total_seconds() / 60.0)
+            except Exception:
+                continue
+
+            if not isinstance(changes, dict):
+                continue
+
+            for parameter, value in changes.items():
+                try:
+                    numeric_value = float(value)
+                except (TypeError, ValueError):
+                    continue
+                suggestions.append({
+                    'rank': rank,
+                    'suggestion_id': f'{rank}_{parameter}',
+                    'parameter': str(parameter),
+                    'value': numeric_value,
+                    'confidence': confidence,
+                    'age_minutes': round(age_minutes, 2),
+                })
+            rank += 1
+            if rank > 3:
+                break
+
+        result['ai_copilot_shadow_suggestions'] = suggestions
+    except Exception:
+        pass
+
+    return result
+
+
 def format_prometheus_metrics(metrics):
     """Format metrics as Prometheus lines"""
     output = []
@@ -533,6 +596,44 @@ def format_prometheus_metrics(metrics):
         f'trading_ai_copilot_calls_cap_monthly {metrics.get("ai_copilot_calls_cap_monthly", 0.0)}')
 
     output.append(
+        '# HELP trading_ai_copilot_shadow_suggestion_value Latest AI shadow suggestion value by parameter and recency rank')
+    output.append('# TYPE trading_ai_copilot_shadow_suggestion_value gauge')
+    for item in metrics.get('ai_copilot_shadow_suggestions', []):
+        output.append(
+            'trading_ai_copilot_shadow_suggestion_value{'
+            f'suggestion_id="{item["suggestion_id"]}",'
+            f'parameter="{item["parameter"]}",'
+            f'rank="{item["rank"]}"'
+            f'}} {item["value"]}'
+        )
+
+    output.append(
+        '# HELP trading_ai_copilot_shadow_suggestion_confidence Latest AI shadow suggestion confidence by parameter and recency rank')
+    output.append(
+        '# TYPE trading_ai_copilot_shadow_suggestion_confidence gauge')
+    for item in metrics.get('ai_copilot_shadow_suggestions', []):
+        output.append(
+            'trading_ai_copilot_shadow_suggestion_confidence{'
+            f'suggestion_id="{item["suggestion_id"]}",'
+            f'parameter="{item["parameter"]}",'
+            f'rank="{item["rank"]}"'
+            f'}} {item["confidence"]}'
+        )
+
+    output.append(
+        '# HELP trading_ai_copilot_shadow_suggestion_age_minutes Minutes since the latest AI shadow suggestion by parameter and recency rank')
+    output.append(
+        '# TYPE trading_ai_copilot_shadow_suggestion_age_minutes gauge')
+    for item in metrics.get('ai_copilot_shadow_suggestions', []):
+        output.append(
+            'trading_ai_copilot_shadow_suggestion_age_minutes{'
+            f'suggestion_id="{item["suggestion_id"]}",'
+            f'parameter="{item["parameter"]}",'
+            f'rank="{item["rank"]}"'
+            f'}} {item["age_minutes"]}'
+        )
+
+    output.append(
         '# HELP trading_coin_realized_pnl_usd Realized PnL per coin in USD (last 24h)')
     output.append('# TYPE trading_coin_realized_pnl_usd gauge')
     for coin, pnl in sorted(metrics['coin_pnl'].items()):
@@ -574,6 +675,7 @@ if __name__ == '__main__':
     metrics.update(read_latest_portfolio_snapshot())
     metrics['portfolio_start_value_eur'] = read_portfolio_start_value()
     metrics.update(read_ai_copilot_usage())
+    metrics.update(read_ai_shadow_suggestions())
     output = format_prometheus_metrics(metrics)
 
     print(output)

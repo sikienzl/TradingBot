@@ -616,6 +616,97 @@
         { "expr": "trading_current_holding_amount_coin", "format": "table", "instant": true, "legendFormat": "{{coin}}", "range": false, "refId": "C" },
         { "expr": "trading_current_holding_unrealized_pnl_eur", "format": "table", "instant": true, "legendFormat": "{{coin}}", "range": false, "refId": "D" }
       ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Latest Mammouth AI shadow suggestions from the bot log, including suggested value, confidence, and age in minutes.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Suggested Value" },
+            "properties": [
+              { "id": "decimals", "value": 2 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Confidence" },
+            "properties": [
+              { "id": "unit", "value": "percentunit" },
+              { "id": "decimals", "value": 2 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Age (min)" },
+            "properties": [
+              { "id": "unit", "value": "m" },
+              { "id": "decimals", "value": 1 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 64 },
+      "id": 29,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "show": false },
+        "showHeader": true,
+        "sortBy": [
+          { "desc": false, "displayName": "Rank" }
+        ]
+      },
+      "title": "AI Shadow Suggestions",
+      "transformations": [
+        { "id": "labelsToFields", "options": { "mode": "columns" } },
+        { "id": "joinByField", "options": { "byField": "suggestion_id", "mode": "outer" } },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Value": true,
+              "__name__": true,
+              "__name__ 1": true,
+              "__name__ 2": true,
+              "instance": true,
+              "instance 1": true,
+              "instance 2": true,
+              "job": true,
+              "job 1": true,
+              "job 2": true,
+              "suggestion_id": true,
+              "parameter 1": true,
+              "parameter 2": true,
+              "rank 1": true,
+              "rank 2": true,
+              "suggestion_id 1": true,
+              "suggestion_id 2": true
+            },
+            "indexByName": {
+              "rank": 0,
+              "parameter": 1,
+              "Value #A": 2,
+              "Value #B": 3,
+              "Value #C": 4
+            },
+            "renameByName": {
+              "rank": "Rank",
+              "parameter": "Parameter",
+              "Value #A": "Suggested Value",
+              "Value #B": "Confidence",
+              "Value #C": "Age (min)"
+            }
+          }
+        }
+      ],
+      "type": "table",
+      "targets": [
+        { "expr": "trading_ai_copilot_shadow_suggestion_value", "format": "table", "instant": true, "legendFormat": "{{parameter}}", "range": false, "refId": "A" },
+        { "expr": "trading_ai_copilot_shadow_suggestion_confidence", "format": "table", "instant": true, "legendFormat": "{{parameter}}", "range": false, "refId": "B" },
+        { "expr": "trading_ai_copilot_shadow_suggestion_age_minutes", "format": "table", "instant": true, "legendFormat": "{{parameter}}", "range": false, "refId": "C" }
+      ]
     }
   ],
   "refresh": "30s",
@@ -625,5 +716,5 @@
   "timepicker": {},
   "title": "Trading Bot — Pi Ops",
   "uid": "trading-bot-pi-ops",
-  "version": 5
+  "version": 6
 }
