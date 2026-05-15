@@ -109,6 +109,7 @@ jobs:
           set +e
           bash scripts/run_weekly_scorecard.sh
           rc=$?
+          primary_reason=""
 
           if [[ $rc -eq 0 ]]; then
             verdict="GO"
@@ -120,14 +121,26 @@ jobs:
             verdict="ERROR"
           fi
 
+          if [[ -f results/scorecards/latest_scorecard.txt ]]; then
+            primary_reason="$(awk '/^Reason\(s\):/{in_reasons=1; next} in_reasons && /^- /{sub(/^- /, "", $0); print; exit} in_reasons && NF==0{exit}' results/scorecards/latest_scorecard.txt)"
+          fi
+
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
           echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          {
+            echo "primary_reason<<EOF"
+            echo "$primary_reason"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
           {
             echo "## Weekly Scorecard"
             echo
             echo "- Verdict: $verdict"
             echo "- Exit code: $rc"
+            if [[ -n "$primary_reason" ]]; then
+              echo "- Primary reason: $primary_reason"
+            fi
             echo "- Report path: results/scorecards/latest_scorecard.txt"
           } >> "$GITHUB_STEP_SUMMARY"
 
