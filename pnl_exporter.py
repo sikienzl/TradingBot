@@ -296,7 +296,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
         return result
 
     def read_ai_shadow_suggestions(self):
-        """Read the most recent AI shadow suggestions from the bot log."""
+        """Read the most recent AI suggestion outcomes from the bot log."""
         result = {'ai_copilot_shadow_suggestions': []}
 
         if not os.path.exists(BOT_LOG_PATH):
@@ -311,19 +311,40 @@ class MetricsHandler(BaseHTTPRequestHandler):
             rank = 1
 
             for line in reversed(tail_lines):
-                if 'AI co-pilot shadow suggestion:' not in line:
+                if 'AI co-pilot' not in line:
                     continue
 
                 try:
                     timestamp_raw, remainder = line.split(' - ', 1)
-                    payload = remainder.split(
-                        'AI co-pilot shadow suggestion:', 1)[1].strip()
-                    changes_text, meta_text = payload.split(' (risk=', 1)
-                    changes = ast.literal_eval(changes_text.strip())
-                    meta_text = meta_text.rstrip(')')
-                    meta_match = SHADOW_SUGGESTION_META_RE.match(meta_text)
-                    confidence = float(meta_match.group(2)
-                                       ) if meta_match else 0.0
+                    confidence = 0.0
+                    mode = 'shadow'
+
+                    if 'AI co-pilot shadow suggestion:' in remainder:
+                        payload = remainder.split(
+                            'AI co-pilot shadow suggestion:', 1)[1].strip()
+                        changes_text, meta_text = payload.split(' (risk=', 1)
+                        changes = ast.literal_eval(changes_text.strip())
+                        meta_text = meta_text.rstrip(')')
+                        meta_match = SHADOW_SUGGESTION_META_RE.match(meta_text)
+                        confidence = float(meta_match.group(2)
+                                           ) if meta_match else 0.0
+                    elif 'AI co-pilot suggested unchanged values:' in remainder:
+                        payload = remainder.split(
+                            'AI co-pilot suggested unchanged values:', 1)[1].strip()
+                        changes = ast.literal_eval(payload)
+                        mode = 'unchanged'
+                    elif 'AI co-pilot suggestion: no change' in remainder:
+                        payload = remainder.split(
+                            'AI co-pilot suggestion:', 1)[1].strip()
+                        meta_text = payload.split(' (risk=', 1)[1].rstrip(')')
+                        meta_match = SHADOW_SUGGESTION_META_RE.match(meta_text)
+                        confidence = float(meta_match.group(2)
+                                           ) if meta_match else 0.0
+                        changes = {'no_change': 0.0}
+                        mode = 'no_change'
+                    else:
+                        continue
+
                     ts = datetime.strptime(
                         timestamp_raw.strip(), '%Y-%m-%d %H:%M:%S,%f')
                     age_minutes = max(
@@ -342,6 +363,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     suggestions.append({
                         'rank': rank,
                         'suggestion_id': f'{rank}_{parameter}',
+                        'mode': mode,
                         'parameter': str(parameter),
                         'value': numeric_value,
                         'confidence': confidence,
@@ -650,6 +672,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             output.append(
                 'trading_ai_copilot_shadow_suggestion_value{'
                 f'suggestion_id="{item["suggestion_id"]}",'
+                f'mode="{item["mode"]}",'
                 f'parameter="{item["parameter"]}",'
                 f'rank="{item["rank"]}"'
                 f'}} {item["value"]}'
@@ -663,6 +686,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             output.append(
                 'trading_ai_copilot_shadow_suggestion_confidence{'
                 f'suggestion_id="{item["suggestion_id"]}",'
+                f'mode="{item["mode"]}",'
                 f'parameter="{item["parameter"]}",'
                 f'rank="{item["rank"]}"'
                 f'}} {item["confidence"]}'
@@ -676,6 +700,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             output.append(
                 'trading_ai_copilot_shadow_suggestion_age_minutes{'
                 f'suggestion_id="{item["suggestion_id"]}",'
+                f'mode="{item["mode"]}",'
                 f'parameter="{item["parameter"]}",'
                 f'rank="{item["rank"]}"'
                 f'}} {item["age_minutes"]}'

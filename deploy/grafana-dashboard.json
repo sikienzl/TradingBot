@@ -619,10 +619,22 @@
     },
     {
       "datasource": "Prometheus",
-      "description": "Latest Mammouth AI shadow suggestions from the bot log, including suggested value, confidence, and age in minutes.",
+      "description": "Latest Mammouth AI outcomes from the bot log, including shadow suggestions, unchanged values, and no-change decisions.",
       "fieldConfig": {
         "defaults": {},
         "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Mode" },
+            "properties": [
+              { "id": "custom.width", "value": 140 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Parameter" },
+            "properties": [
+              { "id": "custom.width", "value": 180 }
+            ]
+          },
           {
             "matcher": { "id": "byName", "options": "Suggested Value" },
             "properties": [
@@ -655,7 +667,7 @@
           { "desc": false, "displayName": "Rank" }
         ]
       },
-      "title": "AI Shadow Suggestions",
+      "title": "AI Suggestions",
       "transformations": [
         { "id": "labelsToFields", "options": { "mode": "columns" } },
         { "id": "joinByField", "options": { "byField": "suggestion_id", "mode": "outer" } },
@@ -677,23 +689,26 @@
               "job 1": true,
               "job 2": true,
               "suggestion_id": true,
+              "mode 1": true,
+              "mode 2": true,
               "parameter 1": true,
               "parameter 2": true,
+              "rank": true,
               "rank 1": true,
               "rank 2": true,
               "suggestion_id 1": true,
               "suggestion_id 2": true
             },
             "indexByName": {
-              "rank": 0,
+              "mode": 0,
               "parameter": 1,
               "Value #A": 2,
               "Value #B": 3,
               "Value #C": 4
             },
             "renameByName": {
-              "rank": "Rank",
-              "parameter": "Parameter",
+              "mode": "Outcome",
+              "parameter": "Setting",
               "Value #A": "Suggested Value",
               "Value #B": "Confidence",
               "Value #C": "Age (min)"
