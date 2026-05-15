@@ -218,6 +218,7 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
         'holdings_value_eur': {},
         'holdings_cost_basis_eur': {},
         'holdings_unrealized_pnl_eur': {},
+        'open_positions_count': 0,
     }
 
     if not os.path.exists(log_path):
@@ -317,6 +318,7 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
     for coin, current_value in snapshot['holdings_value_eur'].items():
         cost_basis = snapshot['holdings_cost_basis_eur'].get(coin, 0.0)
         snapshot['holdings_unrealized_pnl_eur'][coin] = current_value - cost_basis
+    snapshot['open_positions_count'] = len(snapshot['holdings_amount_coin'])
 
     return snapshot
 
@@ -499,6 +501,12 @@ def format_prometheus_metrics(metrics):
         '# TYPE trading_current_holdings_unrealized_pnl_total_eur gauge')
     output.append(
         f'trading_current_holdings_unrealized_pnl_total_eur {sum(metrics.get("holdings_unrealized_pnl_eur", {}).values())}')
+
+    output.append(
+        '# HELP trading_open_positions_count Number of currently open positions')
+    output.append('# TYPE trading_open_positions_count gauge')
+    output.append(
+        f'trading_open_positions_count {metrics.get("open_positions_count", 0)}')
 
     output.append(
         '# HELP trading_ai_copilot_budget_cap_usd Configured AI co-pilot monthly budget cap in USD')

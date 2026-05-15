@@ -450,6 +450,25 @@
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "blue", "value": null },
+            { "color": "green", "value": 1 }
+          ] },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 40 },
+      "id": 28,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "title": "Open Positions",
+      "type": "stat",
+      "targets": [{ "expr": "trading_open_positions_count", "instant": true, "legendFormat": "Current", "range": false, "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
           "decimals": 2,
           "thresholds": { "mode": "absolute", "steps": [
             { "color": "red", "value": null },

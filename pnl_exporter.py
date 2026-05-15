@@ -56,6 +56,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
         metrics_dict['holdings_amount_coin'] = snapshot['holdings_amount_coin']
         metrics_dict['holdings_cost_basis_eur'] = snapshot['holdings_cost_basis_eur']
         metrics_dict['holdings_unrealized_pnl_eur'] = snapshot['holdings_unrealized_pnl_eur']
+        metrics_dict['open_positions_count'] = snapshot['open_positions_count']
         metrics_dict['portfolio_start_value_eur'] = self.read_portfolio_start_value()
         metrics_dict.update(self.read_ai_copilot_usage())
         return self.format_prometheus_metrics(metrics_dict)
@@ -107,6 +108,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             'holdings_value_eur': {},
             'holdings_cost_basis_eur': {},
             'holdings_unrealized_pnl_eur': {},
+            'open_positions_count': 0,
         }
 
         if not os.path.exists(BOT_LOG_PATH):
@@ -208,6 +210,8 @@ class MetricsHandler(BaseHTTPRequestHandler):
         for coin, current_value in snapshot['holdings_value_eur'].items():
             cost_basis = snapshot['holdings_cost_basis_eur'].get(coin, 0.0)
             snapshot['holdings_unrealized_pnl_eur'][coin] = current_value - cost_basis
+        snapshot['open_positions_count'] = len(
+            snapshot['holdings_amount_coin'])
 
         return snapshot
 
@@ -541,6 +545,12 @@ class MetricsHandler(BaseHTTPRequestHandler):
             '# TYPE trading_current_holdings_unrealized_pnl_total_eur gauge')
         output.append(
             f'trading_current_holdings_unrealized_pnl_total_eur {sum(metrics.get("holdings_unrealized_pnl_eur", {}).values())}')
+
+        output.append(
+            '# HELP trading_open_positions_count Number of currently open positions')
+        output.append('# TYPE trading_open_positions_count gauge')
+        output.append(
+            f'trading_open_positions_count {metrics.get("open_positions_count", 0)}')
 
         output.append(
             '# HELP trading_ai_copilot_budget_cap_usd Configured AI co-pilot monthly budget cap in USD')
