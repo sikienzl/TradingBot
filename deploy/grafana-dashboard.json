@@ -423,7 +423,7 @@
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
       "title": "AI Monthly Calls",
       "type": "stat",
-      "targets": [{ "expr": "trading_ai_copilot_monthly_calls", "legendFormat": "Monthly", "refId": "A" }]
+      "targets": [{ "expr": "trading_ai_copilot_calls_used_monthly", "legendFormat": "Monthly", "refId": "A" }]
     },
     {
       "datasource": "Prometheus",
@@ -443,7 +443,7 @@
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
       "title": "Mammouth Spend",
       "type": "stat",
-      "targets": [{ "expr": "trading_ai_copilot_monthly_spend_usd", "legendFormat": "Spend", "refId": "A" }]
+      "targets": [{ "expr": "trading_ai_copilot_budget_used_usd", "legendFormat": "Spend", "refId": "A" }]
     },
     {
       "datasource": "Prometheus",
