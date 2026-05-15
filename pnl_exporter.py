@@ -29,6 +29,9 @@ CURRENT_PRICE_RE = re.compile(
 OPEN_TRADE_AMOUNT_BASE_RE = re.compile(
     r"'([A-Z0-9]+)'\s*:\s*\{[^}]*'amount_base'\s*:\s*([0-9.eE+-]+)"
 )
+OPEN_TRADE_AMOUNT_COIN_RE = re.compile(
+    r"'([A-Z0-9]+)'\s*:\s*\{[^}]*'amount_coin'\s*:\s*([0-9.eE+-]+)"
+)
 
 
 class MetricsHandler(BaseHTTPRequestHandler):
@@ -50,6 +53,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
         metrics_dict['portfolio_value_eur'] = snapshot['portfolio_value_eur']
         metrics_dict['portfolio_cash_eur'] = snapshot['portfolio_cash_eur']
         metrics_dict['holdings_value_eur'] = snapshot['holdings_value_eur']
+        metrics_dict['holdings_amount_coin'] = snapshot['holdings_amount_coin']
+        metrics_dict['holdings_cost_basis_eur'] = snapshot['holdings_cost_basis_eur']
+        metrics_dict['holdings_unrealized_pnl_eur'] = snapshot['holdings_unrealized_pnl_eur']
         metrics_dict['portfolio_start_value_eur'] = self.read_portfolio_start_value()
         metrics_dict.update(self.read_ai_copilot_usage())
         return self.format_prometheus_metrics(metrics_dict)
@@ -99,6 +105,8 @@ class MetricsHandler(BaseHTTPRequestHandler):
             'portfolio_cash_eur': 0.0,
             'holdings_amount_coin': {},
             'holdings_value_eur': {},
+            'holdings_cost_basis_eur': {},
+            'holdings_unrealized_pnl_eur': {},
         }
 
         if not os.path.exists(BOT_LOG_PATH):
@@ -110,6 +118,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
 
             current_prices = {}
             open_trade_amount_base = {}
+            open_trade_amount_coin = {}
 
             for line in reversed(tail_lines):
                 if snapshot['portfolio_value_eur'] == 0.0 and 'Portfolio value:' in line:
@@ -143,6 +152,14 @@ class MetricsHandler(BaseHTTPRequestHandler):
                         pass
 
                 if '  - Open trades details:' in line:
+                    for coin, amount_coin in OPEN_TRADE_AMOUNT_COIN_RE.findall(line):
+                        current_coin = coin.upper()
+                        if current_coin not in open_trade_amount_coin:
+                            try:
+                                open_trade_amount_coin[current_coin] = float(
+                                    amount_coin)
+                            except ValueError:
+                                pass
                     for coin, amount_base in OPEN_TRADE_AMOUNT_BASE_RE.findall(line):
                         current_coin = coin.upper()
                         if current_coin not in open_trade_amount_base:
@@ -181,6 +198,16 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     current_prices[coin]
             elif coin in open_trade_amount_base:
                 snapshot['holdings_value_eur'][coin] = open_trade_amount_base[coin]
+            if coin in open_trade_amount_base:
+                snapshot['holdings_cost_basis_eur'][coin] = open_trade_amount_base[coin]
+
+        for coin, amount_coin in open_trade_amount_coin.items():
+            snapshot['holdings_amount_coin'].setdefault(coin, amount_coin)
+        for coin, amount_base in open_trade_amount_base.items():
+            snapshot['holdings_cost_basis_eur'].setdefault(coin, amount_base)
+        for coin, current_value in snapshot['holdings_value_eur'].items():
+            cost_basis = snapshot['holdings_cost_basis_eur'].get(coin, 0.0)
+            snapshot['holdings_unrealized_pnl_eur'][coin] = current_value - cost_basis
 
         return snapshot
 
@@ -485,6 +512,35 @@ class MetricsHandler(BaseHTTPRequestHandler):
         for coin, value in sorted(metrics.get('holdings_value_eur', {}).items()):
             output.append(
                 f'trading_current_holding_value_eur{{coin="{coin}"}} {value}')
+
+        output.append(
+            '# HELP trading_current_holding_cost_basis_eur Original buy amount per currently held coin in EUR')
+        output.append('# TYPE trading_current_holding_cost_basis_eur gauge')
+        for coin, value in sorted(metrics.get('holdings_cost_basis_eur', {}).items()):
+            output.append(
+                f'trading_current_holding_cost_basis_eur{{coin="{coin}"}} {value}')
+
+        output.append(
+            '# HELP trading_current_holding_amount_coin Current held coin amount per open position')
+        output.append('# TYPE trading_current_holding_amount_coin gauge')
+        for coin, value in sorted(metrics.get('holdings_amount_coin', {}).items()):
+            output.append(
+                f'trading_current_holding_amount_coin{{coin="{coin}"}} {value}')
+
+        output.append(
+            '# HELP trading_current_holding_unrealized_pnl_eur Unrealized PnL per currently held coin in EUR')
+        output.append(
+            '# TYPE trading_current_holding_unrealized_pnl_eur gauge')
+        for coin, value in sorted(metrics.get('holdings_unrealized_pnl_eur', {}).items()):
+            output.append(
+                f'trading_current_holding_unrealized_pnl_eur{{coin="{coin}"}} {value}')
+
+        output.append(
+            '# HELP trading_current_holdings_unrealized_pnl_total_eur Total unrealized PnL across current holdings in EUR')
+        output.append(
+            '# TYPE trading_current_holdings_unrealized_pnl_total_eur gauge')
+        output.append(
+            f'trading_current_holdings_unrealized_pnl_total_eur {sum(metrics.get("holdings_unrealized_pnl_eur", {}).values())}')
 
         output.append(
             '# HELP trading_ai_copilot_budget_cap_usd Configured AI co-pilot monthly budget cap in USD')

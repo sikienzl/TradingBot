@@ -453,6 +453,26 @@
           "decimals": 2,
           "thresholds": { "mode": "absolute", "steps": [
             { "color": "red", "value": null },
+            { "color": "green", "value": 0 }
+          ] },
+          "unit": "currencyEUR"
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 40 },
+      "id": 27,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "title": "Unrealized PnL",
+      "type": "stat",
+      "targets": [{ "expr": "trading_current_holdings_unrealized_pnl_total_eur", "instant": true, "legendFormat": "Current", "range": false, "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "decimals": 2,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
             { "color": "yellow", "value": 0 },
             { "color": "green", "value": 20 }
           ] },
@@ -464,7 +484,7 @@
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
       "title": "Portfolio Value",
       "type": "stat",
-      "targets": [{ "expr": "trading_portfolio_value_eur", "legendFormat": "Current", "refId": "A" }]
+      "targets": [{ "expr": "trading_portfolio_value_eur", "instant": true, "legendFormat": "Current", "range": false, "refId": "A" }]
     },
     {
       "datasource": "Prometheus",
@@ -483,57 +503,100 @@
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
       "title": "Portfolio Start",
       "type": "stat",
-      "targets": [{ "expr": "trading_portfolio_start_value_eur", "legendFormat": "Start", "refId": "A" }]
+      "targets": [{ "expr": "trading_portfolio_start_value_eur", "instant": true, "legendFormat": "Start", "range": false, "refId": "A" }]
     },
     {
       "datasource": "Prometheus",
-      "description": "Summed buy turnover over the last 24 hours. This is not the current portfolio allocation.",
+      "description": "Currently open positions with coin symbol, held amount, original buy amount in EUR, and current market value in EUR.",
       "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "decimals": 2,
-          "min": 0,
-          "unit": "currencyEUR"
-        },
-        "overrides": []
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Bought (EUR)" },
+            "properties": [
+              { "id": "unit", "value": "currencyEUR" },
+              { "id": "decimals", "value": 2 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Current Value (EUR)" },
+            "properties": [
+              { "id": "unit", "value": "currencyEUR" },
+              { "id": "decimals", "value": 2 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Amount (Coin)" },
+            "properties": [
+              { "id": "unit", "value": "short" },
+              { "id": "decimals", "value": 8 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Unrealized PnL (EUR)" },
+            "properties": [
+              { "id": "unit", "value": "currencyEUR" },
+              { "id": "decimals", "value": 2 }
+            ]
+          }
+        ]
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
+      "gridPos": { "h": 16, "w": 24, "x": 0, "y": 48 },
       "id": 24,
       "options": {
-        "displayMode": "basic",
-        "orientation": "horizontal",
-        "reduceOptions": { "calcs": ["lastNotNull"] },
-        "showUnfilled": false,
-        "text": {}
+        "cellHeight": "sm",
+        "footer": { "show": false },
+        "showHeader": true,
+        "sortBy": [
+          { "desc": true, "displayName": "Current Value (EUR)" }
+        ]
       },
-      "title": "Bought Coins Turnover (24h EUR)",
-      "type": "bargauge",
-      "targets": [{ "expr": "sort_desc(trading_coin_buy_volume_eur)", "legendFormat": "{{coin}}", "refId": "A" }]
-    },
-    {
-      "datasource": "Prometheus",
-      "description": "Current mark-to-market value of open holdings by coin based on the latest logged holdings and current trade-monitor price.",
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "decimals": 2,
-          "min": 0,
-          "unit": "currencyEUR"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 48 },
-      "id": 25,
-      "options": {
-        "displayMode": "basic",
-        "orientation": "horizontal",
-        "reduceOptions": { "calcs": ["lastNotNull"] },
-        "showUnfilled": false,
-        "text": {}
-      },
-      "title": "Current Holdings (EUR)",
-      "type": "bargauge",
-      "targets": [{ "expr": "sort_desc(trading_current_holding_value_eur)", "legendFormat": "{{coin}}", "refId": "A" }]
+      "title": "Current Open Holdings",
+      "transformations": [
+        { "id": "labelsToFields", "options": { "mode": "columns" } },
+        { "id": "joinByField", "options": { "byField": "coin", "mode": "outer" } },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Value": true,
+              "__name__": true,
+              "__name__ 1": true,
+              "__name__ 2": true,
+              "instance": true,
+              "instance 1": true,
+              "instance 2": true,
+              "job": true,
+              "job 1": true,
+              "job 2": true
+            },
+            "indexByName": {
+              "coin": 0,
+              "Value #A": 1,
+              "Value #B": 2,
+              "Value #C": 3,
+              "Value #D": 4
+            },
+            "renameByName": {
+              "coin": "Coin",
+              "Value #A": "Bought (EUR)",
+              "Value #B": "Current Value (EUR)",
+              "Value #C": "Amount (Coin)",
+              "Value #D": "Unrealized PnL (EUR)"
+            }
+          }
+        }
+      ],
+      "type": "table",
+      "targets": [
+        { "expr": "trading_current_holding_cost_basis_eur", "format": "table", "instant": true, "legendFormat": "{{coin}}", "range": false, "refId": "A" },
+        { "expr": "trading_current_holding_value_eur", "format": "table", "instant": true, "legendFormat": "{{coin}}", "range": false, "refId": "B" },
+        { "expr": "trading_current_holding_amount_coin", "format": "table", "instant": true, "legendFormat": "{{coin}}", "range": false, "refId": "C" },
+        { "expr": "trading_current_holding_unrealized_pnl_eur", "format": "table", "instant": true, "legendFormat": "{{coin}}", "range": false, "refId": "D" }
+      ]
     }
   ],
   "refresh": "30s",
