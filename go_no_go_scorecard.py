@@ -250,11 +250,19 @@ def main() -> None:
             df = df[df["timestamp"] >= cutoff].copy()
 
     if df.empty:
-        print("ERROR: No data in the selected lookback window.")
+        print("=== Go/No-Go Scorecard ===")
+        print(f"File:                 {args.file}")
+        print("Closed trades:        0")
+        print(f"VERDICT:              HOLD")
+        print("\nReason(s):")
         if args.lookback_days > 0:
-            print(f"       Lookback window: last {args.lookback_days} day(s)")
-            print("       Hint: Use --lookback-days 0 to evaluate all data")
-        raise SystemExit(1)
+            print(
+                f"- No data in the selected lookback window (last {args.lookback_days} day(s)); collect more recent trades or use --lookback-days 0."
+            )
+        else:
+            print(
+                "- No data available in the journal yet; collect trades before evaluating the scorecard.")
+        raise SystemExit(2)
 
     df["pnl_base"] = _safe_float(df.get("pnl_base", pd.Series(dtype=float)))
 

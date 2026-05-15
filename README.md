@@ -290,6 +290,7 @@ Also writes `results/scorecards/latest_status.env` (override via `STATUS_FILE`).
 Optionally writes `results/scorecards/latest_status.json` when `STATUS_JSON_ENABLED=true`.
 Optionally writes `results/scorecards/latest_status.prom` when `STATUS_PROM_ENABLED=true`.
 Exit codes: `0` = GO, `2` = HOLD, `3` = NO-GO.
+An empty lookback window is treated as `HOLD` because it indicates insufficient recent data rather than a scorecard execution failure.
 When strict maintenance override is used (`AUTORESEARCH_STRICT_ALLOW_MAINTENANCE_FALLBACK=true`),
 weekly automation returns a dedicated degraded-mode code (default `4`) for the run.
 
