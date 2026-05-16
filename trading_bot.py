@@ -248,6 +248,14 @@ class BotConfig:
             os.getenv('DOWNTREND_REVERSAL_MAX_SELL_PROBA', 0.35))
         self.downtrend_reversal_min_proba_edge = float(
             os.getenv('DOWNTREND_REVERSAL_MIN_PROBA_EDGE', 0.02))
+        self.downtrend_reversal_fast_exit_enabled = _env_bool(
+            'DOWNTREND_REVERSAL_FAST_EXIT_ENABLED', True)
+        self.downtrend_reversal_fast_exit_seconds = int(
+            os.getenv('DOWNTREND_REVERSAL_FAST_EXIT_SECONDS', 120))
+        self.downtrend_reversal_flat_max_profit_pct = float(
+            os.getenv('DOWNTREND_REVERSAL_FLAT_MAX_PROFIT_PCT', 0.10))
+        self.downtrend_reversal_max_hold_seconds = int(
+            os.getenv('DOWNTREND_REVERSAL_MAX_HOLD_SECONDS', 240))
         # Optional momentum quality filter for new BUY entries.
         self.entry_momentum_filter_enabled = _env_bool(
             'ENTRY_MOMENTUM_FILTER_ENABLED', True)
@@ -1842,6 +1850,11 @@ class CryptoTradingBot:
 
         return True, 'downtrend_reversal_ok'
 
+    @staticmethod
+    def _is_downtrend_reversal_trade(trade_info: Dict) -> bool:
+        """Returns True for trades opened via the guarded downtrend reversal path."""
+        return str(trade_info.get('recommendation', '')) == 'HOLD (Down-Trend)'
+
     def _analyze_coin(self, coin: str, current_price: float) -> Optional[Dict]:
         """Performs a detailed analysis for a single coin."""
         symbol = f"{coin}/{self.config.base_currency}"
@@ -2465,6 +2478,34 @@ class CryptoTradingBot:
                             '📉 PARTIAL-TP-REMAINDER-WEAK-SIGNAL '
                             f'(recommendation: {signal})'
                         )
+            is_downtrend_reversal_trade = self._is_downtrend_reversal_trade(
+                trade_info)
+            if (
+                exit_reason is None
+                and is_downtrend_reversal_trade
+                and self.config.downtrend_reversal_fast_exit_enabled
+                and market_analysis is not None
+            ):
+                current_signal = market_analysis.get(
+                    coin, {}).get('recommendation', '')
+                if (
+                    self.config.downtrend_reversal_max_hold_seconds > 0
+                    and hold_seconds >= self.config.downtrend_reversal_max_hold_seconds
+                ):
+                    exit_reason = (
+                        '⏱️ DOWNTREND-REVERSAL-MAX-HOLD '
+                        f'({int(hold_seconds)}s >= {self.config.downtrend_reversal_max_hold_seconds}s)'
+                    )
+                elif (
+                    hold_seconds >= self.config.downtrend_reversal_fast_exit_seconds
+                    and pnl_pct <= self.config.downtrend_reversal_flat_max_profit_pct
+                    and current_signal in {'HOLD (Down-Trend)', 'WEAK SELL', 'SELL'}
+                ):
+                    exit_reason = (
+                        '📉 DOWNTREND-REVERSAL-FAST-EXIT '
+                        f'({pnl_pct:+.2f}% <= {self.config.downtrend_reversal_flat_max_profit_pct:.2f}% '
+                        f'after {int(hold_seconds)}s, signal: {current_signal})'
+                    )
             if current_price <= stop_loss_level:
                 exit_reason = f"🚨 ATR-STOP-LOSS (Stop: {stop_loss_level:.4f})"
             elif (not self.config.partial_take_profit_enabled) and current_price >= take_profit_level:
