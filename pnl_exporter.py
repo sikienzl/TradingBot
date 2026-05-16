@@ -12,6 +12,7 @@ import json
 import re
 import urllib.request
 import urllib.error
+from contextlib import suppress
 from collections import deque
 from datetime import datetime, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -93,7 +94,8 @@ class MetricsHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'text/plain; version=0.0.4')
             self.end_headers()
-            self.wfile.write(metrics.encode())
+            with suppress(BrokenPipeError, ConnectionResetError):
+                self.wfile.write(metrics.encode())
         else:
             self.send_response(404)
             self.end_headers()
@@ -109,6 +111,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
         metrics_dict['holdings_cost_basis_eur'] = snapshot['holdings_cost_basis_eur']
         metrics_dict['holdings_unrealized_pnl_eur'] = snapshot['holdings_unrealized_pnl_eur']
         metrics_dict['open_positions_count'] = snapshot['open_positions_count']
+        metrics_dict['portfolio_snapshot_timestamp_unixtime'] = snapshot['portfolio_snapshot_timestamp_unixtime']
+        metrics_dict['portfolio_snapshot_age_seconds'] = snapshot['portfolio_snapshot_age_seconds']
+        metrics_dict['metrics_generated_unixtime'] = snapshot['metrics_generated_unixtime']
         metrics_dict['portfolio_start_value_eur'] = self.read_portfolio_start_value()
         metrics_dict.update(self.read_ai_copilot_usage())
         metrics_dict.update(self.read_ai_shadow_suggestions())
@@ -139,6 +144,14 @@ class MetricsHandler(BaseHTTPRequestHandler):
             except Exception:
                 return None
 
+    def _extract_log_line_timestamp(self, line):
+        """Extract a datetime from standard bot log lines like 'YYYY-MM-DD HH:MM:SS,mmm - ...'."""
+        try:
+            timestamp_raw = line.split(' - ', 1)[0].strip()
+            return datetime.strptime(timestamp_raw, '%Y-%m-%d %H:%M:%S,%f')
+        except Exception:
+            return None
+
     def _extract_return_pct(self, trade, pnl_value):
         """Extract trade return in decimal form when available."""
         for key in ('pnl_pct', 'pnl_percent', 'return_pct', 'return'):
@@ -162,6 +175,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
             'holdings_cost_basis_eur': {},
             'holdings_unrealized_pnl_eur': {},
             'open_positions_count': 0,
+            'portfolio_snapshot_timestamp_unixtime': 0.0,
+            'portfolio_snapshot_age_seconds': 0.0,
+            'metrics_generated_unixtime': datetime.utcnow().timestamp(),
         }
 
         if not os.path.exists(BOT_LOG_PATH):
@@ -182,6 +198,10 @@ class MetricsHandler(BaseHTTPRequestHandler):
                             'Portfolio value:', 1)[1].strip()
                         snapshot['portfolio_value_eur'] = float(
                             value_part.split(' ')[0])
+                        line_ts = self._extract_log_line_timestamp(line)
+                        if line_ts is not None:
+                            snapshot['portfolio_snapshot_timestamp_unixtime'] = line_ts.timestamp(
+                            )
                     except Exception:
                         pass
 
@@ -265,6 +285,12 @@ class MetricsHandler(BaseHTTPRequestHandler):
             snapshot['holdings_unrealized_pnl_eur'][coin] = current_value - cost_basis
         snapshot['open_positions_count'] = len(
             snapshot['holdings_amount_coin'])
+        if snapshot['portfolio_snapshot_timestamp_unixtime'] > 0.0:
+            snapshot['portfolio_snapshot_age_seconds'] = max(
+                0.0,
+                snapshot['metrics_generated_unixtime'] -
+                snapshot['portfolio_snapshot_timestamp_unixtime'],
+            )
 
         return snapshot
 
@@ -650,6 +676,24 @@ class MetricsHandler(BaseHTTPRequestHandler):
         output.append('# TYPE trading_portfolio_start_value_eur gauge')
         output.append(
             f'trading_portfolio_start_value_eur {metrics.get("portfolio_start_value_eur", 0.0)}')
+
+        output.append(
+            '# HELP trading_metrics_generated_unixtime Unix timestamp when the exporter generated this metrics payload')
+        output.append('# TYPE trading_metrics_generated_unixtime gauge')
+        output.append(
+            f'trading_metrics_generated_unixtime {metrics.get("metrics_generated_unixtime", 0.0)}')
+
+        output.append(
+            '# HELP trading_portfolio_snapshot_unixtime Unix timestamp of the latest portfolio snapshot parsed from the bot log')
+        output.append('# TYPE trading_portfolio_snapshot_unixtime gauge')
+        output.append(
+            f'trading_portfolio_snapshot_unixtime {metrics.get("portfolio_snapshot_timestamp_unixtime", 0.0)}')
+
+        output.append(
+            '# HELP trading_portfolio_snapshot_age_seconds Age in seconds of the latest portfolio snapshot parsed from the bot log')
+        output.append('# TYPE trading_portfolio_snapshot_age_seconds gauge')
+        output.append(
+            f'trading_portfolio_snapshot_age_seconds {metrics.get("portfolio_snapshot_age_seconds", 0.0)}')
 
         output.append(
             '# HELP trading_current_holding_value_eur Current mark-to-market holding value per coin in EUR')

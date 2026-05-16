@@ -27,3 +27,12 @@ groups:
         annotations:
           summary: "Trading scorecard metrics are stale"
           description: "No fresh textfile metric update for over 20 minutes."
+
+      - alert: TradingPortfolioSnapshotStale
+        expr: trading_portfolio_snapshot_age_seconds > 120
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Trading portfolio snapshot is stale"
+          description: "The PnL exporter has not parsed a fresh portfolio snapshot from bot.log for over 120 seconds."

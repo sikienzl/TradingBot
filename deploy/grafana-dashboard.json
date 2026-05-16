@@ -41,6 +41,27 @@
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
+          "decimals": 0,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 30 },
+            { "color": "red", "value": 120 }
+          ] },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 44 },
+      "id": 29,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "title": "Portfolio Snapshot Age",
+      "type": "stat",
+      "targets": [{ "expr": "trading_portfolio_snapshot_age_seconds", "instant": true, "legendFormat": "Age", "range": false, "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
           "thresholds": { "mode": "absolute", "steps": [
             { "color": "green", "value": null },
             { "color": "yellow", "value": 300 },
