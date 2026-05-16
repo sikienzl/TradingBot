@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 from trading_bot import BotConfig, CryptoTradingBot
@@ -313,6 +314,48 @@ def test_uptrend_entry_filter_allows_stronger_rules_trade(monkeypatch):
     assert reason == "ok"
 
 
+def test_downtrend_reversal_filter_blocks_weak_buy_proba(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.downtrend_reversal_entry_enabled = True
+    bot.config.downtrend_reversal_max_rsi = 20.0
+    bot.config.downtrend_reversal_min_buy_proba = 0.22
+    bot.config.downtrend_reversal_max_sell_proba = 0.30
+    bot.config.downtrend_reversal_min_proba_edge = 0.07
+
+    passes, reason = bot._passes_downtrend_reversal_filter({
+        "recommendation": "HOLD (Down-Trend)",
+        "signal_source": "catboost",
+        "rsi": 18.0,
+        "tabular_buy_proba": 0.20,
+        "tabular_sell_proba": 0.10,
+    })
+
+    assert passes is False
+    assert reason.startswith("buy_proba_below_min")
+
+
+def test_logs_blocked_buy_attempt_summary(monkeypatch, caplog):
+    bot = _make_test_bot(monkeypatch)
+
+    with caplog.at_level(logging.INFO):
+        bot._log_blocked_buy_attempt_candidates([
+            {
+                "coin": "TRX",
+                "reason": "ret_3_below_min (-0.0300 < -0.0100)",
+                "signal_source": "rules",
+                "score": 60,
+                "recommendation": "BUY",
+                "position_size_text": "5.00",
+                "cash_text": "19.85",
+                "cooldown_text": "n/a",
+            }
+        ])
+
+    assert "Buy attempt blocked 1 candidate(s)" in caplog.text
+    assert "ret_3_below_min" in caplog.text
+    assert "TRX" in caplog.text
+
+
 def test_identifies_rules_uptrend_trade_only_for_rules_source(monkeypatch):
     bot = _make_test_bot(monkeypatch)
 
@@ -324,6 +367,56 @@ def test_identifies_rules_uptrend_trade_only_for_rules_source(monkeypatch):
         "recommendation": "HOLD (Up-Trend)",
         "signal_source": "catboost",
     }) is False
+
+
+def test_uptrend_rules_fast_exit_closes_flat_rules_trade(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.partial_take_profit_enabled = False
+    bot.config.trailing_stop_enabled = False
+    bot.config.break_even_enabled = False
+    bot.config.max_hold_seconds = 0
+    bot.config.exit_on_downtrend = False
+    bot.config.uptrend_rules_fast_exit_enabled = True
+    bot.config.uptrend_rules_fast_exit_seconds = 120
+    bot.config.uptrend_rules_flat_max_profit_pct = 0.08
+    bot.config.uptrend_rules_max_hold_seconds = 300
+
+    bot.portfolio.cash = 0.0
+    bot.portfolio.holdings["TRX"] = 1.0
+    bot.portfolio.open_trades["TRX"] = {
+        "buy_price": 100.0,
+        "amount_coin": 1.0,
+        "amount_base": 100.0,
+        "timestamp": datetime.now() - timedelta(seconds=180),
+        "peak_price": 100.05,
+        "partial_tp_taken": False,
+        "partial_tp_timestamp": None,
+        "signal_source": "rules",
+        "signal_confidence": None,
+        "recommendation": "HOLD (Up-Trend)",
+    }
+    monkeypatch.setattr(bot, "_get_atr_for_coin", lambda coin, period=14: 5.0)
+
+    executed = {}
+
+    def _fake_execute_trade(coin, action, price, amount_in_base_currency, atr=None, signal_source='rules', signal_confidence=None, recommendation='HOLD', reason=''):
+        executed["coin"] = coin
+        executed["action"] = action
+        executed["reason"] = reason
+        return True
+
+    monkeypatch.setattr(bot, "_execute_trade", _fake_execute_trade)
+
+    bot._manage_open_trades(
+        {"TRX": {"price": 100.05}},
+        {"TRX": {"recommendation": "HOLD (Up-Trend)"}},
+    )
+
+    assert executed["coin"] == "TRX"
+    assert executed["action"] == "sell"
+    assert "UPTREND-RULES-FAST-EXIT" in executed["reason"]
+    assert "signal: HOLD (Up-Trend)" in executed["reason"]
+    assert "TRX" not in bot.portfolio.open_trades
 
 
 def test_entry_momentum_filter_blocks_sharp_pump_ret3(monkeypatch):

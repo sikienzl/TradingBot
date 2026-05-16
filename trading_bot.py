@@ -1871,6 +1871,180 @@ class CryptoTradingBot:
         return True, 'ok'
 
     @staticmethod
+    def _filter_reason_code(reason: str) -> str:
+        """Normalizes verbose filter reasons into stable summary keys."""
+        return str(reason).split(' ', 1)[0]
+
+    def _log_blocked_uptrend_candidates(
+        self,
+        market_analysis: Dict[str, Dict],
+        uptrend_filter_results: Dict[str, Tuple[bool, str]],
+        limit: int = 5,
+    ) -> None:
+        """Logs concrete rejection details for blocked rules-based up-trend entries."""
+        blocked_candidates = []
+        for coin, data in market_analysis.items():
+            if data.get('recommendation') != 'HOLD (Up-Trend)':
+                continue
+            passes_filter, filter_reason = uptrend_filter_results.get(
+                coin, (True, 'not_evaluated'))
+            if passes_filter:
+                continue
+            buy_proba = data.get('tabular_buy_proba')
+            sell_proba = data.get('tabular_sell_proba')
+            proba_edge = None
+            if buy_proba is not None and sell_proba is not None:
+                try:
+                    if not np.isnan(buy_proba) and not np.isnan(sell_proba):
+                        proba_edge = float(buy_proba) - float(sell_proba)
+                except TypeError:
+                    proba_edge = None
+            blocked_candidates.append({
+                'coin': coin,
+                'reason': filter_reason,
+                'reason_code': self._filter_reason_code(filter_reason),
+                'rsi': data.get('rsi'),
+                'buy_proba': buy_proba,
+                'sell_proba': sell_proba,
+                'proba_edge': proba_edge,
+                'signal_source': data.get('signal_source', 'n/a'),
+                'score': data.get('score', 0),
+                'rule_score': data.get('rule_score', 0),
+            })
+
+        if not blocked_candidates:
+            return
+
+        reason_mix = dict(Counter(
+            candidate['reason_code'] for candidate in blocked_candidates
+        ))
+        logger.info(
+            '  🚧 Uptrend entry gate blocked %d candidate(s): %s',
+            len(blocked_candidates),
+            reason_mix,
+        )
+        for candidate in blocked_candidates[:limit]:
+            rsi = candidate['rsi']
+            buy_proba = candidate['buy_proba']
+            sell_proba = candidate['sell_proba']
+            proba_edge = candidate['proba_edge']
+            logger.info(
+                '    - %s: reason=%s, RSI=%s, buy_proba=%s, sell_proba=%s, edge=%s, source=%s, score=%s, rule_score=%s',
+                candidate['coin'],
+                candidate['reason'],
+                f'{float(rsi):.2f}' if rsi is not None and not np.isnan(
+                    rsi) else 'n/a',
+                f'{float(buy_proba):.3f}' if buy_proba is not None and not np.isnan(
+                    buy_proba) else 'n/a',
+                f'{float(sell_proba):.3f}' if sell_proba is not None and not np.isnan(
+                    sell_proba) else 'n/a',
+                f'{float(proba_edge):.3f}' if proba_edge is not None else 'n/a',
+                candidate['signal_source'],
+                candidate['score'],
+                candidate['rule_score'],
+            )
+
+    def _log_blocked_downtrend_reversal_candidates(
+        self,
+        market_analysis: Dict[str, Dict],
+        downtrend_filter_results: Dict[str, Tuple[bool, str]],
+        limit: int = 5,
+    ) -> None:
+        """Logs concrete rejection details for blocked down-trend reversal entries."""
+        blocked_candidates = []
+        for coin, data in market_analysis.items():
+            if data.get('recommendation') != 'HOLD (Down-Trend)':
+                continue
+            passes_filter, filter_reason = downtrend_filter_results.get(
+                coin, (True, 'not_evaluated'))
+            if passes_filter:
+                continue
+            buy_proba = data.get('tabular_buy_proba')
+            sell_proba = data.get('tabular_sell_proba')
+            proba_edge = None
+            if buy_proba is not None and sell_proba is not None:
+                try:
+                    if not np.isnan(buy_proba) and not np.isnan(sell_proba):
+                        proba_edge = float(buy_proba) - float(sell_proba)
+                except TypeError:
+                    proba_edge = None
+            blocked_candidates.append({
+                'coin': coin,
+                'reason': filter_reason,
+                'reason_code': self._filter_reason_code(filter_reason),
+                'rsi': data.get('rsi'),
+                'buy_proba': buy_proba,
+                'sell_proba': sell_proba,
+                'proba_edge': proba_edge,
+                'signal_source': data.get('signal_source', 'n/a'),
+                'score': data.get('score', 0),
+                'rule_score': data.get('rule_score', 0),
+            })
+
+        if not blocked_candidates:
+            return
+
+        reason_mix = dict(Counter(
+            candidate['reason_code'] for candidate in blocked_candidates
+        ))
+        logger.info(
+            '  🚧 Downtrend reversal gate blocked %d candidate(s): %s',
+            len(blocked_candidates),
+            reason_mix,
+        )
+        for candidate in blocked_candidates[:limit]:
+            rsi = candidate['rsi']
+            buy_proba = candidate['buy_proba']
+            sell_proba = candidate['sell_proba']
+            proba_edge = candidate['proba_edge']
+            logger.info(
+                '    - %s: reason=%s, RSI=%s, buy_proba=%s, sell_proba=%s, edge=%s, source=%s, score=%s, rule_score=%s',
+                candidate['coin'],
+                candidate['reason'],
+                f'{float(rsi):.2f}' if rsi is not None and not np.isnan(
+                    rsi) else 'n/a',
+                f'{float(buy_proba):.3f}' if buy_proba is not None and not np.isnan(
+                    buy_proba) else 'n/a',
+                f'{float(sell_proba):.3f}' if sell_proba is not None and not np.isnan(
+                    sell_proba) else 'n/a',
+                f'{float(proba_edge):.3f}' if proba_edge is not None else 'n/a',
+                candidate['signal_source'],
+                candidate['score'],
+                candidate['rule_score'],
+            )
+
+    def _log_blocked_buy_attempt_candidates(
+        self,
+        blocked_attempts: List[Dict[str, Any]],
+        limit: int = 5,
+    ) -> None:
+        """Logs why shortlisted buy candidates still failed during the execution path."""
+        if not blocked_attempts:
+            return
+
+        reason_mix = dict(Counter(
+            self._filter_reason_code(attempt.get('reason', 'unknown'))
+            for attempt in blocked_attempts
+        ))
+        logger.info(
+            '  🚫 Buy attempt blocked %d candidate(s): %s',
+            len(blocked_attempts),
+            reason_mix,
+        )
+        for attempt in blocked_attempts[:limit]:
+            logger.info(
+                '    - %s: reason=%s, source=%s, score=%s, recommendation=%s, position_size=%s, cash=%s, cooldown_remaining=%s',
+                attempt.get('coin', 'n/a'),
+                attempt.get('reason', 'unknown'),
+                attempt.get('signal_source', 'n/a'),
+                attempt.get('score', 'n/a'),
+                attempt.get('recommendation', 'n/a'),
+                attempt.get('position_size_text', 'n/a'),
+                attempt.get('cash_text', 'n/a'),
+                attempt.get('cooldown_text', 'n/a'),
+            )
+
+    @staticmethod
     def _is_rules_uptrend_trade(trade_info: Dict) -> bool:
         recommendation = str(trade_info.get('recommendation', ''))
         signal_source = str(trade_info.get('signal_source', ''))
@@ -2672,6 +2846,14 @@ class CryptoTradingBot:
                     self.portfolio.holdings.keys())
                 available_trade_slots = max(
                     0, self.config.max_open_trades - len(self.portfolio.open_trades))
+                downtrend_filter_results = {
+                    coin: self._passes_downtrend_reversal_filter(data)
+                    for coin, data in market_analysis.items()
+                }
+                uptrend_filter_results = {
+                    coin: self._passes_uptrend_entry_filter(data)
+                    for coin, data in market_analysis.items()
+                }
 
                 # Only suggest coins not yet held.
                 strict_buy_candidates = [
@@ -2696,8 +2878,8 @@ class CryptoTradingBot:
                         and coin not in top_buy_recommendations
                         if data.get('score', 0) >= self.config.fallback_min_score
                         and data.get('recommendation') not in _excluded_signals_fallback
-                        and self._passes_downtrend_reversal_filter(data)[0]
-                        and self._passes_uptrend_entry_filter(data)[0]
+                        and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+                        and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
                         and not np.isnan(data.get('rsi', np.nan))
                         and data.get('rsi', np.nan) <= self.config.fallback_max_rsi
                     ]
@@ -2721,8 +2903,8 @@ class CryptoTradingBot:
                         and coin not in top_buy_recommendations
                         and data.get('score', 0) >= self.config.force_fill_min_score
                         and data.get('recommendation') not in _excluded_signals_fallback
-                        and self._passes_downtrend_reversal_filter(data)[0]
-                        and self._passes_uptrend_entry_filter(data)[0]
+                        and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+                        and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
                     ]
                     if force_fill_candidates:
                         missing_slots = available_trade_slots - \
@@ -2742,9 +2924,9 @@ class CryptoTradingBot:
                     ))
                     downtrend_reversal_eligible = sum(
                         1
-                        for data in market_analysis.values()
+                        for coin, data in market_analysis.items()
                         if data.get('recommendation') == 'HOLD (Down-Trend)'
-                        and self._passes_downtrend_reversal_filter(data)[0]
+                        and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
                     )
                     logger.info(
                         "ℹ️ No entry candidates this round: strict=%d, fallback=%d, force_fill=%d, downtrend_reversal_eligible=%d, recommendation_mix=%s",
@@ -2753,6 +2935,14 @@ class CryptoTradingBot:
                         len(force_fill_candidates),
                         downtrend_reversal_eligible,
                         recommendation_mix,
+                    )
+                    self._log_blocked_uptrend_candidates(
+                        market_analysis,
+                        uptrend_filter_results,
+                    )
+                    self._log_blocked_downtrend_reversal_candidates(
+                        market_analysis,
+                        downtrend_filter_results,
                     )
                     for coin, data in list(market_analysis.items())[:5]:
                         signal_confidence = data.get('signal_confidence')
@@ -2819,9 +3009,21 @@ class CryptoTradingBot:
                 elif available_funds_for_trade >= min_required_cash and current_open_trades_count < self.config.max_open_trades:
                     logger.info(
                         f"Attempting to open new positions. Available: {available_funds_for_trade:.2f} {self.config.base_currency}, Open trades: {current_open_trades_count}/{self.config.max_open_trades}, Min amount: {min_required_cash:.2f} {self.config.base_currency}.")
+                    blocked_buy_attempts: List[Dict[str, Any]] = []
+                    successful_buy_count = 0
                     for coin in top_buy_recommendations:
                         # Only trade if no position is already open
                         if coin not in self.portfolio.open_trades and coin not in self.portfolio.holdings:
+                            coin_data = market_analysis.get(coin, {})
+                            attempt_meta = {
+                                'coin': coin,
+                                'signal_source': coin_data.get('signal_source', 'rules'),
+                                'score': coin_data.get('score', 0),
+                                'recommendation': coin_data.get('recommendation', 'HOLD'),
+                                'position_size_text': 'n/a',
+                                'cash_text': f"{self.portfolio.cash:.2f}",
+                                'cooldown_text': 'n/a',
+                            }
                             price_data = current_market_data.get(coin)
                             if price_data:
                                 current_price = price_data['price']
@@ -2833,21 +3035,30 @@ class CryptoTradingBot:
                                     self.portfolio.cash - reserved_cash, 0.0)
                                 position_size = min(
                                     target_position_size, max_affordable)
+                                attempt_meta['position_size_text'] = f"{position_size:.2f}"
+                                attempt_meta['cash_text'] = f"{self.portfolio.cash:.2f}"
 
                                 # Very small ATR risk amounts should not completely block entries
                                 # as long as the minimum trade is still affordable with the cash reserve.
                                 if position_size < self.config.min_trade_amount and max_affordable >= self.config.min_trade_amount:
                                     position_size = self.config.min_trade_amount
+                                    attempt_meta['position_size_text'] = f"{position_size:.2f}"
 
                                 if position_size < self.config.min_trade_amount:
                                     logger.info(
                                         f"Skipping {coin}: effective trade amount {position_size:.2f} {self.config.base_currency} is below MIN_TRADE_AMOUNT {self.config.min_trade_amount:.2f}.")
+                                    blocked_buy_attempts.append({
+                                        **attempt_meta,
+                                        'reason': (
+                                            'below_min_trade_amount '
+                                            f'({position_size:.2f} < {self.config.min_trade_amount:.2f})'
+                                        ),
+                                    })
                                     continue
 
                                 if self.portfolio.cash >= position_size:
                                     logger.info(
                                         f"ℹ️ Attempting to buy {coin}...")
-                                    coin_data = market_analysis.get(coin, {})
                                     signal_source = coin_data.get(
                                         'signal_source', 'rules')
                                     signal_confidence = coin_data.get(
@@ -2857,15 +3068,28 @@ class CryptoTradingBot:
                                     if not passes_filter:
                                         logger.info(
                                             f"⛔ Momentum filter blocked entry for {coin}: {filter_reason}")
+                                        blocked_buy_attempts.append({
+                                            **attempt_meta,
+                                            'reason': filter_reason,
+                                        })
                                         continue
                                     effective_cooldown, cooldown_mode = self._resolve_reentry_cooldown_seconds(
                                         current_price, atr)
                                     in_cooldown, cooldown_remaining = self._is_coin_in_reentry_cooldown(
                                         coin, cooldown_seconds=effective_cooldown)
                                     if in_cooldown:
+                                        cooldown_text = (
+                                            f"{cooldown_remaining}s remaining "
+                                            f"(effective={effective_cooldown}s, {cooldown_mode})"
+                                        )
                                         logger.info(
                                             f"⛔ Re-entry cooldown active for {coin}: {cooldown_remaining}s remaining "
                                             f"(effective={effective_cooldown}s, base={self.config.reentry_cooldown_seconds}s, {cooldown_mode})")
+                                        blocked_buy_attempts.append({
+                                            **attempt_meta,
+                                            'reason': 'reentry_cooldown_active',
+                                            'cooldown_text': cooldown_text,
+                                        })
                                         continue
                                     if self._execute_trade(
                                         coin,
@@ -2879,6 +3103,7 @@ class CryptoTradingBot:
                                             'recommendation', 'HOLD'),
                                         reason='ENTRY',
                                     ):
+                                        successful_buy_count += 1
                                         # Update available capital
                                         available_funds_for_trade = self.portfolio.cash
                                         current_open_trades_count = len(
@@ -2887,15 +3112,34 @@ class CryptoTradingBot:
                                             logger.info(
                                                 "Maximum number of open trades reached, stopping further buys.")
                                             break
+                                    else:
+                                        blocked_buy_attempts.append({
+                                            **attempt_meta,
+                                            'reason': 'execute_trade_failed',
+                                        })
                                 else:
                                     logger.warning(
                                         f"Insufficient available funds ({self.portfolio.cash:.2f} {self.config.base_currency}) for a trade of {position_size:.2f} {self.config.base_currency} for {coin}.")
+                                    blocked_buy_attempts.append({
+                                        **attempt_meta,
+                                        'reason': (
+                                            'insufficient_available_funds '
+                                            f'({self.portfolio.cash:.2f} < {position_size:.2f})'
+                                        ),
+                                    })
                             else:
                                 logger.warning(
                                     f"Price data for {coin} not found, cannot buy.")
+                                blocked_buy_attempts.append({
+                                    **attempt_meta,
+                                    'reason': 'missing_price_data',
+                                })
                         else:
                             logger.debug(
                                 f"{coin} already in portfolio or open position.")
+                    if top_buy_recommendations and successful_buy_count == 0:
+                        self._log_blocked_buy_attempt_candidates(
+                            blocked_buy_attempts)
                 elif current_open_trades_count >= self.config.max_open_trades:
                     logger.info(
                         f"Maximum number of open trades ({self.config.max_open_trades}) reached. No new buys.")
