@@ -237,6 +237,17 @@ class BotConfig:
         self.force_fill_slots = _env_bool('FORCE_FILL_SLOTS', False)
         # Minimum score for forced slot filling (without RSI limit)
         self.force_fill_min_score = int(os.getenv('FORCE_FILL_MIN_SCORE', 35))
+        # Guard aggressive fallback entries in down-trends behind a stricter reversal filter.
+        self.downtrend_reversal_entry_enabled = _env_bool(
+            'DOWNTREND_REVERSAL_ENTRY_ENABLED', True)
+        self.downtrend_reversal_max_rsi = float(
+            os.getenv('DOWNTREND_REVERSAL_MAX_RSI', 30.0))
+        self.downtrend_reversal_min_buy_proba = float(
+            os.getenv('DOWNTREND_REVERSAL_MIN_BUY_PROBA', 0.20))
+        self.downtrend_reversal_max_sell_proba = float(
+            os.getenv('DOWNTREND_REVERSAL_MAX_SELL_PROBA', 0.35))
+        self.downtrend_reversal_min_proba_edge = float(
+            os.getenv('DOWNTREND_REVERSAL_MIN_PROBA_EDGE', 0.02))
         # Optional momentum quality filter for new BUY entries.
         self.entry_momentum_filter_enabled = _env_bool(
             'ENTRY_MOMENTUM_FILTER_ENABLED', True)
@@ -1793,6 +1804,44 @@ class CryptoTradingBot:
 
         return True, 'ok'
 
+    def _passes_downtrend_reversal_filter(self, coin_data: Dict) -> Tuple[bool, str]:
+        """Allows down-trend fallback entries only for oversold coins with improving CatBoost odds."""
+        recommendation = str(coin_data.get('recommendation', ''))
+        if recommendation != 'HOLD (Down-Trend)':
+            return True, 'not_downtrend'
+
+        if not self.config.downtrend_reversal_entry_enabled:
+            return False, 'downtrend_reversal_disabled'
+
+        rsi = coin_data.get('rsi')
+        if rsi is None or np.isnan(rsi):
+            return False, 'missing_rsi'
+        if float(rsi) > self.config.downtrend_reversal_max_rsi:
+            return False, f"rsi_above_reversal_max ({float(rsi):.2f} > {self.config.downtrend_reversal_max_rsi:.2f})"
+
+        signal_source = str(coin_data.get('signal_source', ''))
+        if signal_source != 'catboost':
+            return False, 'downtrend_requires_catboost'
+
+        buy_proba = coin_data.get('tabular_buy_proba')
+        sell_proba = coin_data.get('tabular_sell_proba')
+        if buy_proba is None or sell_proba is None:
+            return False, 'missing_tabular_proba'
+
+        buy_proba = float(buy_proba)
+        sell_proba = float(sell_proba)
+        if buy_proba < self.config.downtrend_reversal_min_buy_proba:
+            return False, f"buy_proba_below_min ({buy_proba:.3f} < {self.config.downtrend_reversal_min_buy_proba:.3f})"
+        if sell_proba > self.config.downtrend_reversal_max_sell_proba:
+            return False, f"sell_proba_above_max ({sell_proba:.3f} > {self.config.downtrend_reversal_max_sell_proba:.3f})"
+        if (buy_proba - sell_proba) < self.config.downtrend_reversal_min_proba_edge:
+            return False, (
+                f"buy_sell_edge_too_small ({buy_proba - sell_proba:.3f} < "
+                f"{self.config.downtrend_reversal_min_proba_edge:.3f})"
+            )
+
+        return True, 'downtrend_reversal_ok'
+
     def _analyze_coin(self, coin: str, current_price: float) -> Optional[Dict]:
         """Performs a detailed analysis for a single coin."""
         symbol = f"{coin}/{self.config.base_currency}"
@@ -1823,6 +1872,9 @@ class CryptoTradingBot:
         score = 50  # Neutral score
         signal_source = 'rules'
         signal_confidence = None
+        tab_buy_proba = None
+        tab_hold_proba = None
+        tab_sell_proba = None
 
         if not np.isnan(rsi) and not np.isnan(sma_short) and not np.isnan(sma_long):
             if rsi < 30 and sma_short > sma_long and current_price > sma_short:
@@ -1987,6 +2039,8 @@ class CryptoTradingBot:
                 tab_confidence = float(tab_result.get('confidence', 0.0))
                 tab_proba = tab_result.get('proba', {})
                 tab_sell_proba = float(tab_proba.get('verkaufen', 0.0))
+                tab_hold_proba = float(tab_proba.get('halten', 0.0))
+                tab_buy_proba = float(tab_proba.get('kaufen', 0.0))
                 logger.info(
                     f"  📊 CatBoost for {coin}: {tab_decision.upper()} "
                     f"(Confidence: {tab_confidence*100:.0f}%, Proba: {tab_proba})")
@@ -2050,6 +2104,9 @@ class CryptoTradingBot:
             'rule_score': rule_score,
             'signal_source': signal_source,
             'signal_confidence': signal_confidence,
+            'tabular_buy_proba': tab_buy_proba,
+            'tabular_hold_proba': tab_hold_proba,
+            'tabular_sell_proba': tab_sell_proba,
         }
 
     def _analyze_markets(self, market_data: Dict[str, Dict], extra_coins: Optional[List[str]] = None) -> Dict[str, Dict]:
@@ -2507,6 +2564,7 @@ class CryptoTradingBot:
                         and coin not in top_buy_recommendations
                         if data.get('score', 0) >= self.config.fallback_min_score
                         and data.get('recommendation') not in _excluded_signals_fallback
+                        and self._passes_downtrend_reversal_filter(data)[0]
                         and not np.isnan(data.get('rsi', np.nan))
                         and data.get('rsi', np.nan) <= self.config.fallback_max_rsi
                     ]
@@ -2530,6 +2588,7 @@ class CryptoTradingBot:
                         and coin not in top_buy_recommendations
                         and data.get('score', 0) >= self.config.force_fill_min_score
                         and data.get('recommendation') not in _excluded_signals_fallback
+                        and self._passes_downtrend_reversal_filter(data)[0]
                     ]
                     if force_fill_candidates:
                         missing_slots = available_trade_slots - \
@@ -2547,11 +2606,18 @@ class CryptoTradingBot:
                         data.get('recommendation', 'UNKNOWN')
                         for data in market_analysis.values()
                     ))
+                    downtrend_reversal_eligible = sum(
+                        1
+                        for data in market_analysis.values()
+                        if data.get('recommendation') == 'HOLD (Down-Trend)'
+                        and self._passes_downtrend_reversal_filter(data)[0]
+                    )
                     logger.info(
-                        "ℹ️ No entry candidates this round: strict=%d, fallback=%d, force_fill=%d, recommendation_mix=%s",
+                        "ℹ️ No entry candidates this round: strict=%d, fallback=%d, force_fill=%d, downtrend_reversal_eligible=%d, recommendation_mix=%s",
                         len(strict_buy_candidates),
                         len(fallback_candidates),
                         len(force_fill_candidates),
+                        downtrend_reversal_eligible,
                         recommendation_mix,
                     )
                     for coin, data in list(market_analysis.items())[:5]:
