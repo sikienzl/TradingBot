@@ -1,0 +1,22 @@
+v1.0.22 - Aggressive dry-run reversal validation
+
+Date: 2026-05-16
+
+Changes
+- Validated the current aggressive dry-run profile on the Raspberry Pi with a temporary live override of `MAX_BUYS_PER_HOUR=8`, followed by an automatic rollback to `4`.
+- Confirmed that the guarded downtrend-reversal path still opens ETH trades when conditions align.
+- Confirmed that the dedicated `DOWNTREND_REVERSAL_FAST_EXIT` path triggers in live dry-run operation.
+
+Observed Behavior
+- TRX (`HOLD (Up-Trend)`) was opened and later closed through the normal rules path.
+- ETH (`HOLD (Down-Trend)`, CatBoost-backed) was opened during the validation window and later exited by the fast-exit logic.
+- The fast-exit fired after about 137 seconds on a flat ETH trade at roughly `+0.00%`, which matches the intended behavior for weak reversal follow-through.
+
+Operational Outcome
+- The reversal fast-exit logic is now validated in live dry-run conditions, not just by code inspection.
+- The temporary buy-limit increase served its purpose as a validation lever and was reverted after the test.
+- Default live guardrails remain unchanged after the run: `MAX_BUYS_PER_HOUR=4` and the service stayed active.
+
+Notes
+- This was an operational validation pass, not a new strategy expansion.
+- The next tuning focus should be entry quality and hold behavior for non-reversal rule trades such as TRX, rather than making reversal entry more aggressive again.
