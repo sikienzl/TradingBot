@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 import ccxt
 import numpy as np
 from dotenv import load_dotenv
-from collections import defaultdict
+from collections import Counter, defaultdict
 import urllib.request
 import urllib.error
 
@@ -211,11 +211,17 @@ class BotConfig:
         self.min_volume_base = float(os.getenv('MIN_VOLUME_BASE', 100000))
         # Number of top coins for analysis
         self.top_n_for_analysis = int(os.getenv('TOP_N_FOR_ANALYSIS', 10))
+        self.exchange_timeout_ms = int(os.getenv('EXCHANGE_TIMEOUT_MS', 15000))
         # Split ticker requests into manageable chunks to avoid oversized exchange calls.
         self.ticker_batch_size = int(os.getenv('TICKER_BATCH_SIZE', 80))
         self.ticker_fetch_retries = int(os.getenv('TICKER_FETCH_RETRIES', 2))
         self.ticker_retry_delay_seconds = float(
             os.getenv('TICKER_RETRY_DELAY_SECONDS', 1.0))
+        self.ohlcv_fetch_retries = int(os.getenv('OHLCV_FETCH_RETRIES', 1))
+        self.ohlcv_retry_delay_seconds = float(
+            os.getenv('OHLCV_RETRY_DELAY_SECONDS', 1.0))
+        self.slow_analysis_warning_seconds = float(
+            os.getenv('SLOW_ANALYSIS_WARNING_SECONDS', 8.0))
         self.rsi_period = int(os.getenv('RSI_PERIOD', 14))
         self.sma_period_short = int(os.getenv('SMA_PERIOD_SHORT', 20))
         self.sma_period_long = int(os.getenv('SMA_PERIOD_LONG', 50))
@@ -796,14 +802,19 @@ class CryptoTradingBot:
                     ).to_dict(orient='records')
 
                     if 'action' in recent_window.columns:
-                        actions = recent_window['action'].fillna('').astype(str).str.lower()
-                        recent_trade_summary['window_rows'] = int(len(recent_window))
-                        recent_trade_summary['recent_buy_count'] = int((actions == 'buy').sum())
+                        actions = recent_window['action'].fillna(
+                            '').astype(str).str.lower()
+                        recent_trade_summary['window_rows'] = int(
+                            len(recent_window))
+                        recent_trade_summary['recent_buy_count'] = int(
+                            (actions == 'buy').sum())
                         sells = recent_window.loc[actions == 'sell'].copy()
-                        recent_trade_summary['recent_sell_count'] = int(len(sells))
+                        recent_trade_summary['recent_sell_count'] = int(
+                            len(sells))
 
                         if not sells.empty:
-                            pnl = pd.to_numeric(sells.get('pnl_base'), errors='coerce').fillna(0.0)
+                            pnl = pd.to_numeric(
+                                sells.get('pnl_base'), errors='coerce').fillna(0.0)
                             recent_trade_summary['recent_win_rate_pct'] = round(
                                 float((pnl > 0).mean() * 100.0), 2
                             )
@@ -818,13 +829,16 @@ class CryptoTradingBot:
                                 float(hold_seconds.mean()), 2
                             )
 
-                            reasons = sells.get('reason', pd.Series(dtype=object)).fillna('').astype(str)
-                            reason_counts = reasons[reasons != ''].value_counts().head(6)
+                            reasons = sells.get('reason', pd.Series(
+                                dtype=object)).fillna('').astype(str)
+                            reason_counts = reasons[reasons !=
+                                                    ''].value_counts().head(6)
                             recent_trade_summary['recent_exit_reasons'] = {
                                 str(reason): int(count) for reason, count in reason_counts.items()
                             }
                             max_hold_exits = int(
-                                reasons.str.contains('MAX-HOLD-TIME', case=False, na=False).sum()
+                                reasons.str.contains(
+                                    'MAX-HOLD-TIME', case=False, na=False).sum()
                             )
                             recent_trade_summary['recent_max_hold_exit_ratio'] = round(
                                 max_hold_exits / max(len(sells), 1), 4
@@ -836,7 +850,8 @@ class CryptoTradingBot:
                                     coin_pnl = pd.to_numeric(
                                         group.get('pnl_base'), errors='coerce'
                                     ).fillna(0.0)
-                                    coin_reasons = group.get('reason', pd.Series(dtype=object)).fillna('').astype(str)
+                                    coin_reasons = group.get('reason', pd.Series(
+                                        dtype=object)).fillna('').astype(str)
                                     coin_summary[str(coin)] = {
                                         'sell_count': int(len(group)),
                                         'pnl_sum': round(float(coin_pnl.sum()), 6),
@@ -1334,6 +1349,7 @@ class CryptoTradingBot:
                 'apiKey': self.config.api_key,
                 'secret': self.config.api_secret,
                 'enableRateLimit': True,  # ccxt Rate Limiting
+                'timeout': self.config.exchange_timeout_ms,
                 'options': {
                     'adjustForTimeDifference': True,
                     'verbose': False  # Set to True for verbose ccxt output
@@ -1560,23 +1576,52 @@ class CryptoTradingBot:
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             return df
 
-        try:
-            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-            if not ohlcv:
-                logger.warning(f"No OHLCV data available for {symbol}.")
-                return None
-            df = pd.DataFrame(
-                ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            return df
-        except (ccxt.NetworkError, ccxt.ExchangeError) as e:
-            logger.error(
-                f"Error fetching OHLCV data for {symbol}: {e}")
-            return None
-        except Exception as e:
-            logger.error(
-                f"Unexpected error fetching OHLCV data for {symbol}: {e}")
-            return None
+        retries = max(0, self.config.ohlcv_fetch_retries)
+        delay_seconds = max(0.0, self.config.ohlcv_retry_delay_seconds)
+
+        for attempt in range(retries + 1):
+            started_at = time.monotonic()
+            try:
+                ohlcv = self.exchange.fetch_ohlcv(
+                    symbol, timeframe, limit=limit)
+                elapsed = time.monotonic() - started_at
+                if elapsed >= self.config.slow_analysis_warning_seconds:
+                    logger.warning(
+                        f"Slow OHLCV fetch for {symbol}: {elapsed:.1f}s "
+                        f"(timeframe={timeframe}, limit={limit})")
+                if not ohlcv:
+                    logger.warning(f"No OHLCV data available for {symbol}.")
+                    return None
+                df = pd.DataFrame(
+                    ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                return df
+            except (ccxt.NetworkError, ccxt.ExchangeError) as e:
+                elapsed = time.monotonic() - started_at
+                if attempt >= retries:
+                    logger.error(
+                        f"Error fetching OHLCV data for {symbol} after {elapsed:.1f}s: {e}")
+                    return None
+                wait = delay_seconds * (attempt + 1)
+                logger.warning(
+                    f"Retrying OHLCV fetch for {symbol} after {elapsed:.1f}s error: {e} "
+                    f"(attempt {attempt + 2}/{retries + 1}, wait {wait:.1f}s)")
+                if wait > 0:
+                    time.sleep(wait)
+            except Exception as e:
+                elapsed = time.monotonic() - started_at
+                if attempt >= retries:
+                    logger.error(
+                        f"Unexpected error fetching OHLCV data for {symbol} after {elapsed:.1f}s: {e}")
+                    return None
+                wait = delay_seconds * (attempt + 1)
+                logger.warning(
+                    f"Retrying unexpected OHLCV error for {symbol} after {elapsed:.1f}s: {e} "
+                    f"(attempt {attempt + 2}/{retries + 1}, wait {wait:.1f}s)")
+                if wait > 0:
+                    time.sleep(wait)
+
+        return None
 
     def _calculate_rsi(self, data: pd.Series, period: int) -> float:
         """Calculates the Relative Strength Index (RSI)."""
@@ -2001,6 +2046,8 @@ class CryptoTradingBot:
             'ret_3': ret_3,
             'recommendation': recommendation,
             'score': score,
+            'rule_recommendation': rule_recommendation,
+            'rule_score': rule_score,
             'signal_source': signal_source,
             'signal_confidence': signal_confidence,
         }
@@ -2042,8 +2089,13 @@ class CryptoTradingBot:
         for idx, coin in enumerate(coins_for_detailed_analysis, start=1):
             logger.info(
                 f"🔎 Analysis progress: {idx}/{total_analysis_coins} - {coin}")
+            started_at = time.monotonic()
             current_price = market_data[coin]['price']
             coin_analysis = self._analyze_coin(coin, current_price)
+            elapsed = time.monotonic() - started_at
+            if elapsed >= self.config.slow_analysis_warning_seconds:
+                logger.warning(
+                    f"Slow coin analysis for {coin}: {elapsed:.1f}s")
             if coin_analysis:
                 analysis[coin] = {
                     'price': current_price,
@@ -2433,18 +2485,21 @@ class CryptoTradingBot:
                     0, self.config.max_open_trades - len(self.portfolio.open_trades))
 
                 # Only suggest coins not yet held.
-                top_buy_recommendations = [
+                strict_buy_candidates = [
                     coin for coin, data in market_analysis.items()
                     if coin not in occupied_positions
                     and data.get('recommendation') in ['STRONG BUY', 'BUY']
                     and data.get('score', 0) >= self.config.min_entry_score
-                ][:min(self.config.top_n_for_analysis, available_trade_slots)]
+                ]
+                top_buy_recommendations = strict_buy_candidates[:min(
+                    self.config.top_n_for_analysis, available_trade_slots)]
 
                 # Fallback: fill remaining slots with solid non-SELL candidates.
                 # If exit_on_downtrend is active, exclude down-trend coins from entries.
                 _excluded_signals_fallback = ['SELL', 'WEAK SELL']
                 if self.config.exit_on_downtrend:
                     _excluded_signals_fallback.append('HOLD (Down-Trend)')
+                fallback_candidates = []
                 if self.config.enable_fallback_entry and available_trade_slots > len(top_buy_recommendations):
                     fallback_candidates = [
                         coin for coin, data in market_analysis.items()
@@ -2467,6 +2522,7 @@ class CryptoTradingBot:
 
                 # Optional more aggressive slot filling: use neutral candidates even without RSI filter,
                 # down-trend coins are also excluded when exit_on_downtrend is active.
+                force_fill_candidates = []
                 if self.config.force_fill_slots and available_trade_slots > len(top_buy_recommendations):
                     force_fill_candidates = [
                         coin for coin, data in market_analysis.items()
@@ -2485,6 +2541,35 @@ class CryptoTradingBot:
 
                 logger.info(
                     f"🔍 Market analysis complete. Top {len(top_buy_recommendations)} buy recommendations:")
+
+                if not top_buy_recommendations and market_analysis:
+                    recommendation_mix = dict(Counter(
+                        data.get('recommendation', 'UNKNOWN')
+                        for data in market_analysis.values()
+                    ))
+                    logger.info(
+                        "ℹ️ No entry candidates this round: strict=%d, fallback=%d, force_fill=%d, recommendation_mix=%s",
+                        len(strict_buy_candidates),
+                        len(fallback_candidates),
+                        len(force_fill_candidates),
+                        recommendation_mix,
+                    )
+                    for coin, data in list(market_analysis.items())[:5]:
+                        signal_confidence = data.get('signal_confidence')
+                        confidence_text = ''
+                        if signal_confidence is not None:
+                            confidence_text = f", confidence={float(signal_confidence) * 100:.0f}%"
+                        logger.info(
+                            "  - %s: rec=%s, rule=%s, score=%s, rule_score=%s, RSI=%.2f, source=%s%s",
+                            coin,
+                            data.get('recommendation', 'n/a'),
+                            data.get('rule_recommendation', 'n/a'),
+                            data.get('score', 0),
+                            data.get('rule_score', 0),
+                            float(data.get('rsi', np.nan)),
+                            data.get('signal_source', 'n/a'),
+                            confidence_text,
+                        )
 
                 for i, coin in enumerate(top_buy_recommendations):
                     data = market_analysis.get(coin, {})
