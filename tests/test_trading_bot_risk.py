@@ -259,6 +259,73 @@ def test_entry_momentum_filter_blocks_sharp_pump_ret1(monkeypatch):
     assert reason.startswith("sharp_pump_ret_1")
 
 
+def test_uptrend_entry_filter_blocks_overbought_rules_trade(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.uptrend_entry_gate_enabled = True
+    bot.config.uptrend_entry_max_rsi = 72.0
+
+    passes, reason = bot._passes_uptrend_entry_filter({
+        "recommendation": "HOLD (Up-Trend)",
+        "signal_source": "catboost",
+        "rsi": 74.0,
+        "tabular_buy_proba": 0.30,
+        "tabular_sell_proba": 0.20,
+    })
+
+    assert passes is False
+    assert reason.startswith("rsi_above_uptrend_max")
+
+
+def test_uptrend_entry_filter_blocks_weak_buy_proba(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.uptrend_entry_gate_enabled = True
+    bot.config.uptrend_entry_min_buy_proba = 0.24
+
+    passes, reason = bot._passes_uptrend_entry_filter({
+        "recommendation": "HOLD (Up-Trend)",
+        "signal_source": "catboost",
+        "rsi": 60.0,
+        "tabular_buy_proba": 0.22,
+        "tabular_sell_proba": 0.18,
+    })
+
+    assert passes is False
+    assert reason.startswith("buy_proba_below_uptrend_min")
+
+
+def test_uptrend_entry_filter_allows_stronger_rules_trade(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.uptrend_entry_gate_enabled = True
+    bot.config.uptrend_entry_max_rsi = 72.0
+    bot.config.uptrend_entry_min_buy_proba = 0.24
+    bot.config.uptrend_entry_max_sell_proba = 0.34
+    bot.config.uptrend_entry_min_proba_edge = -0.05
+
+    passes, reason = bot._passes_uptrend_entry_filter({
+        "recommendation": "HOLD (Up-Trend)",
+        "signal_source": "catboost",
+        "rsi": 64.0,
+        "tabular_buy_proba": 0.27,
+        "tabular_sell_proba": 0.31,
+    })
+
+    assert passes is True
+    assert reason == "ok"
+
+
+def test_identifies_rules_uptrend_trade_only_for_rules_source(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+
+    assert bot._is_rules_uptrend_trade({
+        "recommendation": "HOLD (Up-Trend)",
+        "signal_source": "rules",
+    }) is True
+    assert bot._is_rules_uptrend_trade({
+        "recommendation": "HOLD (Up-Trend)",
+        "signal_source": "catboost",
+    }) is False
+
+
 def test_entry_momentum_filter_blocks_sharp_pump_ret3(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.entry_momentum_filter_enabled = True

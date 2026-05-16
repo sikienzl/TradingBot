@@ -256,6 +256,24 @@ class BotConfig:
             os.getenv('DOWNTREND_REVERSAL_FLAT_MAX_PROFIT_PCT', 0.10))
         self.downtrend_reversal_max_hold_seconds = int(
             os.getenv('DOWNTREND_REVERSAL_MAX_HOLD_SECONDS', 240))
+        self.uptrend_entry_gate_enabled = _env_bool(
+            'UPTREND_ENTRY_GATE_ENABLED', True)
+        self.uptrend_entry_max_rsi = float(
+            os.getenv('UPTREND_ENTRY_MAX_RSI', 72.0))
+        self.uptrend_entry_min_buy_proba = float(
+            os.getenv('UPTREND_ENTRY_MIN_BUY_PROBA', 0.24))
+        self.uptrend_entry_max_sell_proba = float(
+            os.getenv('UPTREND_ENTRY_MAX_SELL_PROBA', 0.34))
+        self.uptrend_entry_min_proba_edge = float(
+            os.getenv('UPTREND_ENTRY_MIN_PROBA_EDGE', -0.05))
+        self.uptrend_rules_fast_exit_enabled = _env_bool(
+            'UPTREND_RULES_FAST_EXIT_ENABLED', True)
+        self.uptrend_rules_fast_exit_seconds = int(
+            os.getenv('UPTREND_RULES_FAST_EXIT_SECONDS', 120))
+        self.uptrend_rules_flat_max_profit_pct = float(
+            os.getenv('UPTREND_RULES_FLAT_MAX_PROFIT_PCT', 0.08))
+        self.uptrend_rules_max_hold_seconds = int(
+            os.getenv('UPTREND_RULES_MAX_HOLD_SECONDS', 300))
         # Optional momentum quality filter for new BUY entries.
         self.entry_momentum_filter_enabled = _env_bool(
             'ENTRY_MOMENTUM_FILTER_ENABLED', True)
@@ -1812,6 +1830,52 @@ class CryptoTradingBot:
 
         return True, 'ok'
 
+    def _passes_uptrend_entry_filter(self, coin_data: Dict) -> Tuple[bool, str]:
+        """Allows rules-based up-trend fallback entries only when trend and model quality are not too weak."""
+        recommendation = str(coin_data.get('recommendation', ''))
+        if recommendation != 'HOLD (Up-Trend)':
+            return True, 'not_uptrend'
+
+        if not self.config.uptrend_entry_gate_enabled:
+            return True, 'uptrend_gate_disabled'
+
+        rsi = coin_data.get('rsi')
+        if rsi is None or np.isnan(rsi):
+            return False, 'missing_rsi'
+        if float(rsi) > self.config.uptrend_entry_max_rsi:
+            return False, f"rsi_above_uptrend_max ({float(rsi):.2f} > {self.config.uptrend_entry_max_rsi:.2f})"
+
+        signal_source = str(coin_data.get('signal_source', ''))
+        if signal_source != 'catboost':
+            return False, 'uptrend_requires_catboost'
+
+        buy_proba = coin_data.get('tabular_buy_proba')
+        sell_proba = coin_data.get('tabular_sell_proba')
+        if buy_proba is None or np.isnan(buy_proba):
+            return False, 'missing_buy_proba'
+        if sell_proba is None or np.isnan(sell_proba):
+            return False, 'missing_sell_proba'
+
+        buy_proba = float(buy_proba)
+        sell_proba = float(sell_proba)
+
+        if buy_proba < self.config.uptrend_entry_min_buy_proba:
+            return False, f"buy_proba_below_uptrend_min ({buy_proba:.3f} < {self.config.uptrend_entry_min_buy_proba:.3f})"
+        if sell_proba > self.config.uptrend_entry_max_sell_proba:
+            return False, f"sell_proba_above_uptrend_max ({sell_proba:.3f} > {self.config.uptrend_entry_max_sell_proba:.3f})"
+
+        proba_edge = buy_proba - sell_proba
+        if proba_edge < self.config.uptrend_entry_min_proba_edge:
+            return False, f"proba_edge_below_uptrend_min ({proba_edge:.3f} < {self.config.uptrend_entry_min_proba_edge:.3f})"
+
+        return True, 'ok'
+
+    @staticmethod
+    def _is_rules_uptrend_trade(trade_info: Dict) -> bool:
+        recommendation = str(trade_info.get('recommendation', ''))
+        signal_source = str(trade_info.get('signal_source', ''))
+        return recommendation == 'HOLD (Up-Trend)' and signal_source == 'rules'
+
     def _passes_downtrend_reversal_filter(self, coin_data: Dict) -> Tuple[bool, str]:
         """Allows down-trend fallback entries only for oversold coins with improving CatBoost odds."""
         recommendation = str(coin_data.get('recommendation', ''))
@@ -2506,6 +2570,33 @@ class CryptoTradingBot:
                         f'({pnl_pct:+.2f}% <= {self.config.downtrend_reversal_flat_max_profit_pct:.2f}% '
                         f'after {int(hold_seconds)}s, signal: {current_signal})'
                     )
+            is_rules_uptrend_trade = self._is_rules_uptrend_trade(trade_info)
+            if (
+                exit_reason is None
+                and is_rules_uptrend_trade
+                and self.config.uptrend_rules_fast_exit_enabled
+                and market_analysis is not None
+            ):
+                current_signal = market_analysis.get(
+                    coin, {}).get('recommendation', '')
+                if (
+                    self.config.uptrend_rules_max_hold_seconds > 0
+                    and hold_seconds >= self.config.uptrend_rules_max_hold_seconds
+                ):
+                    exit_reason = (
+                        '⏱️ UPTREND-RULES-MAX-HOLD '
+                        f'({int(hold_seconds)}s >= {self.config.uptrend_rules_max_hold_seconds}s)'
+                    )
+                elif (
+                    hold_seconds >= self.config.uptrend_rules_fast_exit_seconds
+                    and pnl_pct <= self.config.uptrend_rules_flat_max_profit_pct
+                    and current_signal not in {'BUY', 'STRONG BUY'}
+                ):
+                    exit_reason = (
+                        '📉 UPTREND-RULES-FAST-EXIT '
+                        f'({pnl_pct:+.2f}% <= {self.config.uptrend_rules_flat_max_profit_pct:.2f}% '
+                        f'after {int(hold_seconds)}s, signal: {current_signal})'
+                    )
             if current_price <= stop_loss_level:
                 exit_reason = f"🚨 ATR-STOP-LOSS (Stop: {stop_loss_level:.4f})"
             elif (not self.config.partial_take_profit_enabled) and current_price >= take_profit_level:
@@ -2606,6 +2697,7 @@ class CryptoTradingBot:
                         if data.get('score', 0) >= self.config.fallback_min_score
                         and data.get('recommendation') not in _excluded_signals_fallback
                         and self._passes_downtrend_reversal_filter(data)[0]
+                        and self._passes_uptrend_entry_filter(data)[0]
                         and not np.isnan(data.get('rsi', np.nan))
                         and data.get('rsi', np.nan) <= self.config.fallback_max_rsi
                     ]
@@ -2630,6 +2722,7 @@ class CryptoTradingBot:
                         and data.get('score', 0) >= self.config.force_fill_min_score
                         and data.get('recommendation') not in _excluded_signals_fallback
                         and self._passes_downtrend_reversal_filter(data)[0]
+                        and self._passes_uptrend_entry_filter(data)[0]
                     ]
                     if force_fill_candidates:
                         missing_slots = available_trade_slots - \
