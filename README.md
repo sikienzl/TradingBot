@@ -114,6 +114,7 @@ python3 trading_bot.py
 ```
 - Set `DRY_RUN=true` (default) to simulate trades without spending real funds.
 - Set `SIMULATE_DATA=true` to run fully offline without an exchange connection.
+- Set `SIMULATION_REGIME=uptrend|downtrend|sideways|crash|recovery|neutral|mixed` to shape the offline market regime.
 - Trades are recorded to `trade_journal.csv`.
 
 Simulation helper scripts:
@@ -125,6 +126,12 @@ Defaults:
 - Uses `.env.simulation.example`
 - Writes logs to `logs/sim_bot.log`
 - Stores PID in `logs/sim_bot.pid`
+
+Simulation regime comparison helper:
+```sh
+python3 scripts/compare_simulation_regimes.py --coins BTC,ETH,SOL,CHZ,VVV
+```
+This runs the bot's own market analysis against multiple synthetic regimes and prints the top recommendations side by side.
 
 ### 4. Backtesting
 ```sh
@@ -148,6 +155,8 @@ All parameters are set via `.env` (see `.env.example` for the full list). Key va
 | `BASE_CURRENCY` | `EUR` | Quote currency |
 | `DRY_RUN` | `true` | Simulate trades (no real orders) |
 | `SIMULATE_DATA` | `false` | Use generated data instead of live API |
+| `SIMULATION_SEED` | `42` | Deterministic seed for generated simulation data |
+| `SIMULATION_REGIME` | `neutral` | Synthetic market regime: `neutral`, `uptrend`, `downtrend`, `sideways`, `crash`, `recovery`, `mixed` |
 | `TRADE_AMOUNT` | `10` | EUR per trade |
 | `MAX_OPEN_TRADES` | `4` | Maximum concurrent positions |
 | `OHLCV_TIMEFRAME` | `1h` | Candle interval |
@@ -158,6 +167,25 @@ All parameters are set via `.env` (see `.env.example` for the full list). Key va
 | `TABULAR_RESEARCH_SIGNAL_PATH` | `./data/research_signal_latest.json` | Latest AutoResearch JSON used as model input features |
 | `AUTO_TUNE_TABULAR_CONFIDENCE` | `true` | Auto-adjust CatBoost threshold |
 | `USE_ML_MODEL` | `false` | Enable LLM signal (GPU recommended) |
+
+### Simulation regimes
+
+When `SIMULATE_DATA=true`, the bot can emulate different market states while staying deterministic for a fixed `SIMULATION_SEED`.
+
+- `neutral`: balanced oscillating market with moderate volume
+- `uptrend`: rising prices with healthier trend persistence
+- `downtrend`: falling prices with somewhat heavier defensive volume
+- `sideways`: flat range-bound action with lower average activity
+- `crash`: sharp downside move with distinctly higher volume
+- `recovery`: selloff followed by rebound behavior
+- `mixed`: assigns different regimes per coin so the same run contains both stronger and weaker assets
+
+Quick examples:
+
+```sh
+SIMULATE_DATA=true SIMULATION_REGIME=crash python3 trading_bot.py --backtest
+SIMULATE_DATA=true SIMULATION_REGIME=uptrend python3 scripts/compare_simulation_regimes.py --coins BTC,ETH,SOL
+```
 
 ## AutoResearch -> AI model features
 

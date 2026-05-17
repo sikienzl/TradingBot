@@ -4,6 +4,7 @@ import logging
 import csv
 import json
 import shutil
+import math
 from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import time
@@ -202,6 +203,9 @@ class BotConfig:
         self.check_interval = int(os.getenv('CHECK_INTERVAL', 100))
         self.dry_run = _env_bool('DRY_RUN', True)
         self.simulate_data = _env_bool('SIMULATE_DATA', False)
+        self.simulation_seed = int(os.getenv('SIMULATION_SEED', 42))
+        self.simulation_regime = _env_str(
+            'SIMULATION_REGIME', 'neutral').lower()
         self.stop_loss_pct = float(
             os.getenv('STOP_LOSS_PCT', 0.05))  # 5% loss
         self.take_profit_pct = float(
@@ -237,6 +241,8 @@ class BotConfig:
         self.force_fill_slots = _env_bool('FORCE_FILL_SLOTS', False)
         # Minimum score for forced slot filling (without RSI limit)
         self.force_fill_min_score = int(os.getenv('FORCE_FILL_MIN_SCORE', 35))
+        self.defensive_entry_mode_enabled = _env_bool(
+            'DEFENSIVE_ENTRY_MODE_ENABLED', True)
         # Guard aggressive fallback entries in down-trends behind a stricter reversal filter.
         self.downtrend_reversal_entry_enabled = _env_bool(
             'DOWNTREND_REVERSAL_ENTRY_ENABLED', True)
@@ -248,6 +254,12 @@ class BotConfig:
             os.getenv('DOWNTREND_REVERSAL_MAX_SELL_PROBA', 0.35))
         self.downtrend_reversal_min_proba_edge = float(
             os.getenv('DOWNTREND_REVERSAL_MIN_PROBA_EDGE', 0.02))
+        self.downtrend_reversal_min_ret_1 = float(
+            os.getenv('DOWNTREND_REVERSAL_MIN_RET_1', 0.0))
+        self.downtrend_reversal_min_ret_3 = float(
+            os.getenv('DOWNTREND_REVERSAL_MIN_RET_3', -0.01))
+        self.downtrend_reversal_min_macd_hist = float(
+            os.getenv('DOWNTREND_REVERSAL_MIN_MACD_HIST', 0.0))
         self.downtrend_reversal_fast_exit_enabled = _env_bool(
             'DOWNTREND_REVERSAL_FAST_EXIT_ENABLED', True)
         self.downtrend_reversal_fast_exit_seconds = int(
@@ -467,6 +479,9 @@ class CryptoTradingBot:
         self.consecutive_losses: int = 0
         self.buy_pause_until_utc: Optional[datetime] = None
         self.exchange = self._initialize_exchange()
+        self._simulation_cache_iteration: Optional[int] = None
+        self._simulation_ohlcv_cache: Dict[Tuple[int,
+                                                 str, str, int], pd.DataFrame] = {}
         # List of tradeable pairs (e.g. BTC/EUR)
         self.all_symbols: List[str] = []
         self.all_coins: List[str] = []   # List of base assets (e.g. BTC)
@@ -1523,17 +1538,14 @@ class CryptoTradingBot:
         """Fetches current ticker data (price, volume) for all relevant coins."""
         market_data: Dict[str, Dict] = {}
         if self.config.simulate_data:
-            # Simulated data for testing
             for coin in self.all_coins:
-                # Example price
-                sim_price = 100 * (0.9 + 0.2 * np.random.random())
-                if coin == 'BTC':
-                    sim_price = 74000 * (0.9 + 0.2 * np.random.random())
-                elif coin == 'ETH':
-                    sim_price = 2500 * (0.9 + 0.2 * np.random.random())
-                # Example volume
-                sim_volume = int(100000 + 900000 * np.random.random())
-                market_data[coin] = {'price': sim_price, 'volume': sim_volume}
+                symbol = f'{coin}/{self.config.base_currency}'
+                sim_df = self._build_simulated_ohlcv_data(
+                    symbol, timeframe='1h', limit=100)
+                market_data[coin] = {
+                    'price': float(sim_df['close'].iloc[-1]),
+                    'volume': float(sim_df['volume'].tail(24).mean()),
+                }
             return market_data
 
         if self.exchange is None:
@@ -1591,27 +1603,181 @@ class CryptoTradingBot:
 
         return market_data
 
+    def _simulation_series_seed(self, symbol: str, timeframe: str) -> int:
+        token = f"{symbol}|{timeframe}|{self.config.simulation_seed}"
+        checksum = sum((index + 1) * ord(char)
+                       for index, char in enumerate(token))
+        return checksum % (2 ** 32)
+
+    def _simulation_time_delta(self, timeframe: str) -> timedelta:
+        unit = timeframe[-1].lower()
+        value = int(timeframe[:-1]) if timeframe[:-1].isdigit() else 1
+        if unit == 'm':
+            return timedelta(minutes=value)
+        if unit == 'h':
+            return timedelta(hours=value)
+        if unit == 'd':
+            return timedelta(days=value)
+        return timedelta(hours=1)
+
+    def _simulation_base_price(self, coin: str) -> float:
+        defaults = {
+            'BTC': 74000.0,
+            'ETH': 2500.0,
+            'SOL': 160.0,
+            'XRP': 0.55,
+            'ADA': 0.45,
+            'DOGE': 0.16,
+            'TRX': 0.12,
+            'CHZ': 0.11,
+            'VVV': 5.5,
+        }
+        if coin in defaults:
+            return defaults[coin]
+        checksum = sum(ord(char) for char in coin)
+        return 10.0 + (checksum % 190)
+
+    def _simulation_base_volume(self, coin: str) -> float:
+        defaults = {
+            'BTC': 2_000_000.0,
+            'ETH': 1_400_000.0,
+            'SOL': 900_000.0,
+            'XRP': 700_000.0,
+            'ADA': 550_000.0,
+            'DOGE': 600_000.0,
+            'TRX': 450_000.0,
+            'CHZ': 280_000.0,
+            'VVV': 180_000.0,
+        }
+        if coin in defaults:
+            return defaults[coin]
+        checksum = sum((index + 3) * ord(char)
+                       for index, char in enumerate(coin))
+        return float(120_000 + (checksum % 500_000))
+
+    def _simulation_regime_for_coin(self, coin: str) -> str:
+        regime = (self.config.simulation_regime or 'neutral').lower()
+        if regime != 'mixed':
+            return regime
+
+        regimes = ['uptrend', 'sideways', 'downtrend', 'recovery']
+        checksum = sum((index + 5) * ord(char)
+                       for index, char in enumerate(coin))
+        return regimes[checksum % len(regimes)]
+
+    def _simulation_regime_shape(self, regime: str, bucket_index: int, phase: float) -> Tuple[float, float, float]:
+        relative = bucket_index - self.iteration
+
+        if regime == 'uptrend':
+            price_bias = 0.16 * math.tanh((relative + 36.0) / 18.0)
+            volume_multiplier = 1.00 + 0.12 * \
+                math.sin(bucket_index / 4.0 + phase)
+            wave_scale = 0.85
+        elif regime == 'downtrend':
+            price_bias = -0.16 * math.tanh((relative + 36.0) / 18.0)
+            volume_multiplier = 1.05 + 0.16 * \
+                abs(math.sin(bucket_index / 5.0 + phase))
+            wave_scale = 0.95
+        elif regime == 'sideways':
+            price_bias = 0.02 * math.sin(relative / 6.0 + phase)
+            volume_multiplier = 0.78 + 0.06 * \
+                math.cos(bucket_index / 7.0 + phase)
+            wave_scale = 0.35
+        elif regime == 'crash':
+            crash_step = 1.0 / (1.0 + math.exp(-(relative + 6.0) / 1.2))
+            price_bias = -0.30 * crash_step + 0.01 * \
+                math.sin(bucket_index / 4.0 + phase)
+            volume_multiplier = 1.20 + 0.70 * crash_step
+            wave_scale = 1.35
+        elif regime == 'recovery':
+            dip = -0.18 * math.exp(-((relative + 18.0) ** 2) / 90.0)
+            bounce = 0.16 / (1.0 + math.exp(-(relative + 6.0) / 1.6))
+            price_bias = dip + bounce + 0.02 * \
+                math.sin(bucket_index / 6.0 + phase)
+            volume_multiplier = 1.00 + 0.22 * \
+                abs(math.sin(bucket_index / 4.0 + phase))
+            wave_scale = 0.90
+        else:
+            price_bias = 0.03 * math.sin(relative / 8.0 + phase)
+            volume_multiplier = 0.95 + 0.10 * \
+                math.sin(bucket_index / 3.0 + phase * 0.5)
+            wave_scale = 0.70
+
+        return price_bias, max(0.25, volume_multiplier), wave_scale
+
+    def _build_simulated_ohlcv_data(self, symbol: str, timeframe: str = '1h', limit: int = 100) -> pd.DataFrame:
+        if self._simulation_cache_iteration != self.iteration:
+            self._simulation_ohlcv_cache = {}
+            self._simulation_cache_iteration = self.iteration
+
+        cache_key = (self.iteration, symbol, timeframe, limit)
+        cached = self._simulation_ohlcv_cache.get(cache_key)
+        if cached is not None:
+            return cached.copy()
+
+        coin = symbol.split('/')[0]
+        regime = self._simulation_regime_for_coin(coin)
+        rng = np.random.default_rng(
+            self._simulation_series_seed(symbol, timeframe))
+        interval = self._simulation_time_delta(timeframe)
+        end_time = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+        base_price = self._simulation_base_price(coin)
+        base_volume = self._simulation_base_volume(coin)
+
+        phase = rng.uniform(0.0, 2.0 * math.pi)
+        volatility = rng.uniform(0.0025, 0.0120)
+        trend_strength = rng.uniform(0.01, 0.04)
+
+        def close_for_bucket(bucket_index: int) -> float:
+            regime_bias, _, wave_scale = self._simulation_regime_shape(
+                regime, bucket_index, phase)
+            macro = 0.10 * math.sin(bucket_index / 18.0 + phase)
+            micro = 0.03 * math.cos(bucket_index / 5.0 + phase * 0.7)
+            local_trend = trend_strength * \
+                math.sin(bucket_index / 9.0 + phase * 0.3)
+            regime_cycle = 0.02 * \
+                math.sin((self.iteration + bucket_index) / 7.0 + phase * 1.3)
+            price_factor = max(0.25, 1.0 + regime_bias + wave_scale * (
+                macro + micro + local_trend + regime_cycle))
+            return base_price * price_factor
+
+        rows = []
+        for idx in range(limit):
+            timestamp = end_time - interval * (limit - 1 - idx)
+            bucket_index = self.iteration - (limit - 1 - idx)
+            close_price = close_for_bucket(bucket_index)
+            open_price = close_for_bucket(bucket_index - 1)
+            _, volume_multiplier, _ = self._simulation_regime_shape(
+                regime, bucket_index, phase)
+            wick_up = abs(math.sin(bucket_index * 0.91 + phase)
+                          ) * (0.002 + volatility * 0.5)
+            wick_down = abs(math.cos(bucket_index * 1.07 + phase)
+                            ) * (0.002 + volatility * 0.5)
+            high_price = max(open_price, close_price) * (1.0 + wick_up)
+            low_price = min(open_price, close_price) * \
+                max(0.2, 1.0 - wick_down)
+            price_move = abs(close_price - open_price) / max(open_price, 1e-9)
+            volume = max(base_volume * 0.08,
+                         base_volume * volume_multiplier * (1.0 + price_move * 8.0))
+
+            rows.append([
+                timestamp,
+                float(open_price),
+                float(high_price),
+                float(low_price),
+                float(close_price),
+                float(volume),
+            ])
+
+        df = pd.DataFrame(
+            rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        self._simulation_ohlcv_cache[cache_key] = df
+        return df.copy()
+
     def _fetch_ohlcv_data(self, symbol: str, timeframe: str = '1h', limit: int = 100) -> Optional[pd.DataFrame]:
         """Fetches OHLCV data for a symbol."""
         if self.config.simulate_data or self.exchange is None:
-            # Simulated OHLCV data
-            data = []
-            current_time = datetime.now()
-            for i in range(limit):
-                timestamp = current_time - timedelta(hours=(limit - 1 - i))
-                open_price = 100 + np.random.randn() * 2  # Example values
-                close_price = open_price + np.random.randn() * 0.5
-                high_price = max(open_price, close_price) + \
-                    np.random.randn() * 0.2
-                low_price = min(open_price, close_price) - \
-                    np.random.randn() * 0.2
-                volume = 1000 + np.random.randn() * 200
-                data.append([timestamp.timestamp() * 1000, open_price,
-                            high_price, low_price, close_price, volume])
-            df = pd.DataFrame(
-                data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            return df
+            return self._build_simulated_ohlcv_data(symbol, timeframe=timeframe, limit=limit)
 
         retries = max(0, self.config.ohlcv_fetch_retries)
         delay_seconds = max(0.0, self.config.ohlcv_retry_delay_seconds)
@@ -1866,6 +2032,37 @@ class CryptoTradingBot:
 
         return True, 'ok'
 
+    def _entry_market_mode(self, market_analysis: Dict[str, Dict]) -> str:
+        """Classifies the market to suppress aggressive entry filling in weak environments."""
+        if not market_analysis:
+            return 'normal'
+
+        if self.config.simulate_data:
+            regime = (self.config.simulation_regime or 'neutral').lower()
+            if regime in {'crash', 'downtrend'}:
+                return 'defensive'
+            if regime in {'recovery', 'sideways', 'mixed'}:
+                return 'cautious'
+
+        bearish_signals = {'SELL', 'WEAK SELL', 'HOLD (Down-Trend)'}
+        bullish_signals = {'BUY', 'STRONG BUY', 'HOLD (Up-Trend)'}
+        bearish = sum(
+            1 for data in market_analysis.values()
+            if data.get('recommendation') in bearish_signals
+        )
+        bullish = sum(
+            1 for data in market_analysis.values()
+            if data.get('recommendation') in bullish_signals
+        )
+        total = max(1, len(market_analysis))
+        bearish_share = bearish / total
+
+        if bearish_share >= 0.60 or bearish >= bullish + 2:
+            return 'defensive'
+        if bearish_share >= 0.40 or bearish > bullish:
+            return 'cautious'
+        return 'normal'
+
     @staticmethod
     def _filter_reason_code(reason: str) -> str:
         """Normalizes verbose filter reasons into stable summary keys."""
@@ -2080,6 +2277,33 @@ class CryptoTradingBot:
             return False, (
                 f"buy_sell_edge_too_small ({buy_proba - sell_proba:.3f} < "
                 f"{self.config.downtrend_reversal_min_proba_edge:.3f})"
+            )
+
+        ret_1 = coin_data.get('ret_1')
+        if ret_1 is None or np.isnan(ret_1):
+            return False, 'missing_ret_1'
+        if float(ret_1) < self.config.downtrend_reversal_min_ret_1:
+            return False, (
+                f"ret_1_below_reversal_min ({float(ret_1):.4f} < "
+                f"{self.config.downtrend_reversal_min_ret_1:.4f})"
+            )
+
+        ret_3 = coin_data.get('ret_3')
+        if ret_3 is None or np.isnan(ret_3):
+            return False, 'missing_ret_3'
+        if float(ret_3) < self.config.downtrend_reversal_min_ret_3:
+            return False, (
+                f"ret_3_below_reversal_min ({float(ret_3):.4f} < "
+                f"{self.config.downtrend_reversal_min_ret_3:.4f})"
+            )
+
+        macd_hist = coin_data.get('macd_hist')
+        if macd_hist is None or np.isnan(macd_hist):
+            return False, 'missing_macd_hist'
+        if float(macd_hist) < self.config.downtrend_reversal_min_macd_hist:
+            return False, (
+                f"macd_hist_below_reversal_min ({float(macd_hist):.4f} < "
+                f"{self.config.downtrend_reversal_min_macd_hist:.4f})"
             )
 
         return True, 'downtrend_reversal_ok'
@@ -2850,6 +3074,7 @@ class CryptoTradingBot:
                     coin: self._passes_uptrend_entry_filter(data)
                     for coin, data in market_analysis.items()
                 }
+                entry_market_mode = self._entry_market_mode(market_analysis)
 
                 # Only suggest coins not yet held.
                 strict_buy_candidates = [
@@ -2867,7 +3092,15 @@ class CryptoTradingBot:
                 if self.config.exit_on_downtrend:
                     _excluded_signals_fallback.append('HOLD (Down-Trend)')
                 fallback_candidates = []
-                if self.config.enable_fallback_entry and available_trade_slots > len(top_buy_recommendations):
+                fallback_allowed = (
+                    self.config.enable_fallback_entry
+                    and available_trade_slots > len(top_buy_recommendations)
+                    and (
+                        not self.config.defensive_entry_mode_enabled
+                        or entry_market_mode != 'defensive'
+                    )
+                )
+                if fallback_allowed:
                     fallback_candidates = [
                         coin for coin, data in market_analysis.items()
                         if coin not in occupied_positions
@@ -2892,7 +3125,15 @@ class CryptoTradingBot:
                 # Optional more aggressive slot filling: use neutral candidates even without RSI filter,
                 # down-trend coins are also excluded when exit_on_downtrend is active.
                 force_fill_candidates = []
-                if self.config.force_fill_slots and available_trade_slots > len(top_buy_recommendations):
+                force_fill_allowed = (
+                    self.config.force_fill_slots
+                    and available_trade_slots > len(top_buy_recommendations)
+                    and (
+                        not self.config.defensive_entry_mode_enabled
+                        or entry_market_mode == 'normal'
+                    )
+                )
+                if force_fill_allowed:
                     force_fill_candidates = [
                         coin for coin, data in market_analysis.items()
                         if coin not in occupied_positions
@@ -2925,11 +3166,12 @@ class CryptoTradingBot:
                         and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
                     )
                     logger.info(
-                        "ℹ️ No entry candidates this round: strict=%d, fallback=%d, force_fill=%d, downtrend_reversal_eligible=%d, recommendation_mix=%s",
+                        "ℹ️ No entry candidates this round: strict=%d, fallback=%d, force_fill=%d, downtrend_reversal_eligible=%d, entry_mode=%s, recommendation_mix=%s",
                         len(strict_buy_candidates),
                         len(fallback_candidates),
                         len(force_fill_candidates),
                         downtrend_reversal_eligible,
+                        entry_market_mode,
                         recommendation_mix,
                     )
                     self._log_blocked_uptrend_candidates(

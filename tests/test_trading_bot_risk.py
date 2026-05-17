@@ -260,6 +260,66 @@ def test_entry_momentum_filter_blocks_sharp_pump_ret1(monkeypatch):
     assert reason.startswith("sharp_pump_ret_1")
 
 
+def test_simulated_market_data_is_deterministic_within_iteration(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+
+    first = bot._get_market_data()
+    second = bot._get_market_data()
+
+    assert first == second
+
+
+def test_simulated_market_data_matches_latest_simulated_ohlcv(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+
+    market_data = bot._get_market_data()
+    btc_df = bot._fetch_ohlcv_data("BTC/EUR", timeframe="1h", limit=100)
+
+    assert market_data["BTC"]["price"] == float(btc_df["close"].iloc[-1])
+    assert market_data["BTC"]["volume"] > 0
+    assert (btc_df["high"] >= btc_df[["open", "close"]].max(axis=1)).all()
+    assert (btc_df["low"] <= btc_df[["open", "close"]].min(axis=1)).all()
+
+
+def test_simulated_latest_close_is_limit_independent(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+
+    short_df = bot._fetch_ohlcv_data("BTC/EUR", timeframe="1h", limit=8)
+    long_df = bot._fetch_ohlcv_data("BTC/EUR", timeframe="1h", limit=100)
+
+    assert float(short_df["close"].iloc[-1]
+                 ) == float(long_df["close"].iloc[-1])
+
+
+def test_simulated_market_data_changes_between_iterations(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+
+    first_btc_price = bot._get_market_data()["BTC"]["price"]
+    bot.iteration += 1
+    second_btc_price = bot._get_market_data()["BTC"]["price"]
+
+    assert first_btc_price != second_btc_price
+
+
+def test_simulated_uptrend_regime_rises_over_window(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.simulation_regime = "uptrend"
+
+    btc_df = bot._fetch_ohlcv_data("BTC/EUR", timeframe="1h", limit=60)
+
+    assert float(btc_df["close"].iloc[-1]) > float(btc_df["close"].iloc[0])
+
+
+def test_simulated_crash_regime_drops_over_window(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.simulation_regime = "crash"
+
+    btc_df = bot._fetch_ohlcv_data("BTC/EUR", timeframe="1h", limit=60)
+
+    assert float(btc_df["close"].iloc[-1]) < float(btc_df["close"].iloc[0])
+    assert float(btc_df["volume"].iloc[-1]) > 0
+
+
 def test_uptrend_entry_filter_blocks_overbought_rules_trade(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.uptrend_entry_gate_enabled = True
@@ -348,6 +408,82 @@ def test_downtrend_reversal_filter_blocks_weak_buy_proba(monkeypatch):
 
     assert passes is False
     assert reason.startswith("buy_proba_below_min")
+
+
+def test_downtrend_reversal_filter_requires_positive_confirmation(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.downtrend_reversal_entry_enabled = True
+    bot.config.downtrend_reversal_max_rsi = 20.0
+    bot.config.downtrend_reversal_min_buy_proba = 0.22
+    bot.config.downtrend_reversal_max_sell_proba = 0.30
+    bot.config.downtrend_reversal_min_proba_edge = 0.07
+    bot.config.downtrend_reversal_min_ret_1 = 0.0
+
+    passes, reason = bot._passes_downtrend_reversal_filter({
+        "recommendation": "HOLD (Down-Trend)",
+        "signal_source": "catboost",
+        "rsi": 18.0,
+        "tabular_buy_proba": 0.30,
+        "tabular_sell_proba": 0.10,
+        "ret_1": -0.01,
+        "ret_3": 0.02,
+        "macd_hist": 0.05,
+    })
+
+    assert passes is False
+    assert reason.startswith("ret_1_below_reversal_min")
+
+
+def test_downtrend_reversal_filter_allows_confirmed_reversal(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.downtrend_reversal_entry_enabled = True
+    bot.config.downtrend_reversal_max_rsi = 20.0
+    bot.config.downtrend_reversal_min_buy_proba = 0.22
+    bot.config.downtrend_reversal_max_sell_proba = 0.30
+    bot.config.downtrend_reversal_min_proba_edge = 0.07
+    bot.config.downtrend_reversal_min_ret_1 = 0.0
+    bot.config.downtrend_reversal_min_ret_3 = -0.01
+    bot.config.downtrend_reversal_min_macd_hist = 0.0
+
+    passes, reason = bot._passes_downtrend_reversal_filter({
+        "recommendation": "HOLD (Down-Trend)",
+        "signal_source": "catboost",
+        "rsi": 18.0,
+        "tabular_buy_proba": 0.30,
+        "tabular_sell_proba": 0.10,
+        "ret_1": 0.01,
+        "ret_3": 0.03,
+        "macd_hist": 0.05,
+    })
+
+    assert passes is True
+    assert reason == "downtrend_reversal_ok"
+
+
+def test_entry_market_mode_detects_defensive_simulation_regime(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.simulation_regime = "crash"
+
+    mode = bot._entry_market_mode({
+        "BTC": {"recommendation": "BUY"},
+        "ETH": {"recommendation": "HOLD (Up-Trend)"},
+    })
+
+    assert mode == "defensive"
+
+
+def test_entry_market_mode_detects_bearish_live_mix(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.simulate_data = False
+
+    mode = bot._entry_market_mode({
+        "BTC": {"recommendation": "HOLD (Down-Trend)"},
+        "ETH": {"recommendation": "WEAK SELL"},
+        "SOL": {"recommendation": "SELL"},
+        "XRP": {"recommendation": "BUY"},
+    })
+
+    assert mode == "defensive"
 
 
 def test_logs_blocked_buy_attempt_summary(monkeypatch, caplog):
