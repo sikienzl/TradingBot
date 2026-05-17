@@ -133,6 +133,13 @@ python3 scripts/compare_simulation_regimes.py --coins BTC,ETH,SOL,CHZ,VVV
 ```
 This runs the bot's own market analysis against multiple synthetic regimes and prints the top recommendations side by side.
 
+Pi wrappers for the comparison helper:
+```sh
+bash scripts/run_compare_simulation_regimes_on_pi.sh --coins BTC,ETH,SOL --regimes uptrend,crash,mixed --top 3
+bash scripts/run_compare_simulation_standard_profiles_on_pi.sh
+```
+The first wrapper runs the comparison on the Raspberry Pi with the bot's service user and virtualenv. The second wrapper executes the common default profile set (`uptrend,crash,mixed`) for the standard coin basket. On the Pi itself, use `PI_HOST=local` to avoid an extra SSH hop.
+
 ### 4. Backtesting
 ```sh
 python3 trading_bot.py --backtest
@@ -185,6 +192,7 @@ Quick examples:
 ```sh
 SIMULATE_DATA=true SIMULATION_REGIME=crash python3 trading_bot.py --backtest
 SIMULATE_DATA=true SIMULATION_REGIME=uptrend python3 scripts/compare_simulation_regimes.py --coins BTC,ETH,SOL
+PI_HOST=local bash scripts/run_compare_simulation_standard_profiles_on_pi.sh
 ```
 
 ## AutoResearch -> AI model features
