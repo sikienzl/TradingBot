@@ -523,11 +523,12 @@ def test_entry_market_mode_mixed_simulation_can_escalate_to_defensive(monkeypatc
 
 def test_lossmaker_exclusions_are_merged_into_excluded_coins(monkeypatch):
     monkeypatch.setenv("EXCLUDED_COINS", "USDT")
-    monkeypatch.setenv("LOSSMAKER_EXCLUDED_COINS", "ZEC,HYPE,TON")
+    monkeypatch.setenv("LOSSMAKER_EXCLUDED_COINS", "ZEC,HYPE,TON,BTC,XRP")
 
     config = BotConfig()
 
-    assert {"USDT", "ZEC", "HYPE", "TON"}.issubset(config.excluded_coins)
+    assert {"USDT", "ZEC", "HYPE", "TON", "BTC",
+            "XRP"}.issubset(config.excluded_coins)
 
 
 def test_logs_blocked_buy_attempt_summary(monkeypatch, caplog):

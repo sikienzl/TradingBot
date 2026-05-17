@@ -219,7 +219,7 @@ class BotConfig:
         configured_excluded_coins = {c.strip().upper() for c in os.getenv(
             'EXCLUDED_COINS', 'USDC,USDT,EURT,DAI,TUSD,USDP,FDUSD,USDE').split(',') if c.strip()}
         lossmaker_excluded_coins = {c.strip().upper() for c in os.getenv(
-            'LOSSMAKER_EXCLUDED_COINS', 'ZEC,HYPE,TON').split(',') if c.strip()}
+            'LOSSMAKER_EXCLUDED_COINS', 'ZEC,HYPE,TON,BTC,XRP').split(',') if c.strip()}
         self.excluded_coins = configured_excluded_coins | lossmaker_excluded_coins
         # Amount in base currency per trade
         self.trade_amount = float(os.getenv('TRADE_AMOUNT', 20))
