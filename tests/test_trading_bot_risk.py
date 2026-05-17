@@ -460,6 +460,26 @@ def test_downtrend_reversal_filter_allows_confirmed_reversal(monkeypatch):
     assert reason == "downtrend_reversal_ok"
 
 
+def test_downtrend_reversal_filter_blocks_non_allowed_coin(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.downtrend_reversal_allowed_coins = {"ETH"}
+
+    passes, reason = bot._passes_downtrend_reversal_filter({
+        "coin": "BTC",
+        "recommendation": "HOLD (Down-Trend)",
+        "signal_source": "catboost",
+        "rsi": 18.0,
+        "tabular_buy_proba": 0.30,
+        "tabular_sell_proba": 0.10,
+        "ret_1": 0.01,
+        "ret_3": 0.03,
+        "macd_hist": 0.05,
+    })
+
+    assert passes is False
+    assert reason == "coin_not_allowed_for_reversal (BTC)"
+
+
 def test_entry_market_mode_detects_defensive_simulation_regime(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.simulation_regime = "crash"
@@ -499,6 +519,15 @@ def test_entry_market_mode_mixed_simulation_can_escalate_to_defensive(monkeypatc
     })
 
     assert mode == "defensive"
+
+
+def test_lossmaker_exclusions_are_merged_into_excluded_coins(monkeypatch):
+    monkeypatch.setenv("EXCLUDED_COINS", "USDT")
+    monkeypatch.setenv("LOSSMAKER_EXCLUDED_COINS", "ZEC,HYPE,TON")
+
+    config = BotConfig()
+
+    assert {"USDT", "ZEC", "HYPE", "TON"}.issubset(config.excluded_coins)
 
 
 def test_logs_blocked_buy_attempt_summary(monkeypatch, caplog):
@@ -584,6 +613,57 @@ def test_uptrend_rules_fast_exit_closes_flat_rules_trade(monkeypatch):
     assert "UPTREND-RULES-FAST-EXIT" in executed["reason"]
     assert "signal: HOLD (Up-Trend)" in executed["reason"]
     assert "TRX" not in bot.portfolio.open_trades
+
+
+def test_downtrend_reversal_weak_signal_exit_closes_trade_early(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.partial_take_profit_enabled = False
+    bot.config.trailing_stop_enabled = False
+    bot.config.break_even_enabled = False
+    bot.config.max_hold_seconds = 0
+    bot.config.exit_on_downtrend = False
+    bot.config.downtrend_reversal_fast_exit_enabled = True
+    bot.config.downtrend_reversal_fast_exit_seconds = 120
+    bot.config.downtrend_reversal_flat_max_profit_pct = 0.10
+    bot.config.downtrend_reversal_weak_signal_exit_seconds = 45
+    bot.config.downtrend_reversal_weak_signal_max_profit_pct = 0.02
+    bot.config.downtrend_reversal_max_hold_seconds = 240
+
+    bot.portfolio.cash = 0.0
+    bot.portfolio.holdings["ETH"] = 1.0
+    bot.portfolio.open_trades["ETH"] = {
+        "buy_price": 100.0,
+        "amount_coin": 1.0,
+        "amount_base": 100.0,
+        "timestamp": datetime.now() - timedelta(seconds=60),
+        "peak_price": 100.05,
+        "partial_tp_taken": False,
+        "partial_tp_timestamp": None,
+        "signal_source": "catboost",
+        "signal_confidence": 0.61,
+        "recommendation": "HOLD (Down-Trend)",
+    }
+    monkeypatch.setattr(bot, "_get_atr_for_coin", lambda coin, period=14: 5.0)
+
+    executed = {}
+
+    def _fake_execute_trade(coin, action, price, amount_in_base_currency, atr=None, signal_source='rules', signal_confidence=None, recommendation='HOLD', reason=''):
+        executed["coin"] = coin
+        executed["action"] = action
+        executed["reason"] = reason
+        return True
+
+    monkeypatch.setattr(bot, "_execute_trade", _fake_execute_trade)
+
+    bot._manage_open_trades(
+        {"ETH": {"price": 100.0}},
+        {"ETH": {"recommendation": "HOLD (Down-Trend)"}},
+    )
+
+    assert executed["coin"] == "ETH"
+    assert executed["action"] == "sell"
+    assert "DOWNTREND-REVERSAL-WEAK-SIGNAL-EXIT" in executed["reason"]
+    assert "ETH" not in bot.portfolio.open_trades
 
 
 def test_entry_momentum_filter_blocks_sharp_pump_ret3(monkeypatch):

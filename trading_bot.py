@@ -216,8 +216,11 @@ class BotConfig:
         self.base_currency = os.getenv('BASE_CURRENCY', 'EUR').upper()
         self.quote_currencies = [c.strip().upper() for c in os.getenv(
             'QUOTE_CURRENCIES', 'BTC,ETH').split(',') if c.strip()]
-        self.excluded_coins = {c.strip().upper() for c in os.getenv(
+        configured_excluded_coins = {c.strip().upper() for c in os.getenv(
             'EXCLUDED_COINS', 'USDC,USDT,EURT,DAI,TUSD,USDP,FDUSD,USDE').split(',') if c.strip()}
+        lossmaker_excluded_coins = {c.strip().upper() for c in os.getenv(
+            'LOSSMAKER_EXCLUDED_COINS', 'ZEC,HYPE,TON').split(',') if c.strip()}
+        self.excluded_coins = configured_excluded_coins | lossmaker_excluded_coins
         # Amount in base currency per trade
         self.trade_amount = float(os.getenv('TRADE_AMOUNT', 20))
         # Minimum amount per trade in base currency
@@ -283,12 +286,20 @@ class BotConfig:
             os.getenv('DOWNTREND_REVERSAL_MIN_RET_3', -0.01))
         self.downtrend_reversal_min_macd_hist = float(
             os.getenv('DOWNTREND_REVERSAL_MIN_MACD_HIST', 0.0))
+        self.downtrend_reversal_allowed_coins = {
+            c.strip().upper() for c in os.getenv(
+                'DOWNTREND_REVERSAL_ALLOWED_COINS', 'ETH').split(',') if c.strip()
+        }
         self.downtrend_reversal_fast_exit_enabled = _env_bool(
             'DOWNTREND_REVERSAL_FAST_EXIT_ENABLED', True)
         self.downtrend_reversal_fast_exit_seconds = int(
             os.getenv('DOWNTREND_REVERSAL_FAST_EXIT_SECONDS', 120))
         self.downtrend_reversal_flat_max_profit_pct = float(
             os.getenv('DOWNTREND_REVERSAL_FLAT_MAX_PROFIT_PCT', 0.10))
+        self.downtrend_reversal_weak_signal_exit_seconds = int(
+            os.getenv('DOWNTREND_REVERSAL_WEAK_SIGNAL_EXIT_SECONDS', 45))
+        self.downtrend_reversal_weak_signal_max_profit_pct = float(
+            os.getenv('DOWNTREND_REVERSAL_WEAK_SIGNAL_MAX_PROFIT_PCT', 0.02))
         self.downtrend_reversal_max_hold_seconds = int(
             os.getenv('DOWNTREND_REVERSAL_MAX_HOLD_SECONDS', 240))
         self.uptrend_entry_gate_enabled = _env_bool(
@@ -2277,6 +2288,10 @@ class CryptoTradingBot:
         if recommendation != 'HOLD (Down-Trend)':
             return True, 'not_downtrend'
 
+        coin = str(coin_data.get('coin', '')).upper()
+        if coin and self.config.downtrend_reversal_allowed_coins and coin not in self.config.downtrend_reversal_allowed_coins:
+            return False, f"coin_not_allowed_for_reversal ({coin or 'unknown'})"
+
         if not self.config.downtrend_reversal_entry_enabled:
             return False, 'downtrend_reversal_disabled'
 
@@ -2990,6 +3005,16 @@ class CryptoTradingBot:
                     exit_reason = (
                         '📉 DOWNTREND-REVERSAL-FAST-EXIT '
                         f'({pnl_pct:+.2f}% <= {self.config.downtrend_reversal_flat_max_profit_pct:.2f}% '
+                        f'after {int(hold_seconds)}s, signal: {current_signal})'
+                    )
+                elif (
+                    hold_seconds >= self.config.downtrend_reversal_weak_signal_exit_seconds
+                    and pnl_pct <= self.config.downtrend_reversal_weak_signal_max_profit_pct
+                    and current_signal in {'HOLD (Down-Trend)', 'WEAK SELL', 'SELL'}
+                ):
+                    exit_reason = (
+                        '📉 DOWNTREND-REVERSAL-WEAK-SIGNAL-EXIT '
+                        f'({pnl_pct:+.2f}% <= {self.config.downtrend_reversal_weak_signal_max_profit_pct:.2f}% '
                         f'after {int(hold_seconds)}s, signal: {current_signal})'
                     )
             is_rules_uptrend_trade = self._is_rules_uptrend_trade(trade_info)
