@@ -486,6 +486,21 @@ def test_entry_market_mode_detects_bearish_live_mix(monkeypatch):
     assert mode == "defensive"
 
 
+def test_entry_market_mode_mixed_simulation_can_escalate_to_defensive(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.simulate_data = True
+    bot.config.simulation_regime = "mixed"
+
+    mode = bot._entry_market_mode({
+        "BTC": {"recommendation": "SELL"},
+        "ETH": {"recommendation": "WEAK SELL"},
+        "SOL": {"recommendation": "HOLD (Down-Trend)"},
+        "XRP": {"recommendation": "SELL"},
+    })
+
+    assert mode == "defensive"
+
+
 def test_logs_blocked_buy_attempt_summary(monkeypatch, caplog):
     bot = _make_test_bot(monkeypatch)
 

@@ -17,16 +17,39 @@ import urllib.request
 import urllib.error
 
 
-# Logging configuration
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('trading_bot.log'),
-        logging.StreamHandler()
-    ]
-)
 logger = logging.getLogger(__name__)
+
+
+def configure_logging(log_file: str = 'trading_bot.log', level: int = logging.INFO) -> None:
+    """Configures runtime logging lazily so importing the module has no file-system side effects."""
+    root_logger = logging.getLogger()
+    if getattr(root_logger, '_trading_bot_logging_configured', False):
+        return
+
+    formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s')
+    handlers: List[logging.Handler] = []
+
+    try:
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(formatter)
+        handlers.append(file_handler)
+    except OSError as exc:
+        fallback_logger = logging.getLogger(__name__)
+        fallback_logger.warning(
+            "Failed to open log file %s, falling back to console logging only: %s",
+            log_file,
+            exc,
+        )
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    handlers.append(stream_handler)
+
+    root_logger.setLevel(level)
+    for handler in handlers:
+        root_logger.addHandler(handler)
+    root_logger._trading_bot_logging_configured = True
 
 
 def _mask_secret(value: str) -> str:
@@ -2037,12 +2060,15 @@ class CryptoTradingBot:
         if not market_analysis:
             return 'normal'
 
+        severity_rank = {'normal': 0, 'cautious': 1, 'defensive': 2}
+
+        regime_mode = 'normal'
         if self.config.simulate_data:
             regime = (self.config.simulation_regime or 'neutral').lower()
             if regime in {'crash', 'downtrend'}:
-                return 'defensive'
-            if regime in {'recovery', 'sideways', 'mixed'}:
-                return 'cautious'
+                regime_mode = 'defensive'
+            elif regime in {'recovery', 'sideways', 'mixed'}:
+                regime_mode = 'cautious'
 
         bearish_signals = {'SELL', 'WEAK SELL', 'HOLD (Down-Trend)'}
         bullish_signals = {'BUY', 'STRONG BUY', 'HOLD (Up-Trend)'}
@@ -2057,11 +2083,13 @@ class CryptoTradingBot:
         total = max(1, len(market_analysis))
         bearish_share = bearish / total
 
+        signal_mode = 'normal'
         if bearish_share >= 0.60 or bearish >= bullish + 2:
-            return 'defensive'
-        if bearish_share >= 0.40 or bearish > bullish:
-            return 'cautious'
-        return 'normal'
+            signal_mode = 'defensive'
+        elif bearish_share >= 0.40 or bearish > bullish:
+            signal_mode = 'cautious'
+
+        return max((regime_mode, signal_mode), key=severity_rank.get)
 
     @staticmethod
     def _filter_reason_code(reason: str) -> str:
@@ -3504,6 +3532,8 @@ def simple_strategy(row, rsi_buy=30, rsi_sell=70):
 
 if __name__ == "__main__":
     import argparse
+
+    configure_logging()
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--backtest", action="store_true",
