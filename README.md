@@ -164,6 +164,8 @@ All parameters are set via `.env` (see `.env.example` for the full list). Key va
 | `SIMULATE_DATA` | `false` | Use generated data instead of live API |
 | `SIMULATION_SEED` | `42` | Deterministic seed for generated simulation data |
 | `SIMULATION_REGIME` | `neutral` | Synthetic market regime: `neutral`, `uptrend`, `downtrend`, `sideways`, `crash`, `recovery`, `mixed` |
+| `EXCLUDED_COINS` | `USDC,USDT,EURT,DAI,TUSD,USDP,FDUSD,USDE` | Always excluded symbols from live analysis |
+| `LOSSMAKER_EXCLUDED_COINS` | `ZEC,HYPE,TON,BTC,XRP` | Additional default exclusions for symbols with persistently weak realized PnL |
 | `TRADE_AMOUNT` | `10` | EUR per trade |
 | `MAX_OPEN_TRADES` | `4` | Maximum concurrent positions |
 | `OHLCV_TIMEFRAME` | `1h` | Candle interval |
@@ -193,6 +195,20 @@ Quick examples:
 SIMULATE_DATA=true SIMULATION_REGIME=crash python3 trading_bot.py --backtest
 SIMULATE_DATA=true SIMULATION_REGIME=uptrend python3 scripts/compare_simulation_regimes.py --coins BTC,ETH,SOL
 PI_HOST=local bash scripts/run_compare_simulation_standard_profiles_on_pi.sh
+```
+
+### Default lossmaker exclusions
+
+The runtime now merges `EXCLUDED_COINS` with a second default blocklist, `LOSSMAKER_EXCLUDED_COINS`.
+
+- Base stablecoin-like exclusions stay in `EXCLUDED_COINS`
+- PnL-driven exclusions currently default to `ZEC,HYPE,TON,BTC,XRP`
+- Override `LOSSMAKER_EXCLUDED_COINS` in `.env` if you want to narrow or expand this list explicitly
+
+Example:
+
+```sh
+LOSSMAKER_EXCLUDED_COINS=ZEC,HYPE,TON
 ```
 
 ## AutoResearch -> AI model features

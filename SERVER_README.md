@@ -39,6 +39,11 @@ cp .env.live.example .env
 
 Set API keys and all required parameters in .env.
 
+Operational note for current Pi/server profile:
+- `EXCLUDED_COINS` keeps the base stablecoin-like exclusions
+- `LOSSMAKER_EXCLUDED_COINS` currently defaults to `ZEC,HYPE,TON,BTC,XRP`
+- Override `LOSSMAKER_EXCLUDED_COINS` in `/opt/trading_2/.env` if you want to re-allow one of these symbols after review
+
 ## 3. Run Bot On Server
 Dry run test:
 
