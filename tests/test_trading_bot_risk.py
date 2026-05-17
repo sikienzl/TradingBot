@@ -304,7 +304,7 @@ def test_uptrend_entry_filter_allows_stronger_rules_trade(monkeypatch):
 
     passes, reason = bot._passes_uptrend_entry_filter({
         "recommendation": "HOLD (Up-Trend)",
-        "signal_source": "catboost",
+        "signal_source": "rules",
         "rsi": 64.0,
         "tabular_buy_proba": 0.27,
         "tabular_sell_proba": 0.31,
@@ -312,6 +312,22 @@ def test_uptrend_entry_filter_allows_stronger_rules_trade(monkeypatch):
 
     assert passes is True
     assert reason == "ok"
+
+
+def test_uptrend_entry_filter_blocks_missing_tabular_probs_for_rules_trade(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.uptrend_entry_gate_enabled = True
+
+    passes, reason = bot._passes_uptrend_entry_filter({
+        "recommendation": "HOLD (Up-Trend)",
+        "signal_source": "rules",
+        "rsi": 60.0,
+        "tabular_buy_proba": None,
+        "tabular_sell_proba": 0.20,
+    })
+
+    assert passes is False
+    assert reason == "missing_buy_proba"
 
 
 def test_downtrend_reversal_filter_blocks_weak_buy_proba(monkeypatch):

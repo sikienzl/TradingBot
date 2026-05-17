@@ -1831,7 +1831,7 @@ class CryptoTradingBot:
         return True, 'ok'
 
     def _passes_uptrend_entry_filter(self, coin_data: Dict) -> Tuple[bool, str]:
-        """Allows rules-based up-trend fallback entries only when trend and model quality are not too weak."""
+        """Allows up-trend fallback entries only when trend and tabular quality are not too weak."""
         recommendation = str(coin_data.get('recommendation', ''))
         if recommendation != 'HOLD (Up-Trend)':
             return True, 'not_uptrend'
@@ -1844,10 +1844,6 @@ class CryptoTradingBot:
             return False, 'missing_rsi'
         if float(rsi) > self.config.uptrend_entry_max_rsi:
             return False, f"rsi_above_uptrend_max ({float(rsi):.2f} > {self.config.uptrend_entry_max_rsi:.2f})"
-
-        signal_source = str(coin_data.get('signal_source', ''))
-        if signal_source != 'catboost':
-            return False, 'uptrend_requires_catboost'
 
         buy_proba = coin_data.get('tabular_buy_proba')
         sell_proba = coin_data.get('tabular_sell_proba')
