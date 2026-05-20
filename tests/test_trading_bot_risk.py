@@ -398,7 +398,7 @@ def test_uptrend_entry_filter_applies_coin_specific_overrides(monkeypatch):
     bot.config.uptrend_entry_min_buy_proba = 0.24
     bot.config.uptrend_entry_max_sell_proba = 0.34
     bot.config.uptrend_entry_max_rsi_by_coin = {"XDC": 78.0, "TRX": 74.0}
-    bot.config.uptrend_entry_min_buy_proba_by_coin = {"TRX": 0.155}
+    bot.config.uptrend_entry_min_buy_proba_by_coin = {"TRX": 0.150}
     bot.config.uptrend_entry_max_sell_proba_by_coin = {"ONDO": 0.445}
     bot.config.uptrend_entry_min_proba_edge_by_coin = {
         "TRX": -0.13, "ONDO": -0.055}
@@ -419,7 +419,7 @@ def test_uptrend_entry_filter_applies_coin_specific_overrides(monkeypatch):
         "recommendation": "HOLD (Up-Trend)",
         "signal_source": "catboost",
         "rsi": 73.6,
-        "tabular_buy_proba": 0.156,
+        "tabular_buy_proba": 0.151,
         "tabular_sell_proba": 0.276,
     })
     assert passes is True
