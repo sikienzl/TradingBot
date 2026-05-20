@@ -229,6 +229,63 @@ class BotConfig:
                     continue
             return parsed
 
+        def _env_symbol_float_map(name: str, default: str = "") -> Dict[str, float]:
+            raw = _env_str(name, default)
+            if not raw:
+                return {}
+
+            parsed: Dict[str, float] = {}
+            for item in raw.split(','):
+                token = item.strip()
+                if not token or ':' not in token:
+                    continue
+                symbol, value = token.split(':', 1)
+                symbol = symbol.strip().upper()
+                value = value.strip()
+                if not symbol or not value:
+                    continue
+                try:
+                    parsed[symbol] = float(value)
+                except ValueError:
+                    continue
+            return parsed
+
+        def _env_threshold_float_pairs(name: str, default: str = "") -> List[Tuple[float, float]]:
+            raw = _env_str(name, default)
+            if not raw:
+                return []
+
+            parsed: List[Tuple[float, float]] = []
+            for item in raw.split(','):
+                token = item.strip()
+                if not token or ':' not in token:
+                    continue
+                threshold, value = token.split(':', 1)
+                try:
+                    parsed.append(
+                        (float(threshold.strip()), float(value.strip())))
+                except ValueError:
+                    continue
+            return sorted(parsed, key=lambda entry: entry[0])
+
+        def _env_threshold_int_pairs(name: str, default: str = "") -> List[Tuple[float, int]]:
+            raw = _env_str(name, default)
+            if not raw:
+                return []
+
+            parsed: List[Tuple[float, int]] = []
+            for item in raw.split(','):
+                token = item.strip()
+                if not token or ':' not in token:
+                    continue
+                threshold, value = token.split(':', 1)
+                try:
+                    parsed.append(
+                        (float(threshold.strip()), int(value.strip())))
+                except ValueError:
+                    continue
+            return sorted(parsed, key=lambda entry: entry[0])
+
         self.exchange_name = os.getenv('EXCHANGE_NAME', 'kraken').lower()
         self.api_key = os.getenv(
             'KRAKEN_API_KEY', '')
@@ -256,6 +313,10 @@ class BotConfig:
             os.getenv('DYNAMIC_LOSSMAKER_MIN_MAX_HOLD_EXIT_RATIO', 0.5))
         # Amount in base currency per trade
         self.trade_amount = float(os.getenv('TRADE_AMOUNT', 20))
+        self.portfolio_trade_amount_multipliers = _env_threshold_float_pairs(
+            'PORTFOLIO_TRADE_AMOUNT_MULTIPLIERS',
+            '50:1.10,100:1.25,200:1.50,300:1.75,500:2.20,1000:3.00',
+        )
         # Minimum amount per trade in base currency
         self.min_trade_amount = float(os.getenv('MIN_TRADE_AMOUNT', 5))
         # Seconds between iterations
@@ -270,6 +331,10 @@ class BotConfig:
         self.take_profit_pct = float(
             os.getenv('TAKE_PROFIT_PCT', 0.10))  # 10% gain
         self.max_open_trades = int(os.getenv('MAX_OPEN_TRADES', 3))
+        self.portfolio_max_open_trades_tiers = _env_threshold_int_pairs(
+            'PORTFOLIO_MAX_OPEN_TRADES_TIERS',
+            '100:3,200:4,500:5,1000:6',
+        )
         # Minimum 24h volume in base currency
         self.min_volume_base = float(os.getenv('MIN_VOLUME_BASE', 100000))
         # Number of top coins for analysis
@@ -339,12 +404,20 @@ class BotConfig:
             'UPTREND_ENTRY_GATE_ENABLED', True)
         self.uptrend_entry_max_rsi = float(
             os.getenv('UPTREND_ENTRY_MAX_RSI', 72.0))
+        self.uptrend_entry_max_rsi_by_coin = _env_symbol_float_map(
+            'UPTREND_ENTRY_MAX_RSI_BY_COIN', 'XDC:78')
         self.uptrend_entry_min_buy_proba = float(
             os.getenv('UPTREND_ENTRY_MIN_BUY_PROBA', 0.24))
+        self.uptrend_entry_min_buy_proba_by_coin = _env_symbol_float_map(
+            'UPTREND_ENTRY_MIN_BUY_PROBA_BY_COIN', 'TRX:0.17')
         self.uptrend_entry_max_sell_proba = float(
             os.getenv('UPTREND_ENTRY_MAX_SELL_PROBA', 0.34))
+        self.uptrend_entry_max_sell_proba_by_coin = _env_symbol_float_map(
+            'UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN', 'ONDO:0.44')
         self.uptrend_entry_min_proba_edge = float(
             os.getenv('UPTREND_ENTRY_MIN_PROBA_EDGE', -0.05))
+        self.uptrend_entry_min_proba_edge_by_coin = _env_symbol_float_map(
+            'UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN', 'TRX:-0.13')
         self.uptrend_rules_fast_exit_enabled = _env_bool(
             'UPTREND_RULES_FAST_EXIT_ENABLED', True)
         self.uptrend_rules_fast_exit_seconds = int(
@@ -1992,18 +2065,56 @@ class CryptoTradingBot:
         atr = tr.rolling(window=period).mean()
         return atr.iloc[-1]
 
-    def _calculate_position_size(self, coin: str, price: float, atr: float, risk_pct: float = 0.01) -> float:
+    def _effective_trade_amount(self, portfolio_value: float) -> float:
+        effective_trade_amount = self.config.trade_amount
+        if portfolio_value <= 0:
+            return effective_trade_amount
+
+        for threshold, multiplier in self.config.portfolio_trade_amount_multipliers:
+            if portfolio_value >= threshold:
+                effective_trade_amount = max(
+                    effective_trade_amount,
+                    self.config.trade_amount * multiplier,
+                )
+
+        return effective_trade_amount
+
+    def _effective_max_open_trades(self, portfolio_value: float) -> int:
+        effective_max_open_trades = self.config.max_open_trades
+        if portfolio_value <= 0:
+            return effective_max_open_trades
+
+        for threshold, max_open_trades in self.config.portfolio_max_open_trades_tiers:
+            if portfolio_value >= threshold:
+                effective_max_open_trades = max(
+                    effective_max_open_trades,
+                    max_open_trades,
+                )
+
+        return effective_max_open_trades
+
+    def _calculate_position_size(
+        self,
+        coin: str,
+        price: float,
+        atr: float,
+        risk_pct: float = 0.01,
+        portfolio_value: Optional[float] = None,
+        trade_amount_cap: Optional[float] = None,
+    ) -> float:
         """Calculates position size such that at most risk_pct of the portfolio is at risk (ATR-based)."""
+        effective_trade_amount = self.config.trade_amount if trade_amount_cap is None else trade_amount_cap
         if atr is None or np.isnan(atr) or atr == 0:
             logger.warning(
                 f"ATR for {coin} not available, using default position size.")
-            return self.config.trade_amount
-        portfolio_value = self.portfolio.cash + sum([
-            self.portfolio.holdings.get(c, 0) * price for c in self.portfolio.holdings
-        ])
+            return effective_trade_amount
+        if portfolio_value is None:
+            portfolio_value = self.portfolio.cash + sum([
+                self.portfolio.holdings.get(c, 0) * price for c in self.portfolio.holdings
+            ])
         risk_amount = portfolio_value * risk_pct
         position_size = risk_amount / atr  # How many ATRs can we afford?
-        amount_in_base = min(position_size * atr, self.config.trade_amount)
+        amount_in_base = min(position_size * atr, effective_trade_amount)
         return max(amount_in_base, 0)
 
     def _get_atr_for_coin(self, coin: str, period: int = 14) -> float:
@@ -2133,11 +2244,21 @@ class CryptoTradingBot:
         if not self.config.uptrend_entry_gate_enabled:
             return True, 'uptrend_gate_disabled'
 
+        coin = str(coin_data.get('coin', '')).upper()
+        max_rsi = self.config.uptrend_entry_max_rsi_by_coin.get(
+            coin, self.config.uptrend_entry_max_rsi)
+        min_buy_proba = self.config.uptrend_entry_min_buy_proba_by_coin.get(
+            coin, self.config.uptrend_entry_min_buy_proba)
+        max_sell_proba = self.config.uptrend_entry_max_sell_proba_by_coin.get(
+            coin, self.config.uptrend_entry_max_sell_proba)
+        min_proba_edge = self.config.uptrend_entry_min_proba_edge_by_coin.get(
+            coin, self.config.uptrend_entry_min_proba_edge)
+
         rsi = coin_data.get('rsi')
         if rsi is None or np.isnan(rsi):
             return False, 'missing_rsi'
-        if float(rsi) > self.config.uptrend_entry_max_rsi:
-            return False, f"rsi_above_uptrend_max ({float(rsi):.2f} > {self.config.uptrend_entry_max_rsi:.2f})"
+        if float(rsi) > max_rsi:
+            return False, f"rsi_above_uptrend_max ({float(rsi):.2f} > {max_rsi:.2f})"
 
         buy_proba = coin_data.get('tabular_buy_proba')
         sell_proba = coin_data.get('tabular_sell_proba')
@@ -2149,14 +2270,14 @@ class CryptoTradingBot:
         buy_proba = float(buy_proba)
         sell_proba = float(sell_proba)
 
-        if buy_proba < self.config.uptrend_entry_min_buy_proba:
-            return False, f"buy_proba_below_uptrend_min ({buy_proba:.3f} < {self.config.uptrend_entry_min_buy_proba:.3f})"
-        if sell_proba > self.config.uptrend_entry_max_sell_proba:
-            return False, f"sell_proba_above_uptrend_max ({sell_proba:.3f} > {self.config.uptrend_entry_max_sell_proba:.3f})"
+        if buy_proba < min_buy_proba:
+            return False, f"buy_proba_below_uptrend_min ({buy_proba:.3f} < {min_buy_proba:.3f})"
+        if sell_proba > max_sell_proba:
+            return False, f"sell_proba_above_uptrend_max ({sell_proba:.3f} > {max_sell_proba:.3f})"
 
         proba_edge = buy_proba - sell_proba
-        if proba_edge < self.config.uptrend_entry_min_proba_edge:
-            return False, f"proba_edge_below_uptrend_min ({proba_edge:.3f} < {self.config.uptrend_entry_min_proba_edge:.3f})"
+        if proba_edge < min_proba_edge:
+            return False, f"proba_edge_below_uptrend_min ({proba_edge:.3f} < {min_proba_edge:.3f})"
 
         return True, 'ok'
 
@@ -2769,6 +2890,7 @@ class CryptoTradingBot:
                     f"Slow coin analysis for {coin}: {elapsed:.1f}s")
             if coin_analysis:
                 analysis[coin] = {
+                    'coin': coin,
                     'price': current_price,
                     'volume': market_data[coin]['volume'],
                     **coin_analysis
@@ -3392,16 +3514,20 @@ class CryptoTradingBot:
                 # Step 5: Trade logic - open new positions
                 current_open_trades_count = len(self.portfolio.open_trades)
                 available_funds_for_trade = self.portfolio.cash
-                min_required_cash = self.config.min_trade_amount if self.config.allow_partial_trades else self.config.trade_amount
+                effective_trade_amount = self._effective_trade_amount(
+                    portfolio_value_live)
+                effective_max_open_trades = self._effective_max_open_trades(
+                    portfolio_value_live)
+                min_required_cash = self.config.min_trade_amount if self.config.allow_partial_trades else effective_trade_amount
                 can_open_positions, block_reason = self._can_open_new_positions(
                     portfolio_value_live)
 
                 if not can_open_positions:
                     logger.warning(
                         f"⛔ Risk guardrail blocking new positions: {block_reason}")
-                elif available_funds_for_trade >= min_required_cash and current_open_trades_count < self.config.max_open_trades:
+                elif available_funds_for_trade >= min_required_cash and current_open_trades_count < effective_max_open_trades:
                     logger.info(
-                        f"Attempting to open new positions. Available: {available_funds_for_trade:.2f} {self.config.base_currency}, Open trades: {current_open_trades_count}/{self.config.max_open_trades}, Min amount: {min_required_cash:.2f} {self.config.base_currency}.")
+                        f"Attempting to open new positions. Available: {available_funds_for_trade:.2f} {self.config.base_currency}, Open trades: {current_open_trades_count}/{effective_max_open_trades}, Min amount: {min_required_cash:.2f} {self.config.base_currency}, Effective trade amount: {effective_trade_amount:.2f} {self.config.base_currency}.")
                     blocked_buy_attempts: List[Dict[str, Any]] = []
                     successful_buy_count = 0
                     for coin in top_buy_recommendations:
@@ -3422,7 +3548,12 @@ class CryptoTradingBot:
                                 current_price = price_data['price']
                                 atr = self._get_atr_for_coin(coin, period=14)
                                 target_position_size = self._calculate_position_size(
-                                    coin, current_price, atr)
+                                    coin,
+                                    current_price,
+                                    atr,
+                                    portfolio_value=portfolio_value_live,
+                                    trade_amount_cap=effective_trade_amount,
+                                )
                                 reserved_cash = self.portfolio.cash * self.config.cash_reserve_pct
                                 max_affordable = max(
                                     self.portfolio.cash - reserved_cash, 0.0)
@@ -3501,7 +3632,7 @@ class CryptoTradingBot:
                                         available_funds_for_trade = self.portfolio.cash
                                         current_open_trades_count = len(
                                             self.portfolio.open_trades)
-                                        if current_open_trades_count >= self.config.max_open_trades:
+                                        if current_open_trades_count >= effective_max_open_trades:
                                             logger.info(
                                                 "Maximum number of open trades reached, stopping further buys.")
                                             break
@@ -3533,9 +3664,9 @@ class CryptoTradingBot:
                     if top_buy_recommendations and successful_buy_count == 0:
                         self._log_blocked_buy_attempt_candidates(
                             blocked_buy_attempts)
-                elif current_open_trades_count >= self.config.max_open_trades:
+                elif current_open_trades_count >= effective_max_open_trades:
                     logger.info(
-                        f"Maximum number of open trades ({self.config.max_open_trades}) reached. No new buys.")
+                        f"Maximum number of open trades ({effective_max_open_trades}) reached. No new buys.")
                 else:
                     logger.info(
                         f"Insufficient available funds ({available_funds_for_trade:.2f} {self.config.base_currency}) for minimum trade ({min_required_cash:.2f} {self.config.base_currency}).")

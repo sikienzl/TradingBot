@@ -172,12 +172,18 @@ All parameters are set via `.env` (see `.env.example` for the full list). Key va
 | `DYNAMIC_LOSSMAKER_MIN_PNL_LOSS` | `0.003` | Minimum negative summed realized PnL before the temporary suppression applies |
 | `COIN_MAX_HOLD_SECONDS` | `LINK:420,SUI:420,ONDO:420` | Coin-specific hold-time overrides for weak follow-through symbols |
 | `TRADE_AMOUNT` | `10` | EUR per trade |
+| `PORTFOLIO_TRADE_AMOUNT_MULTIPLIERS` | `50:1.10,100:1.25,200:1.50,300:1.75,500:2.20,1000:3.00` | Scales the base `TRADE_AMOUNT` upward once the portfolio reaches each milestone |
 | `MAX_OPEN_TRADES` | `4` | Maximum concurrent positions |
+| `PORTFOLIO_MAX_OPEN_TRADES_TIERS` | `100:3,200:4,500:5,1000:6` | Raises the concurrent slot count in later portfolio stages without changing the early small-account regime |
 | `OHLCV_TIMEFRAME` | `1h` | Candle interval |
 | `TICKER_BATCH_SIZE` | `80` | Symbols per `fetch_tickers` request (smaller is more stable) |
 | `TICKER_FETCH_RETRIES` | `2` | Retries per ticker batch on exchange/network errors |
 | `USE_TABULAR_MODEL` | `true` | Enable CatBoost signal filter |
 | `TABULAR_MIN_CONFIDENCE` | `0.45` | Minimum CatBoost confidence required for non-HOLD signal |
+| `UPTREND_ENTRY_MAX_RSI_BY_COIN` | `XDC:78` | Coin-specific RSI override for uptrend entry gating |
+| `UPTREND_ENTRY_MIN_BUY_PROBA_BY_COIN` | `TRX:0.17` | Coin-specific CatBoost buy-probability override for uptrend entry gating |
+| `UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN` | `ONDO:0.44` | Coin-specific CatBoost sell-probability override for uptrend entry gating |
+| `UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN` | `TRX:-0.13` | Coin-specific probability-edge override for uptrend entry gating |
 | `TABULAR_RESEARCH_SIGNAL_PATH` | `./data/research_signal_latest.json` | Latest AutoResearch JSON used as model input features |
 | `AUTO_TUNE_TABULAR_CONFIDENCE` | `true` | Auto-adjust CatBoost threshold |
 | `USE_ML_MODEL` | `false` | Enable LLM signal (GPU recommended) |
@@ -232,6 +238,41 @@ DYNAMIC_LOSSMAKER_WINDOW=120
 DYNAMIC_LOSSMAKER_MIN_SELLS=4
 DYNAMIC_LOSSMAKER_MIN_PNL_LOSS=0.005
 COIN_MAX_HOLD_SECONDS=LINK:420,SUI:420,ONDO:420
+```
+
+### Portfolio step scaling
+
+The runtime can grow position size and slot count in stages as the portfolio compounds.
+
+- `TRADE_AMOUNT` remains the base amount for the smallest account stage
+- `PORTFOLIO_TRADE_AMOUNT_MULTIPLIERS` scales that base amount once the portfolio crosses each milestone
+- `MAX_OPEN_TRADES` remains the base slot count
+- `PORTFOLIO_MAX_OPEN_TRADES_TIERS` only increases slots in later stages, so the small account stays concentrated
+
+Example override:
+
+```sh
+TRADE_AMOUNT=10
+PORTFOLIO_TRADE_AMOUNT_MULTIPLIERS=50:1.10,100:1.30,200:1.60,300:1.90,500:2.40,1000:3.20
+MAX_OPEN_TRADES=2
+PORTFOLIO_MAX_OPEN_TRADES_TIERS=100:3,250:4,500:5,1000:6
+```
+
+### Coin-specific uptrend entry tuning
+
+The uptrend entry gate can now be loosened selectively for specific coins instead of changing the global defaults for every symbol.
+
+- `UPTREND_ENTRY_MAX_RSI_BY_COIN` is useful when one coin trends hotter before follow-through appears
+- `UPTREND_ENTRY_MIN_BUY_PROBA_BY_COIN` is useful when a coin repeatedly misses entry by a small CatBoost buy-probability margin
+- `UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN` is useful when one coin is consistently blocked by a slightly too-high sell probability
+
+Example override:
+
+```sh
+UPTREND_ENTRY_MAX_RSI_BY_COIN=XDC:78
+UPTREND_ENTRY_MIN_BUY_PROBA_BY_COIN=TRX:0.17
+UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN=ONDO:0.44
+UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN=TRX:-0.13
 ```
 
 ## AutoResearch -> AI model features

@@ -391,6 +391,51 @@ def test_uptrend_entry_filter_allows_stronger_rules_trade(monkeypatch):
     assert reason == "ok"
 
 
+def test_uptrend_entry_filter_applies_coin_specific_overrides(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.uptrend_entry_gate_enabled = True
+    bot.config.uptrend_entry_max_rsi = 72.0
+    bot.config.uptrend_entry_min_buy_proba = 0.24
+    bot.config.uptrend_entry_max_sell_proba = 0.34
+    bot.config.uptrend_entry_max_rsi_by_coin = {"XDC": 78.0}
+    bot.config.uptrend_entry_min_buy_proba_by_coin = {"TRX": 0.17}
+    bot.config.uptrend_entry_max_sell_proba_by_coin = {"ONDO": 0.44}
+    bot.config.uptrend_entry_min_proba_edge_by_coin = {"TRX": -0.13}
+
+    passes, reason = bot._passes_uptrend_entry_filter({
+        "coin": "XDC",
+        "recommendation": "HOLD (Up-Trend)",
+        "signal_source": "rules",
+        "rsi": 76.5,
+        "tabular_buy_proba": 0.30,
+        "tabular_sell_proba": 0.31,
+    })
+    assert passes is True
+    assert reason == "ok"
+
+    passes, reason = bot._passes_uptrend_entry_filter({
+        "coin": "TRX",
+        "recommendation": "HOLD (Up-Trend)",
+        "signal_source": "rules",
+        "rsi": 68.0,
+        "tabular_buy_proba": 0.18,
+        "tabular_sell_proba": 0.30,
+    })
+    assert passes is True
+    assert reason == "ok"
+
+    passes, reason = bot._passes_uptrend_entry_filter({
+        "coin": "ONDO",
+        "recommendation": "HOLD (Up-Trend)",
+        "signal_source": "rules",
+        "rsi": 64.0,
+        "tabular_buy_proba": 0.40,
+        "tabular_sell_proba": 0.435,
+    })
+    assert passes is True
+    assert reason == "ok"
+
+
 def test_uptrend_entry_filter_blocks_missing_tabular_probs_for_rules_trade(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.uptrend_entry_gate_enabled = True
@@ -568,6 +613,34 @@ def test_logs_blocked_buy_attempt_summary(monkeypatch, caplog):
     assert "Buy attempt blocked 1 candidate(s)" in caplog.text
     assert "ret_3_below_min" in caplog.text
     assert "TRX" in caplog.text
+
+
+def test_effective_trade_amount_scales_by_portfolio_tiers(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.trade_amount = 10.0
+    bot.config.portfolio_trade_amount_multipliers = [
+        (50.0, 1.10),
+        (100.0, 1.25),
+        (200.0, 1.50),
+    ]
+
+    assert bot._effective_trade_amount(40.0) == 10.0
+    assert bot._effective_trade_amount(60.0) == 11.0
+    assert bot._effective_trade_amount(150.0) == 12.5
+    assert bot._effective_trade_amount(250.0) == 15.0
+
+
+def test_effective_max_open_trades_scales_by_portfolio_tiers(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.max_open_trades = 2
+    bot.config.portfolio_max_open_trades_tiers = [
+        (100.0, 3),
+        (200.0, 4),
+    ]
+
+    assert bot._effective_max_open_trades(80.0) == 2
+    assert bot._effective_max_open_trades(120.0) == 3
+    assert bot._effective_max_open_trades(220.0) == 4
 
 
 def test_identifies_rules_uptrend_trade_only_for_rules_source(monkeypatch):
