@@ -180,10 +180,10 @@ All parameters are set via `.env` (see `.env.example` for the full list). Key va
 | `TICKER_FETCH_RETRIES` | `2` | Retries per ticker batch on exchange/network errors |
 | `USE_TABULAR_MODEL` | `true` | Enable CatBoost signal filter |
 | `TABULAR_MIN_CONFIDENCE` | `0.45` | Minimum CatBoost confidence required for non-HOLD signal |
-| `UPTREND_ENTRY_MAX_RSI_BY_COIN` | `XDC:78` | Coin-specific RSI override for uptrend entry gating |
+| `UPTREND_ENTRY_MAX_RSI_BY_COIN` | `XDC:78,TRX:74` | Coin-specific RSI override for uptrend entry gating |
 | `UPTREND_ENTRY_MIN_BUY_PROBA_BY_COIN` | `TRX:0.17` | Coin-specific CatBoost buy-probability override for uptrend entry gating |
-| `UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN` | `ONDO:0.44` | Coin-specific CatBoost sell-probability override for uptrend entry gating |
-| `UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN` | `TRX:-0.13` | Coin-specific probability-edge override for uptrend entry gating |
+| `UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN` | `ONDO:0.445` | Coin-specific CatBoost sell-probability override for uptrend entry gating |
+| `UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN` | `TRX:-0.13,ONDO:-0.055` | Coin-specific probability-edge override for uptrend entry gating |
 | `TABULAR_RESEARCH_SIGNAL_PATH` | `./data/research_signal_latest.json` | Latest AutoResearch JSON used as model input features |
 | `AUTO_TUNE_TABULAR_CONFIDENCE` | `true` | Auto-adjust CatBoost threshold |
 | `USE_ML_MODEL` | `false` | Enable LLM signal (GPU recommended) |
@@ -269,10 +269,10 @@ The uptrend entry gate can now be loosened selectively for specific coins instea
 Example override:
 
 ```sh
-UPTREND_ENTRY_MAX_RSI_BY_COIN=XDC:78
+UPTREND_ENTRY_MAX_RSI_BY_COIN=XDC:78,TRX:74
 UPTREND_ENTRY_MIN_BUY_PROBA_BY_COIN=TRX:0.17
-UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN=ONDO:0.44
-UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN=TRX:-0.13
+UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN=ONDO:0.445
+UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN=TRX:-0.13,ONDO:-0.055
 ```
 
 ## AutoResearch -> AI model features

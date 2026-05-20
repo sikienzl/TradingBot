@@ -405,7 +405,7 @@ class BotConfig:
         self.uptrend_entry_max_rsi = float(
             os.getenv('UPTREND_ENTRY_MAX_RSI', 72.0))
         self.uptrend_entry_max_rsi_by_coin = _env_symbol_float_map(
-            'UPTREND_ENTRY_MAX_RSI_BY_COIN', 'XDC:78')
+            'UPTREND_ENTRY_MAX_RSI_BY_COIN', 'XDC:78,TRX:74')
         self.uptrend_entry_min_buy_proba = float(
             os.getenv('UPTREND_ENTRY_MIN_BUY_PROBA', 0.24))
         self.uptrend_entry_min_buy_proba_by_coin = _env_symbol_float_map(
@@ -413,11 +413,11 @@ class BotConfig:
         self.uptrend_entry_max_sell_proba = float(
             os.getenv('UPTREND_ENTRY_MAX_SELL_PROBA', 0.34))
         self.uptrend_entry_max_sell_proba_by_coin = _env_symbol_float_map(
-            'UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN', 'ONDO:0.44')
+            'UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN', 'ONDO:0.445')
         self.uptrend_entry_min_proba_edge = float(
             os.getenv('UPTREND_ENTRY_MIN_PROBA_EDGE', -0.05))
         self.uptrend_entry_min_proba_edge_by_coin = _env_symbol_float_map(
-            'UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN', 'TRX:-0.13')
+            'UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN', 'TRX:-0.13,ONDO:-0.055')
         self.uptrend_rules_fast_exit_enabled = _env_bool(
             'UPTREND_RULES_FAST_EXIT_ENABLED', True)
         self.uptrend_rules_fast_exit_seconds = int(

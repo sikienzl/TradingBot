@@ -397,10 +397,11 @@ def test_uptrend_entry_filter_applies_coin_specific_overrides(monkeypatch):
     bot.config.uptrend_entry_max_rsi = 72.0
     bot.config.uptrend_entry_min_buy_proba = 0.24
     bot.config.uptrend_entry_max_sell_proba = 0.34
-    bot.config.uptrend_entry_max_rsi_by_coin = {"XDC": 78.0}
+    bot.config.uptrend_entry_max_rsi_by_coin = {"XDC": 78.0, "TRX": 74.0}
     bot.config.uptrend_entry_min_buy_proba_by_coin = {"TRX": 0.17}
-    bot.config.uptrend_entry_max_sell_proba_by_coin = {"ONDO": 0.44}
-    bot.config.uptrend_entry_min_proba_edge_by_coin = {"TRX": -0.13}
+    bot.config.uptrend_entry_max_sell_proba_by_coin = {"ONDO": 0.445}
+    bot.config.uptrend_entry_min_proba_edge_by_coin = {
+        "TRX": -0.13, "ONDO": -0.055}
 
     passes, reason = bot._passes_uptrend_entry_filter({
         "coin": "XDC",
@@ -417,7 +418,7 @@ def test_uptrend_entry_filter_applies_coin_specific_overrides(monkeypatch):
         "coin": "TRX",
         "recommendation": "HOLD (Up-Trend)",
         "signal_source": "rules",
-        "rsi": 68.0,
+        "rsi": 73.6,
         "tabular_buy_proba": 0.18,
         "tabular_sell_proba": 0.30,
     })
@@ -429,8 +430,8 @@ def test_uptrend_entry_filter_applies_coin_specific_overrides(monkeypatch):
         "recommendation": "HOLD (Up-Trend)",
         "signal_source": "rules",
         "rsi": 64.0,
-        "tabular_buy_proba": 0.40,
-        "tabular_sell_proba": 0.435,
+        "tabular_buy_proba": 0.388,
+        "tabular_sell_proba": 0.4403,
     })
     assert passes is True
     assert reason == "ok"
