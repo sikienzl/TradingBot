@@ -409,7 +409,7 @@ class BotConfig:
         self.uptrend_entry_min_buy_proba = float(
             os.getenv('UPTREND_ENTRY_MIN_BUY_PROBA', 0.24))
         self.uptrend_entry_min_buy_proba_by_coin = _env_symbol_float_map(
-            'UPTREND_ENTRY_MIN_BUY_PROBA_BY_COIN', 'TRX:0.17')
+            'UPTREND_ENTRY_MIN_BUY_PROBA_BY_COIN', 'TRX:0.16')
         self.uptrend_entry_max_sell_proba = float(
             os.getenv('UPTREND_ENTRY_MAX_SELL_PROBA', 0.34))
         self.uptrend_entry_max_sell_proba_by_coin = _env_symbol_float_map(
