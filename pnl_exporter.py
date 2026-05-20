@@ -10,6 +10,7 @@ import os
 import sys
 import json
 import re
+import time
 import urllib.request
 import urllib.error
 from contextlib import suppress
@@ -26,6 +27,12 @@ START_VALUE_CACHE = {
     'log_mtime': None,
     'value': 0.0,
 }
+AI_SPEND_CACHE = {
+    'value': None,
+    'expires_at': 0.0,
+}
+AI_SPEND_CACHE_TTL_SECONDS = 300
+AI_SPEND_API_TIMEOUT_SECONDS = 2
 CURRENT_PRICE_RE = re.compile(
     r'📊\s+([A-Z0-9]+):\s+Buy\s+[0-9.]+\s+→\s+Current\s+([0-9.]+)'
 )
@@ -58,10 +65,16 @@ class MetricsHandler(BaseHTTPRequestHandler):
         return ''
 
     def _read_ai_spend_from_api(self):
+        now = time.time()
+        if AI_SPEND_CACHE['expires_at'] > now:
+            return AI_SPEND_CACHE['value']
+
         api_key = self._read_env_value('MAMMOUTH_API_KEY')
         api_url = self._read_env_value(
             'AI_COPILOT_API_URL') or 'https://api.mammouth.ai/v1/chat/completions'
         if not api_key:
+            AI_SPEND_CACHE['value'] = None
+            AI_SPEND_CACHE['expires_at'] = now + AI_SPEND_CACHE_TTL_SECONDS
             return None
 
         api_root = api_url.split('/v1/', 1)[0].rstrip('/')
@@ -75,8 +88,13 @@ class MetricsHandler(BaseHTTPRequestHandler):
             method='GET',
         )
 
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            payload = json.loads(resp.read().decode('utf-8', errors='replace'))
+        try:
+            with urllib.request.urlopen(req, timeout=AI_SPEND_API_TIMEOUT_SECONDS) as resp:
+                payload = json.loads(
+                    resp.read().decode('utf-8', errors='replace'))
+        except Exception:
+            AI_SPEND_CACHE['expires_at'] = now + AI_SPEND_CACHE_TTL_SECONDS
+            return AI_SPEND_CACHE['value']
 
         info = payload.get('info', {}) if isinstance(payload, dict) else {}
         spend = info.get('spend')
@@ -86,7 +104,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
             result['ai_copilot_budget_used_usd'] = float(spend)
         if max_budget is not None:
             result['ai_copilot_budget_cap_usd'] = float(max_budget)
-        return result or None
+        AI_SPEND_CACHE['value'] = result or None
+        AI_SPEND_CACHE['expires_at'] = now + AI_SPEND_CACHE_TTL_SECONDS
+        return AI_SPEND_CACHE['value']
 
     def do_GET(self):
         if self.path == '/metrics':
@@ -344,13 +364,6 @@ class MetricsHandler(BaseHTTPRequestHandler):
             pass
 
         try:
-            api_usage = self._read_ai_spend_from_api()
-            if api_usage:
-                result.update(api_usage)
-        except Exception:
-            pass
-
-        try:
             for candidate in (AI_COPILOT_STATE_PATH, f'{AI_COPILOT_STATE_PATH}.bak'):
                 if not os.path.exists(candidate):
                     continue
@@ -369,6 +382,13 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     result['ai_copilot_calls_used_monthly'] = float(
                         state.get('monthly_calls', 0) or 0)
                     break
+        except Exception:
+            pass
+
+        try:
+            api_usage = self._read_ai_spend_from_api()
+            if api_usage:
+                result.update(api_usage)
         except Exception:
             pass
 
