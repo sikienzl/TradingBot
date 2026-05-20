@@ -45,7 +45,7 @@ Operational note for current Pi/server profile:
 - `DYNAMIC_LOSSMAKER_EXCLUSION_ENABLED=true` adds a temporary journal-driven suppression layer for recent timeout-heavy losers
 - `COIN_MAX_HOLD_SECONDS` now defaults to `LINK:420,SUI:420,ONDO:420`
 - `PORTFOLIO_TRADE_AMOUNT_MULTIPLIERS` and `PORTFOLIO_MAX_OPEN_TRADES_TIERS` can scale position size and slot count upward as portfolio milestones are reached
-- `UPTREND_ENTRY_MAX_RSI_BY_COIN`, `UPTREND_ENTRY_MIN_BUY_PROBA_BY_COIN`, `UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN`, `UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN`, and `FALLBACK_MAX_RSI_BY_COIN` allow coin-specific entry tuning without loosening the global gates; current defaults now let `TRX` reuse the same 74 RSI ceiling in fallback that it already has in the uptrend gate, while `XDC` still stays behind the stronger sell-proba guard
+- `UPTREND_ENTRY_MAX_RSI_BY_COIN`, `UPTREND_ENTRY_MIN_BUY_PROBA_BY_COIN`, `UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN`, `UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN`, and `FALLBACK_MAX_RSI_BY_COIN` allow coin-specific entry tuning without loosening the global gates; current defaults keep `TRX` slightly stricter in fallback (`72`) than in the uptrend gate (`74`) so marginal re-entries do not churn as easily, while `XDC` still stays behind the stronger sell-proba guard
 - Override `LOSSMAKER_EXCLUDED_COINS` in `/opt/trading_2/.env` if you want to re-allow one of these symbols after review
 - Override the dynamic lossmaker knobs in `/opt/trading_2/.env` if you want a shorter or longer recent-loss memory window
 - Override the portfolio scaling and coin-specific uptrend knobs in `/opt/trading_2/.env` if you want to accelerate or slow compounding in later stages

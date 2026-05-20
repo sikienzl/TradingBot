@@ -279,7 +279,7 @@ If a coin already passes the uptrend quality gate but still misses fallback entr
 
 ```sh
 FALLBACK_MAX_RSI=68
-FALLBACK_MAX_RSI_BY_COIN=TRX:74
+FALLBACK_MAX_RSI_BY_COIN=TRX:72
 ```
 
 ## AutoResearch -> AI model features

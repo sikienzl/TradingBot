@@ -440,12 +440,12 @@ def test_uptrend_entry_filter_applies_coin_specific_overrides(monkeypatch):
 def test_fallback_entry_filter_applies_coin_specific_rsi_override(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.fallback_max_rsi = 68.0
-    bot.config.fallback_max_rsi_by_coin = {"TRX": 74.0}
+    bot.config.fallback_max_rsi_by_coin = {"TRX": 72.0}
 
     passes, reason = bot._passes_fallback_entry_filter("TRX", {
         "coin": "TRX",
         "recommendation": "HOLD (Up-Trend)",
-        "rsi": 73.2,
+        "rsi": 71.2,
     })
     assert passes is True
     assert reason == "ok"
@@ -646,7 +646,7 @@ def test_logs_fallback_rsi_block_summary(monkeypatch, caplog):
             market_analysis={
                 "TRX": {
                     "recommendation": "HOLD (Up-Trend)",
-                    "rsi": 74.19,
+                    "rsi": 72.19,
                     "signal_source": "rules",
                     "score": 60,
                     "rule_score": 60,
@@ -656,7 +656,7 @@ def test_logs_fallback_rsi_block_summary(monkeypatch, caplog):
             fallback_filter_results={
                 "TRX": (
                     False,
-                    "rsi_above_fallback_max (74.19 > 74.00)",
+                    "rsi_above_fallback_max (72.19 > 72.00)",
                 )
             },
             fallback_allowed=True,

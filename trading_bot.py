@@ -362,7 +362,7 @@ class BotConfig:
         # RSI limit for fallback entries (avoid overbought assets)
         self.fallback_max_rsi = float(os.getenv('FALLBACK_MAX_RSI', 68))
         self.fallback_max_rsi_by_coin = _env_symbol_float_map(
-            'FALLBACK_MAX_RSI_BY_COIN', 'TRX:74')
+            'FALLBACK_MAX_RSI_BY_COIN', 'TRX:72')
         # Optionally forces filling of free slots with neutral non-SELL candidates
         self.force_fill_slots = _env_bool('FORCE_FILL_SLOTS', False)
         # Minimum score for forced slot filling (without RSI limit)
