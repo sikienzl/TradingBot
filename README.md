@@ -166,6 +166,11 @@ All parameters are set via `.env` (see `.env.example` for the full list). Key va
 | `SIMULATION_REGIME` | `neutral` | Synthetic market regime: `neutral`, `uptrend`, `downtrend`, `sideways`, `crash`, `recovery`, `mixed` |
 | `EXCLUDED_COINS` | `USDC,USDT,EURT,DAI,TUSD,USDP,FDUSD,USDE` | Always excluded symbols from live analysis |
 | `LOSSMAKER_EXCLUDED_COINS` | `ZEC,HYPE,TON,BTC,XRP` | Additional default exclusions for symbols with persistently weak realized PnL |
+| `DYNAMIC_LOSSMAKER_EXCLUSION_ENABLED` | `true` | Temporarily exclude symbols with repeated recent timeout-heavy losses in the journal |
+| `DYNAMIC_LOSSMAKER_WINDOW` | `80` | Number of most recent journal rows inspected for temporary lossmaker exclusions |
+| `DYNAMIC_LOSSMAKER_MIN_SELLS` | `3` | Minimum recent sells required before a symbol can be temporarily suppressed |
+| `DYNAMIC_LOSSMAKER_MIN_PNL_LOSS` | `0.003` | Minimum negative summed realized PnL before the temporary suppression applies |
+| `COIN_MAX_HOLD_SECONDS` | `LINK:420,SUI:420,ONDO:420` | Coin-specific hold-time overrides for weak follow-through symbols |
 | `TRADE_AMOUNT` | `10` | EUR per trade |
 | `MAX_OPEN_TRADES` | `4` | Maximum concurrent positions |
 | `OHLCV_TIMEFRAME` | `1h` | Candle interval |
@@ -209,6 +214,24 @@ Example:
 
 ```sh
 LOSSMAKER_EXCLUDED_COINS=ZEC,HYPE,TON
+```
+
+### Dynamic lossmaker throttling
+
+The runtime can temporarily suppress fresh entries for coins that are currently producing repeated timeout-heavy losses in the recent journal window.
+
+- The filter reads the latest `DYNAMIC_LOSSMAKER_WINDOW` journal rows
+- A symbol is only suppressed when it has enough recent sells, negative summed PnL, weak win rate, and a high `MAX-HOLD-TIME` share
+- Open positions are still analyzed and managed normally; the filter only blocks new candidate selection
+
+Example override:
+
+```sh
+DYNAMIC_LOSSMAKER_EXCLUSION_ENABLED=true
+DYNAMIC_LOSSMAKER_WINDOW=120
+DYNAMIC_LOSSMAKER_MIN_SELLS=4
+DYNAMIC_LOSSMAKER_MIN_PNL_LOSS=0.005
+COIN_MAX_HOLD_SECONDS=LINK:420,SUI:420,ONDO:420
 ```
 
 ## AutoResearch -> AI model features

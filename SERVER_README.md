@@ -42,7 +42,10 @@ Set API keys and all required parameters in .env.
 Operational note for current Pi/server profile:
 - `EXCLUDED_COINS` keeps the base stablecoin-like exclusions
 - `LOSSMAKER_EXCLUDED_COINS` currently defaults to `ZEC,HYPE,TON,BTC,XRP`
+- `DYNAMIC_LOSSMAKER_EXCLUSION_ENABLED=true` adds a temporary journal-driven suppression layer for recent timeout-heavy losers
+- `COIN_MAX_HOLD_SECONDS` now defaults to `LINK:420,SUI:420,ONDO:420`
 - Override `LOSSMAKER_EXCLUDED_COINS` in `/opt/trading_2/.env` if you want to re-allow one of these symbols after review
+- Override the dynamic lossmaker knobs in `/opt/trading_2/.env` if you want a shorter or longer recent-loss memory window
 
 ## 3. Run Bot On Server
 Dry run test:

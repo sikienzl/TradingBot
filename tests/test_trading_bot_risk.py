@@ -70,6 +70,7 @@ def test_tabular_gate_allows_same_direction_confirmation(monkeypatch):
     bot.config.tabular_source_gate_enabled = True
     bot.config.tabular_min_confidence = 0.45
     bot.config.tabular_buy_min_confidence = 0.45
+    bot.config.tabular_allow_buy_entries = True
 
     allowed, gate_reason = bot._should_apply_tabular_signal(
         rule_recommendation="HOLD (Up-Trend)",
@@ -125,6 +126,7 @@ def test_tabular_gate_uses_stricter_buy_threshold(monkeypatch):
     bot.config.tabular_source_gate_enabled = False
     bot.config.tabular_min_confidence = 0.45
     bot.config.tabular_buy_min_confidence = 0.55
+    bot.config.tabular_allow_buy_entries = True
 
     allowed, gate_reason = bot._should_apply_tabular_signal(
         rule_recommendation="HOLD (Up-Trend)",
@@ -152,6 +154,21 @@ def test_tabular_gate_keeps_sell_threshold_independent(monkeypatch):
 
     assert allowed is True
     assert gate_reason == "gate_disabled"
+
+
+def test_tabular_gate_blocks_buy_entries_when_disabled(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.tabular_allow_buy_entries = False
+
+    allowed, gate_reason = bot._should_apply_tabular_signal(
+        rule_recommendation="HOLD (Up-Trend)",
+        rule_score=60,
+        tab_decision="kaufen",
+        tab_confidence=0.90,
+    )
+
+    assert allowed is False
+    assert gate_reason == "buy_entries_disabled"
 
 
 def test_effective_stop_loss_raises_with_trailing_peak(monkeypatch):
@@ -665,6 +682,121 @@ def test_downtrend_reversal_weak_signal_exit_closes_trade_early(monkeypatch):
     assert executed["action"] == "sell"
     assert "DOWNTREND-REVERSAL-WEAK-SIGNAL-EXIT" in executed["reason"]
     assert "ETH" not in bot.portfolio.open_trades
+
+
+def test_coin_specific_max_hold_seconds_override(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.partial_take_profit_enabled = False
+    bot.config.trailing_stop_enabled = False
+    bot.config.break_even_enabled = False
+    bot.config.exit_on_downtrend = False
+    bot.config.max_hold_seconds = 720
+    bot.config.coin_max_hold_seconds = {"SUI": 420}
+
+    bot.portfolio.cash = 0.0
+    bot.portfolio.holdings["SUI"] = 1.0
+    bot.portfolio.open_trades["SUI"] = {
+        "buy_price": 100.0,
+        "amount_coin": 1.0,
+        "amount_base": 100.0,
+        "timestamp": datetime.now() - timedelta(seconds=500),
+        "peak_price": 100.0,
+        "partial_tp_taken": False,
+        "partial_tp_timestamp": None,
+        "signal_source": "rules",
+        "signal_confidence": None,
+        "recommendation": "BUY",
+    }
+    monkeypatch.setattr(bot, "_get_atr_for_coin", lambda coin, period=14: 5.0)
+
+    executed = {}
+
+    def _fake_execute_trade(coin, action, price, amount_in_base_currency, atr=None, signal_source='rules', signal_confidence=None, recommendation='HOLD', reason=''):
+        executed["coin"] = coin
+        executed["action"] = action
+        executed["reason"] = reason
+        return True
+
+    monkeypatch.setattr(bot, "_execute_trade", _fake_execute_trade)
+
+    bot._manage_open_trades({"SUI": {"price": 100.0}})
+
+    assert executed["coin"] == "SUI"
+    assert executed["action"] == "sell"
+    assert "MAX-HOLD-TIME reached (500s >= 420s)" in executed["reason"]
+    assert "SUI" not in bot.portfolio.open_trades
+
+
+def test_dynamic_lossmaker_exclusions_detect_recent_timeout_losers(monkeypatch, tmp_path):
+    bot = _make_test_bot(monkeypatch)
+    journal_file = tmp_path / "trade_journal.csv"
+    journal_file.write_text(
+        "timestamp,iteration,coin,action,price,amount_coin,amount_base,pnl_base,pnl_pct,hold_seconds,signal_source,signal_confidence,recommendation,reason,dry_run\n"
+        "2026-05-20T10:00:00,1,SUI,sell,1,1,1,-0.0020,-0.2,420,rules,,BUY,MAX-HOLD-TIME reached (420s >= 420s),true\n"
+        "2026-05-20T10:05:00,2,SUI,sell,1,1,1,-0.0015,-0.15,430,rules,,BUY,MAX-HOLD-TIME reached (430s >= 420s),true\n"
+        "2026-05-20T10:10:00,3,SUI,sell,1,1,1,-0.0010,-0.10,440,rules,,BUY,MAX-HOLD-TIME reached (440s >= 420s),true\n"
+        "2026-05-20T10:15:00,4,ETH,sell,1,1,1,0.0020,0.2,180,rules,,BUY,ATR-TAKE-PROFIT,true\n",
+        encoding="utf-8",
+    )
+    bot.config.performance_log_enabled = True
+    bot.config.performance_log_file = str(journal_file)
+    bot.config.dynamic_lossmaker_exclusion_enabled = True
+    bot.config.dynamic_lossmaker_min_sells = 3
+    bot.config.dynamic_lossmaker_min_pnl_loss = 0.003
+    bot.config.dynamic_lossmaker_min_max_hold_exit_ratio = 0.5
+    bot.config.dynamic_lossmaker_max_win_rate_pct = 45.0
+
+    assert bot._dynamic_excluded_coins() == {"SUI"}
+
+
+def test_dynamic_lossmaker_exclusions_skip_new_entries_but_keep_open_positions(monkeypatch, tmp_path):
+    bot = _make_test_bot(monkeypatch)
+    journal_file = tmp_path / "trade_journal.csv"
+    journal_file.write_text(
+        "timestamp,iteration,coin,action,price,amount_coin,amount_base,pnl_base,pnl_pct,hold_seconds,signal_source,signal_confidence,recommendation,reason,dry_run\n"
+        "2026-05-20T10:00:00,1,SUI,sell,1,1,1,-0.0020,-0.2,420,rules,,BUY,MAX-HOLD-TIME reached (420s >= 420s),true\n"
+        "2026-05-20T10:05:00,2,SUI,sell,1,1,1,-0.0015,-0.15,430,rules,,BUY,MAX-HOLD-TIME reached (430s >= 420s),true\n"
+        "2026-05-20T10:10:00,3,SUI,sell,1,1,1,-0.0010,-0.10,440,rules,,BUY,MAX-HOLD-TIME reached (440s >= 420s),true\n",
+        encoding="utf-8",
+    )
+    bot.config.performance_log_enabled = True
+    bot.config.performance_log_file = str(journal_file)
+    bot.config.dynamic_lossmaker_exclusion_enabled = True
+    bot.config.dynamic_lossmaker_min_sells = 3
+    bot.config.dynamic_lossmaker_min_pnl_loss = 0.003
+    bot.config.dynamic_lossmaker_min_max_hold_exit_ratio = 0.5
+    bot.config.min_volume_base = 100.0
+    bot.config.top_n_for_analysis = 10
+
+    analyzed = []
+
+    def _fake_analyze_coin(coin, current_price):
+        analyzed.append(coin)
+        return {
+            "recommendation": "HOLD (Up-Trend)",
+            "score": 60,
+            "signal_source": "rules",
+            "signal_confidence": None,
+            "tabular_buy_proba": None,
+            "tabular_hold_proba": None,
+            "tabular_sell_proba": None,
+        }
+
+    monkeypatch.setattr(bot, "_analyze_coin", _fake_analyze_coin)
+
+    market_data = {
+        "SUI": {"price": 1.0, "volume": 1000.0},
+        "ETH": {"price": 2.0, "volume": 1200.0},
+    }
+
+    analysis = bot._analyze_markets(market_data)
+    assert set(analysis.keys()) == {"ETH"}
+    assert analyzed == ["ETH"]
+
+    analyzed.clear()
+    analysis = bot._analyze_markets(market_data, extra_coins=["SUI"])
+    assert set(analysis.keys()) == {"ETH", "SUI"}
+    assert analyzed == ["ETH", "SUI"]
 
 
 def test_entry_momentum_filter_blocks_sharp_pump_ret3(monkeypatch):

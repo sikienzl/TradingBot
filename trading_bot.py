@@ -5,7 +5,7 @@ import csv
 import json
 import shutil
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 import pandas as pd
 import time
 from datetime import datetime, timedelta, timezone
@@ -208,6 +208,27 @@ class BotConfig:
                 return default
             return raw.strip().strip('"').strip("'")
 
+        def _env_symbol_int_map(name: str, default: str = "") -> Dict[str, int]:
+            raw = _env_str(name, default)
+            if not raw:
+                return {}
+
+            parsed: Dict[str, int] = {}
+            for item in raw.split(','):
+                token = item.strip()
+                if not token or ':' not in token:
+                    continue
+                symbol, value = token.split(':', 1)
+                symbol = symbol.strip().upper()
+                value = value.strip()
+                if not symbol or not value:
+                    continue
+                try:
+                    parsed[symbol] = int(value)
+                except ValueError:
+                    continue
+            return parsed
+
         self.exchange_name = os.getenv('EXCHANGE_NAME', 'kraken').lower()
         self.api_key = os.getenv(
             'KRAKEN_API_KEY', '')
@@ -221,6 +242,18 @@ class BotConfig:
         lossmaker_excluded_coins = {c.strip().upper() for c in os.getenv(
             'LOSSMAKER_EXCLUDED_COINS', 'ZEC,HYPE,TON,BTC,XRP').split(',') if c.strip()}
         self.excluded_coins = configured_excluded_coins | lossmaker_excluded_coins
+        self.dynamic_lossmaker_exclusion_enabled = _env_bool(
+            'DYNAMIC_LOSSMAKER_EXCLUSION_ENABLED', True)
+        self.dynamic_lossmaker_window = int(
+            os.getenv('DYNAMIC_LOSSMAKER_WINDOW', 80))
+        self.dynamic_lossmaker_min_sells = int(
+            os.getenv('DYNAMIC_LOSSMAKER_MIN_SELLS', 3))
+        self.dynamic_lossmaker_max_win_rate_pct = float(
+            os.getenv('DYNAMIC_LOSSMAKER_MAX_WIN_RATE_PCT', 45.0))
+        self.dynamic_lossmaker_min_pnl_loss = float(
+            os.getenv('DYNAMIC_LOSSMAKER_MIN_PNL_LOSS', 0.003))
+        self.dynamic_lossmaker_min_max_hold_exit_ratio = float(
+            os.getenv('DYNAMIC_LOSSMAKER_MIN_MAX_HOLD_EXIT_RATIO', 0.5))
         # Amount in base currency per trade
         self.trade_amount = float(os.getenv('TRADE_AMOUNT', 20))
         # Minimum amount per trade in base currency
@@ -380,6 +413,8 @@ class BotConfig:
             os.getenv('BREAK_EVEN_BUFFER_PCT', 0.1))
         # Maximum hold time in seconds (0 = disabled)
         self.max_hold_seconds = int(os.getenv('MAX_HOLD_SECONDS', 120))
+        self.coin_max_hold_seconds = _env_symbol_int_map(
+            'COIN_MAX_HOLD_SECONDS', 'LINK:420,SUI:420,ONDO:420')
         # Allow smaller trades when cash is below TRADE_AMOUNT
         self.allow_partial_trades = _env_bool('ALLOW_PARTIAL_TRADES', True)
         # Fraction of cash kept in reserve (safety buffer)
@@ -404,6 +439,8 @@ class BotConfig:
             os.getenv('TABULAR_MIN_CONFIDENCE', 0.45))
         self.tabular_buy_min_confidence = float(
             os.getenv('TABULAR_BUY_MIN_CONFIDENCE', str(self.tabular_min_confidence)))
+        self.tabular_allow_buy_entries = _env_bool(
+            'TABULAR_ALLOW_BUY_ENTRIES', False)
         self.tabular_source_gate_enabled = _env_bool(
             'TABULAR_SOURCE_GATE_ENABLED', False)
         self.tabular_override_min_confidence = float(
@@ -657,6 +694,60 @@ class CryptoTradingBot:
             f"(trades={best[1]}, pnl={best[2]:.6f} {self.config.base_currency}, "
             f"avg={best[3]:.6f}, win_rate={best[4]:.2f}%)")
         return float(best[0])
+
+    def _dynamic_excluded_coins(self) -> Set[str]:
+        """Builds a temporary exclusion set from recent sell-side underperformance."""
+        if not self.config.dynamic_lossmaker_exclusion_enabled:
+            return set()
+
+        path = self.config.performance_log_file
+        if not self.config.performance_log_enabled or not os.path.exists(path):
+            return set()
+
+        try:
+            df = pd.read_csv(path)
+        except Exception as e:
+            logger.warning(
+                f"Journal could not be read for dynamic exclusions: {e}")
+            return set()
+
+        required_columns = {'action', 'coin', 'pnl_base', 'reason'}
+        if df.empty or not required_columns.issubset(df.columns):
+            return set()
+
+        recent_window = df.tail(self.config.dynamic_lossmaker_window).copy()
+        sells = recent_window.loc[
+            recent_window['action'].fillna(
+                '').astype(str).str.lower() == 'sell'
+        ].copy()
+        if sells.empty:
+            return set()
+
+        dynamic_exclusions: Set[str] = set()
+        for coin, group in sells.groupby('coin', dropna=True):
+            if len(group) < self.config.dynamic_lossmaker_min_sells:
+                continue
+
+            pnl = pd.to_numeric(group['pnl_base'], errors='coerce').fillna(0.0)
+            pnl_sum = float(pnl.sum())
+            if pnl_sum > -self.config.dynamic_lossmaker_min_pnl_loss:
+                continue
+
+            win_rate_pct = float((pnl > 0).mean() * 100.0)
+            if win_rate_pct > self.config.dynamic_lossmaker_max_win_rate_pct:
+                continue
+
+            reasons = group['reason'].fillna('').astype(str)
+            max_hold_exit_ratio = float(
+                reasons.str.contains(
+                    'MAX-HOLD-TIME', case=False, na=False).mean()
+            )
+            if max_hold_exit_ratio < self.config.dynamic_lossmaker_min_max_hold_exit_ratio:
+                continue
+
+            dynamic_exclusions.add(str(coin).upper())
+
+        return dynamic_exclusions
 
     def _read_auto_tune_state(self) -> Dict:
         path = self.config.auto_tune_state_file
@@ -1939,6 +2030,9 @@ class CryptoTradingBot:
         tab_decision: str,
         tab_confidence: float,
     ) -> Tuple[bool, str]:
+        if tab_decision == 'kaufen' and not self.config.tabular_allow_buy_entries:
+            return False, 'buy_entries_disabled'
+
         required_confidence = self.config.tabular_buy_min_confidence
         if tab_decision == 'verkaufen':
             required_confidence = self.config.tabular_min_confidence
@@ -2625,9 +2719,15 @@ class CryptoTradingBot:
 
     def _analyze_markets(self, market_data: Dict[str, Dict], extra_coins: Optional[List[str]] = None) -> Dict[str, Dict]:
         """Performs a comprehensive market analysis and returns recommendations."""
+        dynamic_excluded_coins = self._dynamic_excluded_coins()
+        if dynamic_excluded_coins:
+            logger.info(
+                "Dynamically excluded lossmaker coins: %s",
+                ', '.join(sorted(dynamic_excluded_coins)),
+            )
         filtered_coins_by_volume = []
         for coin, data in market_data.items():
-            if coin in self.config.excluded_coins:
+            if coin in self.config.excluded_coins or coin in dynamic_excluded_coins:
                 continue
             if data['volume'] >= self.config.min_volume_base:
                 filtered_coins_by_volume.append(coin)
@@ -2910,6 +3010,8 @@ class CryptoTradingBot:
             pnl_pct = (current_price - buy_price) / buy_price * 100
             hold_seconds = (datetime.now() -
                             trade_info['timestamp']).total_seconds()
+            max_hold_seconds = self.config.coin_max_hold_seconds.get(
+                coin, self.config.max_hold_seconds)
             # Fetch ATR for dynamic stops
             atr = self._get_atr_for_coin(coin, period=14)
             if np.isnan(atr) or atr == 0:
@@ -3048,8 +3150,8 @@ class CryptoTradingBot:
                 exit_reason = f"🚨 ATR-STOP-LOSS (Stop: {stop_loss_level:.4f})"
             elif (not self.config.partial_take_profit_enabled) and current_price >= take_profit_level:
                 exit_reason = f"🎉 ATR-TAKE-PROFIT (TP: {take_profit_level:.4f})"
-            elif self.config.max_hold_seconds > 0 and hold_seconds >= self.config.max_hold_seconds:
-                exit_reason = f"⏰ MAX-HOLD-TIME reached ({int(hold_seconds)}s >= {self.config.max_hold_seconds}s)"
+            elif max_hold_seconds > 0 and hold_seconds >= max_hold_seconds:
+                exit_reason = f"⏰ MAX-HOLD-TIME reached ({int(hold_seconds)}s >= {max_hold_seconds}s)"
             elif self.config.exit_on_downtrend and market_analysis is not None:
                 signal = market_analysis.get(
                     coin, {}).get('recommendation', '')
