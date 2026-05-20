@@ -361,6 +361,8 @@ class BotConfig:
         self.fallback_min_score = int(os.getenv('FALLBACK_MIN_SCORE', 45))
         # RSI limit for fallback entries (avoid overbought assets)
         self.fallback_max_rsi = float(os.getenv('FALLBACK_MAX_RSI', 68))
+        self.fallback_max_rsi_by_coin = _env_symbol_float_map(
+            'FALLBACK_MAX_RSI_BY_COIN', 'TRX:74')
         # Optionally forces filling of free slots with neutral non-SELL candidates
         self.force_fill_slots = _env_bool('FORCE_FILL_SLOTS', False)
         # Minimum score for forced slot filling (without RSI limit)
@@ -2281,6 +2283,19 @@ class CryptoTradingBot:
 
         return True, 'ok'
 
+    def _passes_fallback_entry_filter(self, coin: str, coin_data: Dict) -> Tuple[bool, str]:
+        """Applies fallback-only entry checks after the directional filters passed."""
+        rsi = coin_data.get('rsi')
+        if rsi is None or np.isnan(rsi):
+            return False, 'missing_rsi'
+
+        fallback_max_rsi = self.config.fallback_max_rsi_by_coin.get(
+            str(coin).upper(), self.config.fallback_max_rsi)
+        if float(rsi) > fallback_max_rsi:
+            return False, f"rsi_above_fallback_max ({float(rsi):.2f} > {fallback_max_rsi:.2f})"
+
+        return True, 'ok'
+
     def _entry_market_mode(self, market_analysis: Dict[str, Dict]) -> str:
         """Classifies the market to suppress aggressive entry filling in weak environments."""
         if not market_analysis:
@@ -2458,6 +2473,83 @@ class CryptoTradingBot:
                 candidate['signal_source'],
                 candidate['score'],
                 candidate['rule_score'],
+            )
+
+    def _log_fallback_entry_diagnostics(
+        self,
+        market_analysis: Dict[str, Dict],
+        fallback_base_candidates: List[str],
+        fallback_filter_results: Dict[str, Tuple[bool, str]],
+        fallback_allowed: bool,
+        fallback_suppression_reason: str,
+        entry_market_mode: str,
+        limit: int = 5,
+    ) -> None:
+        """Logs why fallback entries were blocked or fully suppressed."""
+        blocked_candidates = []
+        for coin in fallback_base_candidates:
+            passes_filter, filter_reason = fallback_filter_results.get(
+                coin, (True, 'not_evaluated'))
+            if passes_filter:
+                continue
+            data = market_analysis.get(coin, {})
+            blocked_candidates.append({
+                'coin': coin,
+                'reason': filter_reason,
+                'reason_code': self._filter_reason_code(filter_reason),
+                'rsi': data.get('rsi'),
+                'signal_source': data.get('signal_source', 'n/a'),
+                'score': data.get('score', 0),
+                'rule_score': data.get('rule_score', 0),
+            })
+
+        if blocked_candidates:
+            reason_mix = dict(Counter(
+                candidate['reason_code'] for candidate in blocked_candidates
+            ))
+            logger.info(
+                '  🚧 Fallback RSI gate blocked %d candidate(s): %s',
+                len(blocked_candidates),
+                reason_mix,
+            )
+            for candidate in blocked_candidates[:limit]:
+                rsi = candidate['rsi']
+                logger.info(
+                    '    - %s: reason=%s, RSI=%s, source=%s, score=%s, rule_score=%s',
+                    candidate['coin'],
+                    candidate['reason'],
+                    f'{float(rsi):.2f}' if rsi is not None and not np.isnan(
+                        rsi) else 'n/a',
+                    candidate['signal_source'],
+                    candidate['score'],
+                    candidate['rule_score'],
+                )
+
+        if fallback_allowed or not fallback_base_candidates:
+            return
+
+        logger.info(
+            '  🛑 Fallback entry suppressed (%s): %d candidate(s) met all non-RSI fallback conditions in entry_mode=%s.',
+            fallback_suppression_reason,
+            len(fallback_base_candidates),
+            entry_market_mode,
+        )
+        for coin in fallback_base_candidates[:limit]:
+            data = market_analysis.get(coin, {})
+            signal_confidence = data.get('signal_confidence')
+            confidence_text = ''
+            if signal_confidence is not None:
+                confidence_text = f", confidence={float(signal_confidence) * 100:.0f}%"
+            logger.info(
+                '    - %s: rec=%s, score=%s, rule_score=%s, RSI=%s, source=%s%s',
+                coin,
+                data.get('recommendation', 'n/a'),
+                data.get('score', 0),
+                data.get('rule_score', 0),
+                f"{float(data.get('rsi', np.nan)):.2f}" if not np.isnan(
+                    data.get('rsi', np.nan)) else 'n/a',
+                data.get('signal_source', 'n/a'),
+                confidence_text,
             )
 
     def _log_blocked_buy_attempt_candidates(
@@ -3368,6 +3460,20 @@ class CryptoTradingBot:
                 _excluded_signals_fallback = ['SELL', 'WEAK SELL']
                 if self.config.exit_on_downtrend:
                     _excluded_signals_fallback.append('HOLD (Down-Trend)')
+                fallback_base_candidates = [
+                    coin for coin, data in market_analysis.items()
+                    if coin not in occupied_positions
+                    and coin not in top_buy_recommendations
+                    if data.get('score', 0) >= self.config.fallback_min_score
+                    and data.get('recommendation') not in _excluded_signals_fallback
+                    and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+                    and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+                ]
+                fallback_filter_results = {
+                    coin: self._passes_fallback_entry_filter(
+                        coin, market_analysis.get(coin, {}))
+                    for coin in fallback_base_candidates
+                }
                 fallback_candidates = []
                 fallback_allowed = (
                     self.config.enable_fallback_entry
@@ -3377,17 +3483,17 @@ class CryptoTradingBot:
                         or entry_market_mode != 'defensive'
                     )
                 )
+                fallback_suppression_reason = 'allowed'
+                if not self.config.enable_fallback_entry:
+                    fallback_suppression_reason = 'fallback_disabled'
+                elif available_trade_slots <= len(top_buy_recommendations):
+                    fallback_suppression_reason = 'no_free_slots'
+                elif self.config.defensive_entry_mode_enabled and entry_market_mode == 'defensive':
+                    fallback_suppression_reason = 'entry_mode_defensive'
                 if fallback_allowed:
                     fallback_candidates = [
-                        coin for coin, data in market_analysis.items()
-                        if coin not in occupied_positions
-                        and coin not in top_buy_recommendations
-                        if data.get('score', 0) >= self.config.fallback_min_score
-                        and data.get('recommendation') not in _excluded_signals_fallback
-                        and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                        and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                        and not np.isnan(data.get('rsi', np.nan))
-                        and data.get('rsi', np.nan) <= self.config.fallback_max_rsi
+                        coin for coin in fallback_base_candidates
+                        if fallback_filter_results.get(coin, (False, 'not_evaluated'))[0]
                     ]
                     if fallback_candidates:
                         missing_slots = available_trade_slots - \
@@ -3458,6 +3564,14 @@ class CryptoTradingBot:
                     self._log_blocked_downtrend_reversal_candidates(
                         market_analysis,
                         downtrend_filter_results,
+                    )
+                    self._log_fallback_entry_diagnostics(
+                        market_analysis,
+                        fallback_base_candidates,
+                        fallback_filter_results,
+                        fallback_allowed,
+                        fallback_suppression_reason,
+                        entry_market_mode,
                     )
                     for coin, data in list(market_analysis.items())[:5]:
                         signal_confidence = data.get('signal_confidence')

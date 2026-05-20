@@ -437,6 +437,28 @@ def test_uptrend_entry_filter_applies_coin_specific_overrides(monkeypatch):
     assert reason == "ok"
 
 
+def test_fallback_entry_filter_applies_coin_specific_rsi_override(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.fallback_max_rsi = 68.0
+    bot.config.fallback_max_rsi_by_coin = {"TRX": 74.0}
+
+    passes, reason = bot._passes_fallback_entry_filter("TRX", {
+        "coin": "TRX",
+        "recommendation": "HOLD (Up-Trend)",
+        "rsi": 73.2,
+    })
+    assert passes is True
+    assert reason == "ok"
+
+    passes, reason = bot._passes_fallback_entry_filter("ETH", {
+        "coin": "ETH",
+        "recommendation": "HOLD (Up-Trend)",
+        "rsi": 70.7,
+    })
+    assert passes is False
+    assert reason.startswith("rsi_above_fallback_max")
+
+
 def test_uptrend_entry_filter_blocks_missing_tabular_probs_for_rules_trade(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.uptrend_entry_gate_enabled = True
@@ -614,6 +636,64 @@ def test_logs_blocked_buy_attempt_summary(monkeypatch, caplog):
     assert "Buy attempt blocked 1 candidate(s)" in caplog.text
     assert "ret_3_below_min" in caplog.text
     assert "TRX" in caplog.text
+
+
+def test_logs_fallback_rsi_block_summary(monkeypatch, caplog):
+    bot = _make_test_bot(monkeypatch)
+
+    with caplog.at_level(logging.INFO):
+        bot._log_fallback_entry_diagnostics(
+            market_analysis={
+                "TRX": {
+                    "recommendation": "HOLD (Up-Trend)",
+                    "rsi": 74.19,
+                    "signal_source": "rules",
+                    "score": 60,
+                    "rule_score": 60,
+                }
+            },
+            fallback_base_candidates=["TRX"],
+            fallback_filter_results={
+                "TRX": (
+                    False,
+                    "rsi_above_fallback_max (74.19 > 74.00)",
+                )
+            },
+            fallback_allowed=True,
+            fallback_suppression_reason="allowed",
+            entry_market_mode="cautious",
+        )
+
+    assert "Fallback RSI gate blocked 1 candidate(s)" in caplog.text
+    assert "rsi_above_fallback_max" in caplog.text
+    assert "TRX" in caplog.text
+
+
+def test_logs_fallback_suppressed_by_defensive_mode(monkeypatch, caplog):
+    bot = _make_test_bot(monkeypatch)
+
+    with caplog.at_level(logging.INFO):
+        bot._log_fallback_entry_diagnostics(
+            market_analysis={
+                "TRX": {
+                    "recommendation": "HOLD (Up-Trend)",
+                    "rsi": 71.88,
+                    "signal_source": "catboost",
+                    "score": 60,
+                    "rule_score": 60,
+                    "signal_confidence": 0.57,
+                }
+            },
+            fallback_base_candidates=["TRX"],
+            fallback_filter_results={"TRX": (True, "ok")},
+            fallback_allowed=False,
+            fallback_suppression_reason="entry_mode_defensive",
+            entry_market_mode="defensive",
+        )
+
+    assert "Fallback entry suppressed (entry_mode_defensive)" in caplog.text
+    assert "entry_mode=defensive" in caplog.text
+    assert "confidence=57%" in caplog.text
 
 
 def test_effective_trade_amount_scales_by_portfolio_tiers(monkeypatch):

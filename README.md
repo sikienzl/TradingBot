@@ -275,6 +275,13 @@ UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN=ONDO:0.445
 UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN=TRX:-0.13,ONDO:-0.055
 ```
 
+If a coin already passes the uptrend quality gate but still misses fallback entries because the generic fallback RSI ceiling is too low, use `FALLBACK_MAX_RSI_BY_COIN` for a narrow override instead of lowering the global fallback limit.
+
+```sh
+FALLBACK_MAX_RSI=68
+FALLBACK_MAX_RSI_BY_COIN=TRX:74
+```
+
 ## AutoResearch -> AI model features
 
 The CatBoost model can consume a normalized AutoResearch signal vector at training and inference time.
