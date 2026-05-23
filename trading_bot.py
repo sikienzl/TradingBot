@@ -2625,10 +2625,6 @@ class CryptoTradingBot:
         if float(rsi) > max_rsi:
             return False, f"rsi_above_reversal_max ({float(rsi):.2f} > {max_rsi:.2f})"
 
-        signal_source = str(coin_data.get('signal_source', ''))
-        if signal_source != 'catboost':
-            return False, 'downtrend_requires_catboost'
-
         buy_proba = coin_data.get('tabular_buy_proba')
         sell_proba = coin_data.get('tabular_sell_proba')
         if buy_proba is None or sell_proba is None:
@@ -2674,6 +2670,17 @@ class CryptoTradingBot:
             )
 
         return True, 'downtrend_reversal_ok'
+
+    @staticmethod
+    def _allows_entry_signal(
+        recommendation: str,
+        downtrend_reversal_allowed: bool,
+        excluded_signals: Set[str],
+    ) -> bool:
+        """Keeps explicit downtrend-reversal approvals eligible even when generic exits block downtrend entries."""
+        if recommendation != 'HOLD (Down-Trend)':
+            return recommendation not in excluded_signals
+        return downtrend_reversal_allowed
 
     @staticmethod
     def _is_downtrend_reversal_trade(trade_info: Dict) -> bool:
@@ -3482,7 +3489,12 @@ class CryptoTradingBot:
                     if coin not in occupied_positions
                     and coin not in top_buy_recommendations
                     if data.get('score', 0) >= self.config.fallback_min_score
-                    and data.get('recommendation') not in _excluded_signals_fallback
+                    and self._allows_entry_signal(
+                        str(data.get('recommendation', '')),
+                        downtrend_filter_results.get(
+                            coin, (False, 'not_evaluated'))[0],
+                        set(_excluded_signals_fallback),
+                    )
                     and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
                     and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
                 ]
@@ -3539,7 +3551,12 @@ class CryptoTradingBot:
                         if coin not in occupied_positions
                         and coin not in top_buy_recommendations
                         and data.get('score', 0) >= self.config.force_fill_min_score
-                        and data.get('recommendation') not in _excluded_signals_fallback
+                        and self._allows_entry_signal(
+                            str(data.get('recommendation', '')),
+                            downtrend_filter_results.get(
+                                coin, (False, 'not_evaluated'))[0],
+                            set(_excluded_signals_fallback),
+                        )
                         and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
                         and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
                     ]

@@ -545,6 +545,34 @@ def test_downtrend_reversal_filter_allows_confirmed_reversal(monkeypatch):
     assert reason == "downtrend_reversal_ok"
 
 
+def test_downtrend_reversal_filter_uses_tabular_proba_even_for_rules_signal(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.downtrend_reversal_entry_enabled = True
+    bot.config.downtrend_reversal_allowed_coins = {"SUI"}
+    bot.config.downtrend_reversal_max_rsi = 35.0
+    bot.config.downtrend_reversal_min_buy_proba = 0.20
+    bot.config.downtrend_reversal_max_sell_proba = 0.39
+    bot.config.downtrend_reversal_min_proba_edge = -0.14
+    bot.config.downtrend_reversal_min_ret_1 = 0.0
+    bot.config.downtrend_reversal_min_ret_3 = -0.01
+    bot.config.downtrend_reversal_min_macd_hist = 0.0
+
+    passes, reason = bot._passes_downtrend_reversal_filter({
+        "coin": "SUI",
+        "recommendation": "HOLD (Down-Trend)",
+        "signal_source": "rules",
+        "rsi": 33.1,
+        "tabular_buy_proba": 0.239,
+        "tabular_sell_proba": 0.375,
+        "ret_1": 0.01,
+        "ret_3": 0.02,
+        "macd_hist": 0.05,
+    })
+
+    assert passes is True
+    assert reason == "downtrend_reversal_ok"
+
+
 def test_downtrend_reversal_filter_blocks_non_allowed_coin(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.downtrend_reversal_allowed_coins = {"ETH"}
@@ -754,6 +782,22 @@ def test_logs_fallback_suppressed_by_defensive_mode(monkeypatch, caplog):
     assert "Fallback entry suppressed (entry_mode_defensive)" in caplog.text
     assert "entry_mode=defensive" in caplog.text
     assert "confidence=57%" in caplog.text
+
+
+def test_allows_entry_signal_keeps_approved_downtrend_candidate(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+
+    assert bot._allows_entry_signal(
+        recommendation="HOLD (Down-Trend)",
+        downtrend_reversal_allowed=True,
+        excluded_signals={"SELL", "WEAK SELL", "HOLD (Down-Trend)"},
+    ) is True
+
+    assert bot._allows_entry_signal(
+        recommendation="HOLD (Down-Trend)",
+        downtrend_reversal_allowed=False,
+        excluded_signals={"SELL", "WEAK SELL", "HOLD (Down-Trend)"},
+    ) is False
 
 
 def test_effective_trade_amount_scales_by_portfolio_tiers(monkeypatch):
