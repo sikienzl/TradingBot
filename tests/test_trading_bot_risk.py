@@ -565,6 +565,66 @@ def test_downtrend_reversal_filter_blocks_non_allowed_coin(monkeypatch):
     assert reason == "coin_not_allowed_for_reversal (BTC)"
 
 
+def test_downtrend_reversal_filter_allows_coin_specific_rsi_override(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.downtrend_reversal_entry_enabled = True
+    bot.config.downtrend_reversal_allowed_coins = {"SOL"}
+    bot.config.downtrend_reversal_max_rsi = 20.0
+    bot.config.downtrend_reversal_max_rsi_by_coin = {"SOL": 36.0}
+    bot.config.downtrend_reversal_min_buy_proba = 0.15
+    bot.config.downtrend_reversal_max_sell_proba = 0.45
+    bot.config.downtrend_reversal_min_proba_edge = -0.30
+    bot.config.downtrend_reversal_min_ret_1 = 0.0
+    bot.config.downtrend_reversal_min_ret_3 = -0.01
+    bot.config.downtrend_reversal_min_macd_hist = 0.0
+
+    passes, reason = bot._passes_downtrend_reversal_filter({
+        "coin": "SOL",
+        "recommendation": "HOLD (Down-Trend)",
+        "signal_source": "catboost",
+        "rsi": 35.5,
+        "tabular_buy_proba": 0.17,
+        "tabular_sell_proba": 0.39,
+        "ret_1": 0.01,
+        "ret_3": 0.02,
+        "macd_hist": 0.05,
+    })
+
+    assert passes is True
+    assert reason == "downtrend_reversal_ok"
+
+
+def test_downtrend_reversal_filter_honors_coin_specific_buy_proba_edge_override(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.downtrend_reversal_entry_enabled = True
+    bot.config.downtrend_reversal_allowed_coins = {"TRX"}
+    bot.config.downtrend_reversal_max_rsi = 35.0
+    bot.config.downtrend_reversal_min_buy_proba = 0.18
+    bot.config.downtrend_reversal_min_buy_proba_by_coin = {"TRX": 0.15}
+    bot.config.downtrend_reversal_max_sell_proba = 0.42
+    bot.config.downtrend_reversal_max_sell_proba_by_coin = {"TRX": 0.21}
+    bot.config.downtrend_reversal_min_proba_edge = -0.02
+    bot.config.downtrend_reversal_min_proba_edge_by_coin = {"TRX": -0.06}
+    bot.config.downtrend_reversal_min_ret_1 = 0.0
+    bot.config.downtrend_reversal_min_ret_3 = -0.01
+    bot.config.downtrend_reversal_min_macd_hist = 0.0
+
+    passes, reason = bot._passes_downtrend_reversal_filter({
+        "coin": "TRX",
+        "recommendation": "HOLD (Down-Trend)",
+        "signal_source": "catboost",
+        "rsi": 28.0,
+        "tabular_buy_proba": 0.151,
+        "tabular_sell_proba": 0.205,
+        "ret_1": 0.01,
+        "ret_3": 0.02,
+        "macd_hist": 0.05,
+    })
+
+    assert passes is True
+    assert reason == "downtrend_reversal_ok"
+
+
 def test_entry_market_mode_detects_defensive_simulation_regime(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.simulation_regime = "crash"

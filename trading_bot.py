@@ -374,12 +374,20 @@ class BotConfig:
             'DOWNTREND_REVERSAL_ENTRY_ENABLED', True)
         self.downtrend_reversal_max_rsi = float(
             os.getenv('DOWNTREND_REVERSAL_MAX_RSI', 30.0))
+        self.downtrend_reversal_max_rsi_by_coin = _env_symbol_float_map(
+            'DOWNTREND_REVERSAL_MAX_RSI_BY_COIN', '')
         self.downtrend_reversal_min_buy_proba = float(
             os.getenv('DOWNTREND_REVERSAL_MIN_BUY_PROBA', 0.20))
+        self.downtrend_reversal_min_buy_proba_by_coin = _env_symbol_float_map(
+            'DOWNTREND_REVERSAL_MIN_BUY_PROBA_BY_COIN', '')
         self.downtrend_reversal_max_sell_proba = float(
             os.getenv('DOWNTREND_REVERSAL_MAX_SELL_PROBA', 0.35))
+        self.downtrend_reversal_max_sell_proba_by_coin = _env_symbol_float_map(
+            'DOWNTREND_REVERSAL_MAX_SELL_PROBA_BY_COIN', '')
         self.downtrend_reversal_min_proba_edge = float(
             os.getenv('DOWNTREND_REVERSAL_MIN_PROBA_EDGE', 0.02))
+        self.downtrend_reversal_min_proba_edge_by_coin = _env_symbol_float_map(
+            'DOWNTREND_REVERSAL_MIN_PROBA_EDGE_BY_COIN', '')
         self.downtrend_reversal_min_ret_1 = float(
             os.getenv('DOWNTREND_REVERSAL_MIN_RET_1', 0.0))
         self.downtrend_reversal_min_ret_3 = float(
@@ -2596,6 +2604,15 @@ class CryptoTradingBot:
             return True, 'not_downtrend'
 
         coin = str(coin_data.get('coin', '')).upper()
+        max_rsi = self.config.downtrend_reversal_max_rsi_by_coin.get(
+            coin, self.config.downtrend_reversal_max_rsi)
+        min_buy_proba = self.config.downtrend_reversal_min_buy_proba_by_coin.get(
+            coin, self.config.downtrend_reversal_min_buy_proba)
+        max_sell_proba = self.config.downtrend_reversal_max_sell_proba_by_coin.get(
+            coin, self.config.downtrend_reversal_max_sell_proba)
+        min_proba_edge = self.config.downtrend_reversal_min_proba_edge_by_coin.get(
+            coin, self.config.downtrend_reversal_min_proba_edge)
+
         if coin and self.config.downtrend_reversal_allowed_coins and coin not in self.config.downtrend_reversal_allowed_coins:
             return False, f"coin_not_allowed_for_reversal ({coin or 'unknown'})"
 
@@ -2605,8 +2622,8 @@ class CryptoTradingBot:
         rsi = coin_data.get('rsi')
         if rsi is None or np.isnan(rsi):
             return False, 'missing_rsi'
-        if float(rsi) > self.config.downtrend_reversal_max_rsi:
-            return False, f"rsi_above_reversal_max ({float(rsi):.2f} > {self.config.downtrend_reversal_max_rsi:.2f})"
+        if float(rsi) > max_rsi:
+            return False, f"rsi_above_reversal_max ({float(rsi):.2f} > {max_rsi:.2f})"
 
         signal_source = str(coin_data.get('signal_source', ''))
         if signal_source != 'catboost':
@@ -2619,14 +2636,14 @@ class CryptoTradingBot:
 
         buy_proba = float(buy_proba)
         sell_proba = float(sell_proba)
-        if buy_proba < self.config.downtrend_reversal_min_buy_proba:
-            return False, f"buy_proba_below_min ({buy_proba:.3f} < {self.config.downtrend_reversal_min_buy_proba:.3f})"
-        if sell_proba > self.config.downtrend_reversal_max_sell_proba:
-            return False, f"sell_proba_above_max ({sell_proba:.3f} > {self.config.downtrend_reversal_max_sell_proba:.3f})"
-        if (buy_proba - sell_proba) < self.config.downtrend_reversal_min_proba_edge:
+        if buy_proba < min_buy_proba:
+            return False, f"buy_proba_below_min ({buy_proba:.3f} < {min_buy_proba:.3f})"
+        if sell_proba > max_sell_proba:
+            return False, f"sell_proba_above_max ({sell_proba:.3f} > {max_sell_proba:.3f})"
+        if (buy_proba - sell_proba) < min_proba_edge:
             return False, (
                 f"buy_sell_edge_too_small ({buy_proba - sell_proba:.3f} < "
-                f"{self.config.downtrend_reversal_min_proba_edge:.3f})"
+                f"{min_proba_edge:.3f})"
             )
 
         ret_1 = coin_data.get('ret_1')
