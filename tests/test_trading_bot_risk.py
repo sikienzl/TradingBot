@@ -1,6 +1,8 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
+import pandas as pd
+
 from trading_bot import BotConfig, CryptoTradingBot
 
 
@@ -169,6 +171,44 @@ def test_tabular_gate_blocks_buy_entries_when_disabled(monkeypatch):
 
     assert allowed is False
     assert gate_reason == "buy_entries_disabled"
+
+
+def test_analyze_coin_returns_macd_hist_for_downtrend_filters(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+
+    class FakeTabularPredictor:
+        def predict(self, row_data, confidence_threshold=0.0):
+            return {
+                "decision": "halten",
+                "confidence": 0.40,
+                "proba": {
+                    "verkaufen": 0.38,
+                    "halten": 0.36,
+                    "kaufen": 0.26,
+                },
+            }
+
+    timestamps = pd.date_range("2026-01-01", periods=60, freq="h", tz="UTC")
+    closes = [100 - idx * 0.4 for idx in range(60)]
+    ohlcv_df = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": [price + 0.2 for price in closes],
+            "high": [price + 0.5 for price in closes],
+            "low": [price - 0.5 for price in closes],
+            "close": closes,
+            "volume": [1000 + idx * 10 for idx in range(60)],
+        }
+    )
+
+    bot.tabular_predictor = FakeTabularPredictor()
+    bot._fetch_ohlcv_data = lambda *args, **kwargs: ohlcv_df
+
+    analysis = bot._analyze_coin("SUI", current_price=float(closes[-1]))
+
+    assert analysis is not None
+    assert analysis["macd_hist"] is not None
+    assert isinstance(analysis["macd_hist"], float)
 
 
 def test_effective_stop_loss_raises_with_trailing_peak(monkeypatch):

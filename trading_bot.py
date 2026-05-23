@@ -2720,6 +2720,7 @@ class CryptoTradingBot:
         tab_buy_proba = None
         tab_hold_proba = None
         tab_sell_proba = None
+        macd_hist = None
 
         if not np.isnan(rsi) and not np.isnan(sma_short) and not np.isnan(sma_long):
             if rsi < 30 and sma_short > sma_long and current_price > sma_short:
@@ -2801,6 +2802,7 @@ class CryptoTradingBot:
                 _macd = float(macd_line.iloc[-1])
                 _macd_sig = float(macd_signal_line.iloc[-1])
                 _macd_hist = _macd - _macd_sig
+                macd_hist = _macd_hist
 
                 # EMAs
                 _ema20 = float(
@@ -2952,6 +2954,7 @@ class CryptoTradingBot:
             'tabular_buy_proba': tab_buy_proba,
             'tabular_hold_proba': tab_hold_proba,
             'tabular_sell_proba': tab_sell_proba,
+            'macd_hist': macd_hist,
         }
 
     def _analyze_markets(self, market_data: Dict[str, Dict], extra_coins: Optional[List[str]] = None) -> Dict[str, Dict]:
