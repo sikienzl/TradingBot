@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo-transparent.png" alt="TradingBot logo" width="360">
+  <img src="assets/logo-transparent.png" alt="Crypto Trading Bot logo" width="480">
 </p>
 
 <h1 align="center">Crypto Trading Bot</h1>
