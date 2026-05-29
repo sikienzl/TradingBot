@@ -1,8 +1,18 @@
-# Crypto Trading Bot
+<p align="center">
+  <img src="assets2/logo-transparent.png" alt="TradingBot logo" width="360">
+</p>
 
-[![CI](https://github.com/sikienzl/TradingBot/actions/workflows/ci.yml/badge.svg)](https://github.com/sikienzl/TradingBot/actions/workflows/ci.yml)
+<h1 align="center">Crypto Trading Bot</h1>
 
-A modular pipeline for crypto trading: data collection, feature engineering, CatBoost/LLM ensemble prediction, and live/simulated trading via the Kraken exchange. Designed for research, simulation, and (optionally) live trading.
+<p align="center">
+  <a href="https://github.com/sikienzl/TradingBot/actions/workflows/ci.yml">
+    <img src="https://github.com/sikienzl/TradingBot/actions/workflows/ci.yml/badge.svg" alt="CI status">
+  </a>
+</p>
+
+<p align="center">
+  A modular pipeline for crypto trading: data collection, feature engineering, CatBoost/LLM ensemble prediction, and live/simulated trading via Kraken. Built for research, simulation, and optional live trading.
+</p>
 
 ## Setup
 
