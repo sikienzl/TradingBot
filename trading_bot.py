@@ -798,7 +798,14 @@ class CryptoTradingBot:
         if df.empty or not required_columns.issubset(df.columns):
             return set()
 
-        recent_window = df.tail(self.config.dynamic_lossmaker_window).copy()
+        sells = df.loc[
+            df['action'].fillna(
+                '').astype(str).str.lower() == 'sell'
+        ].copy()
+        recent_window = sells.tail(self.config.dynamic_lossmaker_window).copy()
+        if recent_window.empty:
+            return set()
+
         sells = recent_window.loc[
             recent_window['action'].fillna(
                 '').astype(str).str.lower() == 'sell'

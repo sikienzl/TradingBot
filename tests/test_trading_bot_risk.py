@@ -1097,6 +1097,32 @@ def test_dynamic_lossmaker_exclusions_skip_new_entries_but_keep_open_positions(m
     assert analyzed == ["ETH", "SUI"]
 
 
+def test_dynamic_lossmaker_exclusions_use_recent_sell_window_not_total_rows(monkeypatch, tmp_path):
+    bot = _make_test_bot(monkeypatch)
+    journal_file = tmp_path / "trade_journal.csv"
+    journal_file.write_text(
+        "timestamp,iteration,coin,action,price,amount_coin,amount_base,pnl_base,pnl_pct,hold_seconds,signal_source,signal_confidence,recommendation,reason,dry_run\n"
+        "2026-05-20T10:00:00,1,SUI,sell,1,1,1,-0.0020,-0.2,420,rules,,BUY,MAX-HOLD-TIME reached (420s >= 420s),true\n"
+        "2026-05-20T10:01:00,2,SUI,sell,1,1,1,-0.0015,-0.15,430,rules,,BUY,MAX-HOLD-TIME reached (430s >= 420s),true\n"
+        "2026-05-20T10:02:00,3,SUI,sell,1,1,1,-0.0010,-0.10,440,rules,,BUY,MAX-HOLD-TIME reached (440s >= 420s),true\n"
+        "2026-05-20T10:03:00,4,ETH,buy,1,1,1,0,0,0,rules,,BUY,ENTRY,true\n"
+        "2026-05-20T10:04:00,5,ETH,buy,1,1,1,0,0,0,rules,,BUY,ENTRY,true\n"
+        "2026-05-20T10:05:00,6,ETH,buy,1,1,1,0,0,0,rules,,BUY,ENTRY,true\n"
+        "2026-05-20T10:06:00,7,ETH,buy,1,1,1,0,0,0,rules,,BUY,ENTRY,true\n",
+        encoding="utf-8",
+    )
+    bot.config.performance_log_enabled = True
+    bot.config.performance_log_file = str(journal_file)
+    bot.config.dynamic_lossmaker_exclusion_enabled = True
+    bot.config.dynamic_lossmaker_window = 3
+    bot.config.dynamic_lossmaker_min_sells = 3
+    bot.config.dynamic_lossmaker_min_pnl_loss = 0.003
+    bot.config.dynamic_lossmaker_min_max_hold_exit_ratio = 0.5
+    bot.config.dynamic_lossmaker_max_win_rate_pct = 45.0
+
+    assert bot._dynamic_excluded_coins() == {"SUI"}
+
+
 def test_entry_momentum_filter_blocks_sharp_pump_ret3(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.entry_momentum_filter_enabled = True
