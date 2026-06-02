@@ -744,6 +744,35 @@ def test_lossmaker_exclusions_are_merged_into_excluded_coins(monkeypatch):
             "XRP"}.issubset(config.excluded_coins)
 
 
+def test_analytics_db_connect_kwargs_support_url_and_split_fields(monkeypatch):
+    monkeypatch.setenv("ANALYTICS_DB_ENABLED", "true")
+    monkeypatch.setenv("ANALYTICS_DB_URL", "postgresql://user:secret@db.example/trading")
+    config = BotConfig()
+
+    kwargs = config.analytics_db_connect_kwargs()
+
+    assert kwargs["conninfo"] == "postgresql://user:secret@db.example/trading"
+    assert kwargs["connect_timeout"] == 5
+
+    monkeypatch.delenv("ANALYTICS_DB_URL", raising=False)
+    monkeypatch.setenv("ANALYTICS_DB_HOST", "db.example")
+    monkeypatch.setenv("ANALYTICS_DB_PORT", "5433")
+    monkeypatch.setenv("ANALYTICS_DB_NAME", "trading")
+    monkeypatch.setenv("ANALYTICS_DB_USER", "bot")
+    monkeypatch.setenv("ANALYTICS_DB_PASSWORD", "secret")
+    monkeypatch.setenv("ANALYTICS_DB_SSLMODE", "require")
+
+    config = BotConfig()
+    kwargs = config.analytics_db_connect_kwargs()
+
+    assert kwargs["host"] == "db.example"
+    assert kwargs["port"] == 5433
+    assert kwargs["dbname"] == "trading"
+    assert kwargs["user"] == "bot"
+    assert kwargs["password"] == "secret"
+    assert kwargs["sslmode"] == "require"
+
+
 def test_logs_blocked_buy_attempt_summary(monkeypatch, caplog):
     bot = _make_test_bot(monkeypatch)
 

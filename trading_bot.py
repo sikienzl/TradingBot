@@ -5,6 +5,7 @@ import csv
 import json
 import shutil
 import math
+import importlib
 from typing import Any, Dict, List, Optional, Set, Tuple
 import pandas as pd
 import time
@@ -15,9 +16,13 @@ from dotenv import load_dotenv
 from collections import Counter, defaultdict
 import urllib.request
 import urllib.error
+import re
 
 
 logger = logging.getLogger(__name__)
+
+
+_SAFE_IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
 
 def configure_logging(log_file: str = 'trading_bot.log', level: int = logging.INFO) -> None:
@@ -561,6 +566,19 @@ class BotConfig:
             'PERFORMANCE_LOG_FILE', 'trade_journal.csv')
         self.performance_report_every = int(
             os.getenv('PERFORMANCE_REPORT_EVERY', 1))
+        self.analytics_db_enabled = _env_bool('ANALYTICS_DB_ENABLED', False)
+        self.analytics_db_url = _env_str('ANALYTICS_DB_URL', '')
+        self.analytics_db_host = _env_str('ANALYTICS_DB_HOST', '')
+        self.analytics_db_port = int(os.getenv('ANALYTICS_DB_PORT', 5432))
+        self.analytics_db_name = _env_str('ANALYTICS_DB_NAME', '')
+        self.analytics_db_user = _env_str('ANALYTICS_DB_USER', '')
+        self.analytics_db_password = _env_str('ANALYTICS_DB_PASSWORD', '')
+        self.analytics_db_sslmode = _env_str('ANALYTICS_DB_SSLMODE', 'prefer')
+        self.analytics_db_connect_timeout_seconds = int(
+            os.getenv('ANALYTICS_DB_CONNECT_TIMEOUT_SECONDS', 5))
+        self.analytics_db_schema = _env_str('ANALYTICS_DB_SCHEMA', 'public')
+        self.analytics_db_snapshot_every = int(
+            os.getenv('ANALYTICS_DB_SNAPSHOT_EVERY', 1))
         # Hard risk guardrails (0 = disabled)
         self.max_daily_loss_pct = float(os.getenv('MAX_DAILY_LOSS_PCT', 0))
         self.max_buys_per_hour = int(os.getenv('MAX_BUYS_PER_HOUR', 0))
@@ -588,6 +606,267 @@ class BotConfig:
             os.getenv('AI_COPILOT_MAX_BUDGET_USD_PER_MONTH', 5.0))
         self.ai_copilot_max_output_tokens = int(
             os.getenv('AI_COPILOT_MAX_OUTPUT_TOKENS', 300))
+
+    def analytics_db_connect_kwargs(self) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {}
+        if self.analytics_db_url:
+            kwargs['conninfo'] = self.analytics_db_url
+        else:
+            if self.analytics_db_host:
+                kwargs['host'] = self.analytics_db_host
+            if self.analytics_db_port > 0:
+                kwargs['port'] = self.analytics_db_port
+            if self.analytics_db_name:
+                kwargs['dbname'] = self.analytics_db_name
+            if self.analytics_db_user:
+                kwargs['user'] = self.analytics_db_user
+            if self.analytics_db_password:
+                kwargs['password'] = self.analytics_db_password
+            if self.analytics_db_sslmode:
+                kwargs['sslmode'] = self.analytics_db_sslmode
+
+        timeout_seconds = max(
+            1, int(self.analytics_db_connect_timeout_seconds))
+        kwargs['connect_timeout'] = timeout_seconds
+        return kwargs
+
+
+class PostgresAnalyticsWriter:
+    """Optional Postgres sink for trade and portfolio analytics."""
+
+    def __init__(self, config: BotConfig):
+        self.config = config
+        self.enabled = config.analytics_db_enabled
+        self._psycopg = None
+        self._conn = None
+        self._disabled_reason_logged = False
+        self._schema = self._sanitize_identifier(
+            config.analytics_db_schema, 'public')
+
+    def _sanitize_identifier(self, value: str, fallback: str) -> str:
+        candidate = (value or '').strip()
+        if _SAFE_IDENTIFIER_RE.match(candidate):
+            return candidate
+        return fallback
+
+    def _qualified_table(self, table_name: str) -> str:
+        return f'{self._schema}.{table_name}'
+
+    def _ensure_connection(self) -> bool:
+        if not self.enabled:
+            return False
+        if self._conn is not None and not getattr(self._conn, 'closed', False):
+            return True
+        try:
+            if self._psycopg is None:
+                self._psycopg = importlib.import_module('psycopg')
+        except Exception as exc:
+            if not self._disabled_reason_logged:
+                logger.warning(
+                    'Analytics DB enabled but psycopg is unavailable: %s', exc)
+                self._disabled_reason_logged = True
+            return False
+
+        kwargs = self.config.analytics_db_connect_kwargs()
+        if 'conninfo' not in kwargs and not kwargs.get('host'):
+            if not self._disabled_reason_logged:
+                logger.warning(
+                    'Analytics DB enabled but neither ANALYTICS_DB_URL nor ANALYTICS_DB_HOST is configured.')
+                self._disabled_reason_logged = True
+            return False
+
+        try:
+            self._conn = self._psycopg.connect(**kwargs)
+            self._conn.autocommit = True
+            self._ensure_schema()
+            return True
+        except Exception as exc:
+            if not self._disabled_reason_logged:
+                logger.warning(
+                    'Failed to connect to analytics Postgres DB: %s', exc)
+                self._disabled_reason_logged = True
+            self.close()
+            return False
+
+    def _ensure_schema(self) -> None:
+        if self._conn is None:
+            return
+        trades_table = self._qualified_table('trade_events')
+        snapshots_table = self._qualified_table('portfolio_snapshots')
+        with self._conn.cursor() as cur:
+            cur.execute(f'CREATE SCHEMA IF NOT EXISTS {self._schema}')
+            cur.execute(
+                f'''
+                CREATE TABLE IF NOT EXISTS {trades_table} (
+                    id BIGSERIAL PRIMARY KEY,
+                    event_ts TIMESTAMPTZ NOT NULL,
+                    iteration INTEGER NOT NULL,
+                    coin TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    price DOUBLE PRECISION NOT NULL,
+                    amount_coin DOUBLE PRECISION NOT NULL,
+                    amount_base DOUBLE PRECISION NOT NULL,
+                    pnl_base DOUBLE PRECISION NOT NULL,
+                    pnl_pct DOUBLE PRECISION NOT NULL,
+                    hold_seconds DOUBLE PRECISION NOT NULL,
+                    signal_source TEXT,
+                    signal_confidence DOUBLE PRECISION,
+                    recommendation TEXT,
+                    reason TEXT,
+                    dry_run BOOLEAN NOT NULL,
+                    base_currency TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                '''
+            )
+            cur.execute(
+                f'''
+                CREATE INDEX IF NOT EXISTS trade_events_event_ts_idx
+                ON {trades_table} (event_ts DESC)
+                '''
+            )
+            cur.execute(
+                f'''
+                CREATE INDEX IF NOT EXISTS trade_events_coin_action_idx
+                ON {trades_table} (coin, action)
+                '''
+            )
+            cur.execute(
+                f'''
+                CREATE TABLE IF NOT EXISTS {snapshots_table} (
+                    id BIGSERIAL PRIMARY KEY,
+                    snapshot_ts TIMESTAMPTZ NOT NULL,
+                    iteration INTEGER NOT NULL,
+                    portfolio_value_base DOUBLE PRECISION NOT NULL,
+                    cash_base DOUBLE PRECISION NOT NULL,
+                    base_currency TEXT NOT NULL,
+                    open_positions_count INTEGER NOT NULL,
+                    analyzed_coins_count INTEGER NOT NULL,
+                    buy_recommendations_count INTEGER NOT NULL,
+                    dry_run BOOLEAN NOT NULL,
+                    holdings_json JSONB NOT NULL,
+                    open_trades_json JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                '''
+            )
+            cur.execute(
+                f'''
+                CREATE INDEX IF NOT EXISTS portfolio_snapshots_snapshot_ts_idx
+                ON {snapshots_table} (snapshot_ts DESC)
+                '''
+            )
+
+    def write_trade(self, row: Dict[str, Any], base_currency: str) -> None:
+        if not self._ensure_connection():
+            return
+        trades_table = self._qualified_table('trade_events')
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    f'''
+                    INSERT INTO {trades_table} (
+                        event_ts, iteration, coin, action, price, amount_coin,
+                        amount_base, pnl_base, pnl_pct, hold_seconds,
+                        signal_source, signal_confidence, recommendation, reason,
+                        dry_run, base_currency
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s,
+                        %s, %s, %s, %s,
+                        %s, %s
+                    )
+                    ''',
+                    (
+                        row.get('timestamp', datetime.now(
+                            timezone.utc).isoformat()),
+                        int(row.get('iteration', 0)),
+                        row.get('coin', ''),
+                        row.get('action', ''),
+                        float(row.get('price', 0.0)),
+                        float(row.get('amount_coin', 0.0)),
+                        float(row.get('amount_base', 0.0)),
+                        float(row.get('pnl_base', 0.0)),
+                        float(row.get('pnl_pct', 0.0)),
+                        float(row.get('hold_seconds', 0.0)),
+                        row.get('signal_source', ''),
+                        None if row.get('signal_confidence', '') in (
+                            '', None) else float(row.get('signal_confidence', 0.0)),
+                        row.get('recommendation', ''),
+                        row.get('reason', ''),
+                        bool(row.get('dry_run', False)),
+                        base_currency,
+                    ),
+                )
+        except Exception as exc:
+            logger.warning(
+                'Failed to write trade event to analytics DB: %s', exc)
+            self.close()
+
+    def write_snapshot(
+        self,
+        *,
+        iteration: int,
+        portfolio_value: float,
+        cash_value: float,
+        base_currency: str,
+        dry_run: bool,
+        holdings: Dict[str, float],
+        open_trades: Dict[str, Dict[str, Any]],
+        analyzed_coins_count: int,
+        buy_recommendations_count: int,
+    ) -> None:
+        if not self._ensure_connection():
+            return
+        snapshots_table = self._qualified_table('portfolio_snapshots')
+        serialized_open_trades = json.dumps(
+            open_trades,
+            default=lambda value: value.isoformat() if isinstance(
+                value, datetime) else str(value),
+            ensure_ascii=True,
+        )
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    f'''
+                    INSERT INTO {snapshots_table} (
+                        snapshot_ts, iteration, portfolio_value_base, cash_base,
+                        base_currency, open_positions_count, analyzed_coins_count,
+                        buy_recommendations_count, dry_run, holdings_json, open_trades_json
+                    ) VALUES (
+                        %s, %s, %s, %s,
+                        %s, %s, %s,
+                        %s, %s, %s::jsonb, %s::jsonb
+                    )
+                    ''',
+                    (
+                        datetime.now(timezone.utc),
+                        iteration,
+                        float(portfolio_value),
+                        float(cash_value),
+                        base_currency,
+                        len(open_trades),
+                        analyzed_coins_count,
+                        buy_recommendations_count,
+                        bool(dry_run),
+                        json.dumps(holdings, ensure_ascii=True),
+                        serialized_open_trades,
+                    ),
+                )
+        except Exception as exc:
+            logger.warning(
+                'Failed to write portfolio snapshot to analytics DB: %s', exc)
+            self.close()
+
+    def close(self) -> None:
+        conn = self._conn
+        self._conn = None
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception:
+            pass
         self.ai_copilot_temperature = float(
             os.getenv('AI_COPILOT_TEMPERATURE', 0.1))
         self.ai_copilot_max_consecutive_errors = int(
@@ -616,6 +895,7 @@ class CryptoTradingBot:
     def __init__(self, config: BotConfig):
         self.config = config
         self.portfolio = Portfolio(config.base_currency)
+        self.analytics_writer = PostgresAnalyticsWriter(config)
         self.iteration = 0
         self.performance = {
             'buys': 0,
@@ -697,26 +977,52 @@ class CryptoTradingBot:
 
     def _append_trade_journal(self, row: Dict):
         if not self.config.performance_log_enabled:
+            pass
+        else:
+            with open(self.config.performance_log_file, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    row.get('timestamp', datetime.now().isoformat()),
+                    row.get('iteration', self.iteration),
+                    row.get('coin', ''),
+                    row.get('action', ''),
+                    row.get('price', 0.0),
+                    row.get('amount_coin', 0.0),
+                    row.get('amount_base', 0.0),
+                    row.get('pnl_base', 0.0),
+                    row.get('pnl_pct', 0.0),
+                    row.get('hold_seconds', 0.0),
+                    row.get('signal_source', ''),
+                    row.get('signal_confidence', ''),
+                    row.get('recommendation', ''),
+                    row.get('reason', ''),
+                    row.get('dry_run', self.config.dry_run),
+                ])
+        self.analytics_writer.write_trade(row, self.config.base_currency)
+
+    def _write_analytics_snapshot(
+        self,
+        portfolio_value: float,
+        market_analysis: Dict[str, Dict[str, Any]],
+    ) -> None:
+        snapshot_every = max(1, int(self.config.analytics_db_snapshot_every))
+        if self.iteration % snapshot_every != 0:
             return
-        with open(self.config.performance_log_file, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                row.get('timestamp', datetime.now().isoformat()),
-                row.get('iteration', self.iteration),
-                row.get('coin', ''),
-                row.get('action', ''),
-                row.get('price', 0.0),
-                row.get('amount_coin', 0.0),
-                row.get('amount_base', 0.0),
-                row.get('pnl_base', 0.0),
-                row.get('pnl_pct', 0.0),
-                row.get('hold_seconds', 0.0),
-                row.get('signal_source', ''),
-                row.get('signal_confidence', ''),
-                row.get('recommendation', ''),
-                row.get('reason', ''),
-                row.get('dry_run', self.config.dry_run),
-            ])
+        buy_recommendations_count = sum(
+            1 for data in market_analysis.values()
+            if data.get('recommendation') == 'BUY'
+        )
+        self.analytics_writer.write_snapshot(
+            iteration=self.iteration,
+            portfolio_value=portfolio_value,
+            cash_value=self.portfolio.cash,
+            base_currency=self.config.base_currency,
+            dry_run=self.config.dry_run,
+            holdings=self.portfolio.holdings,
+            open_trades=self.portfolio.open_trades,
+            analyzed_coins_count=len(market_analysis),
+            buy_recommendations_count=buy_recommendations_count,
+        )
 
     def _recommend_tabular_threshold_from_journal(self) -> Optional[float]:
         """Recommends a confidence threshold based on historical sell trades."""
@@ -3850,6 +4156,8 @@ class CryptoTradingBot:
                 logger.info(f"  - Holdings: {self.portfolio.holdings}")
                 logger.info(
                     f"  - Open trades details: {self.portfolio.open_trades}")
+                self._write_analytics_snapshot(
+                    portfolio_value, market_analysis)
 
                 if self.iteration % max(1, self.config.performance_report_every) == 0:
                     self._log_performance_report()
@@ -3868,6 +4176,7 @@ class CryptoTradingBot:
             logger.critical(
                 f"Critical, unexpected error in main loop: {e}", exc_info=True)
         finally:
+            self.analytics_writer.close()
             logger.info("👋 Bot stopped")
 
 
