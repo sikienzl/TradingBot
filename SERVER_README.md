@@ -43,6 +43,7 @@ Operational note for current Pi/server profile:
 - `EXCLUDED_COINS` keeps the base stablecoin-like exclusions
 - `LOSSMAKER_EXCLUDED_COINS` currently defaults to `ZEC,HYPE,TON,BTC,XRP`
 - `DYNAMIC_LOSSMAKER_EXCLUSION_ENABLED=true` adds a temporary journal-driven suppression layer for recent timeout-heavy losers
+- `DYNAMIC_LOSSMAKER_MIN_PNL_LOSS=0.01` is the current Pi baseline so marginal near-flat names are not excluded as aggressively as with the old `0.003` threshold
 - `COIN_MAX_HOLD_SECONDS` now defaults to `LINK:420,SUI:420,ONDO:420`
 - `PORTFOLIO_TRADE_AMOUNT_MULTIPLIERS` and `PORTFOLIO_MAX_OPEN_TRADES_TIERS` can scale position size and slot count upward as portfolio milestones are reached
 - `UPTREND_ENTRY_MAX_RSI_BY_COIN`, `UPTREND_ENTRY_MIN_BUY_PROBA_BY_COIN`, `UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN`, `UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN`, and `FALLBACK_MAX_RSI_BY_COIN` allow coin-specific entry tuning without loosening the global gates; current defaults keep `TRX` slightly stricter in fallback (`72`) than in the uptrend gate (`74`) so marginal re-entries do not churn as easily, while `XDC` still stays behind the stronger sell-proba guard
