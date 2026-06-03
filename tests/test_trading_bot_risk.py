@@ -269,9 +269,11 @@ def test_entry_momentum_filter_blocks_weak_ret3(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.entry_momentum_filter_enabled = True
     bot.config.entry_min_ret_3 = -0.01
+    bot.config.entry_min_ret_3_by_coin = {}
     bot.config.entry_require_price_above_ema20 = False
 
     passes, reason = bot._passes_entry_momentum_filter({
+        "coin": "VVV",
         "recommendation": "BUY",
         "ret_3": -0.03,
         "price": 105.0,
@@ -280,6 +282,44 @@ def test_entry_momentum_filter_blocks_weak_ret3(monkeypatch):
 
     assert passes is False
     assert reason.startswith("ret_3_below_min")
+
+
+def test_entry_momentum_filter_allows_coin_specific_ret3_override(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.entry_momentum_filter_enabled = True
+    bot.config.entry_min_ret_3 = -0.01
+    bot.config.entry_min_ret_3_by_coin = {"VVV": -0.04}
+    bot.config.entry_require_price_above_ema20 = False
+
+    passes, reason = bot._passes_entry_momentum_filter({
+        "coin": "VVV",
+        "recommendation": "BUY",
+        "ret_3": -0.03,
+        "price": 105.0,
+        "ema_20": 100.0,
+    })
+
+    assert passes is True
+    assert reason == "ok"
+
+
+def test_entry_momentum_filter_keeps_global_ret3_for_other_coins(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.entry_momentum_filter_enabled = True
+    bot.config.entry_min_ret_3 = -0.01
+    bot.config.entry_min_ret_3_by_coin = {"VVV": -0.04}
+    bot.config.entry_require_price_above_ema20 = False
+
+    passes, reason = bot._passes_entry_momentum_filter({
+        "coin": "ICP",
+        "recommendation": "BUY",
+        "ret_3": -0.03,
+        "price": 105.0,
+        "ema_20": 100.0,
+    })
+
+    assert passes is False
+    assert reason == "ret_3_below_min (-0.0300 < -0.0100)"
 
 
 def test_entry_momentum_filter_blocks_price_below_ema20(monkeypatch):
@@ -746,7 +786,8 @@ def test_lossmaker_exclusions_are_merged_into_excluded_coins(monkeypatch):
 
 def test_analytics_db_connect_kwargs_support_url_and_split_fields(monkeypatch):
     monkeypatch.setenv("ANALYTICS_DB_ENABLED", "true")
-    monkeypatch.setenv("ANALYTICS_DB_URL", "postgresql://user:secret@db.example/trading")
+    monkeypatch.setenv("ANALYTICS_DB_URL",
+                       "postgresql://user:secret@db.example/trading")
     config = BotConfig()
 
     kwargs = config.analytics_db_connect_kwargs()

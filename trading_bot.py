@@ -445,6 +445,8 @@ class BotConfig:
         self.entry_momentum_filter_enabled = _env_bool(
             'ENTRY_MOMENTUM_FILTER_ENABLED', True)
         self.entry_min_ret_3 = float(os.getenv('ENTRY_MIN_RET_3', -0.01))
+        self.entry_min_ret_3_by_coin = _env_symbol_float_map(
+            'ENTRY_MIN_RET_3_BY_COIN')
         self.entry_require_price_above_ema20 = _env_bool(
             'ENTRY_REQUIRE_PRICE_ABOVE_EMA20', False)
         self.entry_sharp_pump_filter_enabled = _env_bool(
@@ -2527,14 +2529,17 @@ class CryptoTradingBot:
         if not self.config.entry_momentum_filter_enabled:
             return True, 'disabled'
 
+        coin = str(coin_data.get('coin', '')).upper()
         recommendation = str(coin_data.get('recommendation', ''))
         if recommendation not in {'BUY', 'STRONG BUY', 'HOLD (Up-Trend)'}:
             return True, 'not_buy_signal'
 
         ret_3 = coin_data.get('ret_3')
         if ret_3 is not None and not np.isnan(ret_3):
-            if float(ret_3) < self.config.entry_min_ret_3:
-                return False, f"ret_3_below_min ({float(ret_3):.4f} < {self.config.entry_min_ret_3:.4f})"
+            min_ret_3 = self.config.entry_min_ret_3_by_coin.get(
+                coin, self.config.entry_min_ret_3)
+            if float(ret_3) < min_ret_3:
+                return False, f"ret_3_below_min ({float(ret_3):.4f} < {min_ret_3:.4f})"
 
         if self.config.entry_require_price_above_ema20:
             price = coin_data.get('price')
