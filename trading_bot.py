@@ -437,8 +437,12 @@ class BotConfig:
             'UPTREND_RULES_FAST_EXIT_ENABLED', True)
         self.uptrend_rules_fast_exit_seconds = int(
             os.getenv('UPTREND_RULES_FAST_EXIT_SECONDS', 120))
+        self.uptrend_rules_fast_exit_seconds_by_coin = _env_symbol_int_map(
+            'UPTREND_RULES_FAST_EXIT_SECONDS_BY_COIN')
         self.uptrend_rules_flat_max_profit_pct = float(
             os.getenv('UPTREND_RULES_FLAT_MAX_PROFIT_PCT', 0.08))
+        self.uptrend_rules_flat_max_profit_pct_by_coin = _env_symbol_float_map(
+            'UPTREND_RULES_FLAT_MAX_PROFIT_PCT_BY_COIN')
         self.uptrend_rules_max_hold_seconds = int(
             os.getenv('UPTREND_RULES_MAX_HOLD_SECONDS', 300))
         # Optional momentum quality filter for new BUY entries.
@@ -3687,6 +3691,10 @@ class CryptoTradingBot:
             ):
                 current_signal = market_analysis.get(
                     coin, {}).get('recommendation', '')
+                fast_exit_seconds = self.config.uptrend_rules_fast_exit_seconds_by_coin.get(
+                    coin, self.config.uptrend_rules_fast_exit_seconds)
+                flat_max_profit_pct = self.config.uptrend_rules_flat_max_profit_pct_by_coin.get(
+                    coin, self.config.uptrend_rules_flat_max_profit_pct)
                 if (
                     self.config.uptrend_rules_max_hold_seconds > 0
                     and hold_seconds >= self.config.uptrend_rules_max_hold_seconds
@@ -3696,13 +3704,14 @@ class CryptoTradingBot:
                         f'({int(hold_seconds)}s >= {self.config.uptrend_rules_max_hold_seconds}s)'
                     )
                 elif (
-                    hold_seconds >= self.config.uptrend_rules_fast_exit_seconds
-                    and pnl_pct <= self.config.uptrend_rules_flat_max_profit_pct
+                    fast_exit_seconds > 0
+                    and hold_seconds >= fast_exit_seconds
+                    and pnl_pct <= flat_max_profit_pct
                     and current_signal not in {'BUY', 'STRONG BUY'}
                 ):
                     exit_reason = (
                         '📉 UPTREND-RULES-FAST-EXIT '
-                        f'({pnl_pct:+.2f}% <= {self.config.uptrend_rules_flat_max_profit_pct:.2f}% '
+                        f'({pnl_pct:+.2f}% <= {flat_max_profit_pct:.2f}% '
                         f'after {int(hold_seconds)}s, signal: {current_signal})'
                     )
             if current_price <= stop_loss_level:

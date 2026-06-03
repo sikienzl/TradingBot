@@ -970,7 +970,9 @@ def test_uptrend_rules_fast_exit_closes_flat_rules_trade(monkeypatch):
     bot.config.exit_on_downtrend = False
     bot.config.uptrend_rules_fast_exit_enabled = True
     bot.config.uptrend_rules_fast_exit_seconds = 120
+    bot.config.uptrend_rules_fast_exit_seconds_by_coin = {}
     bot.config.uptrend_rules_flat_max_profit_pct = 0.08
+    bot.config.uptrend_rules_flat_max_profit_pct_by_coin = {}
     bot.config.uptrend_rules_max_hold_seconds = 300
 
     bot.portfolio.cash = 0.0
@@ -1009,6 +1011,100 @@ def test_uptrend_rules_fast_exit_closes_flat_rules_trade(monkeypatch):
     assert "UPTREND-RULES-FAST-EXIT" in executed["reason"]
     assert "signal: HOLD (Up-Trend)" in executed["reason"]
     assert "TRX" not in bot.portfolio.open_trades
+
+
+def test_uptrend_rules_fast_exit_respects_coin_specific_seconds_override(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.partial_take_profit_enabled = False
+    bot.config.trailing_stop_enabled = False
+    bot.config.break_even_enabled = False
+    bot.config.max_hold_seconds = 0
+    bot.config.exit_on_downtrend = False
+    bot.config.uptrend_rules_fast_exit_enabled = True
+    bot.config.uptrend_rules_fast_exit_seconds = 120
+    bot.config.uptrend_rules_fast_exit_seconds_by_coin = {"VVV": 240}
+    bot.config.uptrend_rules_flat_max_profit_pct = 0.08
+    bot.config.uptrend_rules_flat_max_profit_pct_by_coin = {}
+    bot.config.uptrend_rules_max_hold_seconds = 300
+
+    bot.portfolio.cash = 0.0
+    bot.portfolio.holdings["VVV"] = 1.0
+    bot.portfolio.open_trades["VVV"] = {
+        "buy_price": 100.0,
+        "amount_coin": 1.0,
+        "amount_base": 100.0,
+        "timestamp": datetime.now() - timedelta(seconds=180),
+        "peak_price": 100.05,
+        "partial_tp_taken": False,
+        "partial_tp_timestamp": None,
+        "signal_source": "rules",
+        "signal_confidence": None,
+        "recommendation": "HOLD (Up-Trend)",
+    }
+    monkeypatch.setattr(bot, "_get_atr_for_coin", lambda coin, period=14: 5.0)
+
+    executed = {}
+
+    def _fake_execute_trade(coin, action, price, amount_in_base_currency, atr=None, signal_source='rules', signal_confidence=None, recommendation='HOLD', reason=''):
+        executed["coin"] = coin
+        return True
+
+    monkeypatch.setattr(bot, "_execute_trade", _fake_execute_trade)
+
+    bot._manage_open_trades(
+        {"VVV": {"price": 99.3}},
+        {"VVV": {"recommendation": "HOLD (Up-Trend)"}},
+    )
+
+    assert executed == {}
+    assert "VVV" in bot.portfolio.open_trades
+
+
+def test_uptrend_rules_fast_exit_respects_coin_specific_profit_override(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.partial_take_profit_enabled = False
+    bot.config.trailing_stop_enabled = False
+    bot.config.break_even_enabled = False
+    bot.config.max_hold_seconds = 0
+    bot.config.exit_on_downtrend = False
+    bot.config.uptrend_rules_fast_exit_enabled = True
+    bot.config.uptrend_rules_fast_exit_seconds = 120
+    bot.config.uptrend_rules_fast_exit_seconds_by_coin = {}
+    bot.config.uptrend_rules_flat_max_profit_pct = 0.08
+    bot.config.uptrend_rules_flat_max_profit_pct_by_coin = {"VVV": -1.0}
+    bot.config.uptrend_rules_max_hold_seconds = 300
+
+    bot.portfolio.cash = 0.0
+    bot.portfolio.holdings["VVV"] = 1.0
+    bot.portfolio.open_trades["VVV"] = {
+        "buy_price": 100.0,
+        "amount_coin": 1.0,
+        "amount_base": 100.0,
+        "timestamp": datetime.now() - timedelta(seconds=180),
+        "peak_price": 100.05,
+        "partial_tp_taken": False,
+        "partial_tp_timestamp": None,
+        "signal_source": "rules",
+        "signal_confidence": None,
+        "recommendation": "HOLD (Up-Trend)",
+    }
+    monkeypatch.setattr(bot, "_get_atr_for_coin", lambda coin, period=14: 5.0)
+
+    executed = {}
+
+    def _fake_execute_trade(coin, action, price, amount_in_base_currency, atr=None, signal_source='rules', signal_confidence=None, recommendation='HOLD', reason=''):
+        executed["coin"] = coin
+        return True
+
+    monkeypatch.setattr(bot, "_execute_trade", _fake_execute_trade)
+
+    bot._manage_open_trades(
+        {"VVV": {"price": 99.3}},
+        {"VVV": {"recommendation": "HOLD (Up-Trend)"}},
+    )
+
+    assert executed == {}
+    assert "VVV" in bot.portfolio.open_trades
 
 
 def test_downtrend_reversal_weak_signal_exit_closes_trade_early(monkeypatch):
