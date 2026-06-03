@@ -814,6 +814,16 @@ def test_analytics_db_connect_kwargs_support_url_and_split_fields(monkeypatch):
     assert kwargs["sslmode"] == "require"
 
 
+def test_botconfig_initializes_ai_copilot_error_limits(monkeypatch):
+    monkeypatch.setenv("AI_COPILOT_ENABLED", "true")
+    monkeypatch.setenv("AI_COPILOT_MAX_CONSECUTIVE_ERRORS", "7")
+
+    config = BotConfig()
+
+    assert config.ai_copilot_enabled is True
+    assert config.ai_copilot_max_consecutive_errors == 7
+
+
 def test_logs_blocked_buy_attempt_summary(monkeypatch, caplog):
     bot = _make_test_bot(monkeypatch)
 

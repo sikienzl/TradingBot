@@ -608,6 +608,26 @@ class BotConfig:
             os.getenv('AI_COPILOT_MAX_BUDGET_USD_PER_MONTH', 5.0))
         self.ai_copilot_max_output_tokens = int(
             os.getenv('AI_COPILOT_MAX_OUTPUT_TOKENS', 300))
+        self.ai_copilot_temperature = float(
+            os.getenv('AI_COPILOT_TEMPERATURE', 0.1))
+        self.ai_copilot_max_consecutive_errors = int(
+            os.getenv('AI_COPILOT_MAX_CONSECUTIVE_ERRORS', 3))
+        self.ai_copilot_cost_input_per_mtok = float(
+            os.getenv('AI_COPILOT_COST_INPUT_PER_MTOK', 0.2))
+        self.ai_copilot_cost_output_per_mtok = float(
+            os.getenv('AI_COPILOT_COST_OUTPUT_PER_MTOK', 1.25))
+        self.ai_copilot_min_entry_score_min = int(
+            os.getenv('AI_COPILOT_MIN_ENTRY_SCORE_MIN', 55))
+        self.ai_copilot_min_entry_score_max = int(
+            os.getenv('AI_COPILOT_MIN_ENTRY_SCORE_MAX', 70))
+        self.ai_copilot_reentry_cooldown_min = int(
+            os.getenv('AI_COPILOT_REENTRY_COOLDOWN_MIN', 300))
+        self.ai_copilot_reentry_cooldown_max = int(
+            os.getenv('AI_COPILOT_REENTRY_COOLDOWN_MAX', 1200))
+        self.ai_copilot_tabular_buy_conf_min = float(
+            os.getenv('AI_COPILOT_TABULAR_BUY_CONF_MIN', 0.50))
+        self.ai_copilot_tabular_buy_conf_max = float(
+            os.getenv('AI_COPILOT_TABULAR_BUY_CONF_MAX', 0.65))
 
     def analytics_db_connect_kwargs(self) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {}
@@ -869,26 +889,6 @@ class PostgresAnalyticsWriter:
             conn.close()
         except Exception:
             pass
-        self.ai_copilot_temperature = float(
-            os.getenv('AI_COPILOT_TEMPERATURE', 0.1))
-        self.ai_copilot_max_consecutive_errors = int(
-            os.getenv('AI_COPILOT_MAX_CONSECUTIVE_ERRORS', 3))
-        self.ai_copilot_cost_input_per_mtok = float(
-            os.getenv('AI_COPILOT_COST_INPUT_PER_MTOK', 0.2))
-        self.ai_copilot_cost_output_per_mtok = float(
-            os.getenv('AI_COPILOT_COST_OUTPUT_PER_MTOK', 1.25))
-        self.ai_copilot_min_entry_score_min = int(
-            os.getenv('AI_COPILOT_MIN_ENTRY_SCORE_MIN', 55))
-        self.ai_copilot_min_entry_score_max = int(
-            os.getenv('AI_COPILOT_MIN_ENTRY_SCORE_MAX', 70))
-        self.ai_copilot_reentry_cooldown_min = int(
-            os.getenv('AI_COPILOT_REENTRY_COOLDOWN_MIN', 300))
-        self.ai_copilot_reentry_cooldown_max = int(
-            os.getenv('AI_COPILOT_REENTRY_COOLDOWN_MAX', 1200))
-        self.ai_copilot_tabular_buy_conf_min = float(
-            os.getenv('AI_COPILOT_TABULAR_BUY_CONF_MIN', 0.50))
-        self.ai_copilot_tabular_buy_conf_max = float(
-            os.getenv('AI_COPILOT_TABULAR_BUY_CONF_MAX', 0.65))
 
 
 class CryptoTradingBot:
