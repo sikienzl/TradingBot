@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from predict_catboost import CatBoostTradingPredictor
 
@@ -16,6 +17,8 @@ def test_catboost_predict_holds_when_confidence_too_low():
     predictor.features = ["rsi", "macd", "ret_1"]
     predictor.label_map = {"verkaufen": 0, "halten": 1, "kaufen": 2}
     predictor.inv_label_map = {0: "verkaufen", 1: "halten", 2: "kaufen"}
+    predictor.recommended_confidence_threshold = 0.45
+    predictor.margin_threshold = 0.03
 
     row = pd.DataFrame([{"rsi": 50.0, "macd": 0.2, "ret_1": 0.01}])
     result = predictor.predict(row, confidence_threshold=0.45)
@@ -23,3 +26,23 @@ def test_catboost_predict_holds_when_confidence_too_low():
     assert result["confidence"] == 0.40
     assert result["decision"] == "halten"
     assert set(result["proba"].keys()) == {"verkaufen", "halten", "kaufen"}
+    assert result["threshold_used"] == 0.45
+    assert result["margin"] == pytest.approx(0.10)
+
+
+def test_catboost_predict_from_features_wraps_single_row():
+    predictor = CatBoostTradingPredictor.__new__(CatBoostTradingPredictor)
+    predictor.model = _FakeModel()
+    predictor.features = ["rsi", "macd", "ret_1"]
+    predictor.label_map = {"verkaufen": 0, "halten": 1, "kaufen": 2}
+    predictor.inv_label_map = {0: "verkaufen", 1: "halten", 2: "kaufen"}
+    predictor.recommended_confidence_threshold = 0.45
+    predictor.margin_threshold = 0.03
+
+    result = predictor.predict_from_features(
+        {"rsi": 50.0, "macd": 0.2, "ret_1": 0.01},
+        confidence_threshold=0.45,
+    )
+
+    assert result["decision"] == "halten"
+    assert result["threshold_used"] == 0.45

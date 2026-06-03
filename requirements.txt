@@ -9,6 +9,9 @@ python-dotenv==1.2.1
 psycopg[binary]==3.2.9
 catboost==1.2.8
 scikit-learn==1.8.0
+fastapi==0.121.1
+pydantic==2.12.4
+uvicorn==0.38.0
 
 # -----------------------------------------------------------------------
 # LLM inference – required only when USE_ML_MODEL=true (predict.py)

@@ -1,37 +1,15 @@
 import argparse
 import json
-from dataclasses import asdict, dataclass
 from typing import List
 
 import numpy as np
 import pandas as pd
 
-
-@dataclass
-class ScorecardResult:
-    verdict: str
-    reasons: List[str]
+from api_models import ScorecardMetrics, ScorecardResponse, ScorecardResult, ScorecardVerdict, ScorecardThresholds
 
 
-@dataclass
-class ScorecardMetrics:
-    closed_trades: int
-    realized_pnl: float
-    avg_pnl: float
-    win_rate: float
-    gross_profit: float
-    gross_loss: float
-    profit_factor: float
-    max_drawdown_base: float
-    max_drawdown_pct: float
-    recent_closed_trades: int
-    recent_realized_pnl: float
-    recent_win_rate: float
-    catboost_closed_trades: int
-    catboost_realized_pnl: float
-    rules_closed_trades: int
-    rules_realized_pnl: float
-    catboost_vs_rules_pnl_delta: float
+class ScorecardDataError(ValueError):
+    pass
 
 
 def _safe_float(series: pd.Series) -> pd.Series:
@@ -89,7 +67,7 @@ def _evaluate_verdict(
         )
 
     if reasons:
-        return ScorecardResult(verdict="NO-GO", reasons=reasons)
+        return ScorecardResult(verdict=ScorecardVerdict.NO_GO, reasons=reasons)
 
     soft_fails: List[str] = []
     if closed_trades < min_closed_trades:
@@ -131,9 +109,9 @@ def _evaluate_verdict(
             )
 
     if soft_fails:
-        return ScorecardResult(verdict="HOLD", reasons=soft_fails)
+        return ScorecardResult(verdict=ScorecardVerdict.HOLD, reasons=soft_fails)
 
-    return ScorecardResult(verdict="GO", reasons=["All defined scorecard criteria met."])
+    return ScorecardResult(verdict=ScorecardVerdict.GO, reasons=["All defined scorecard criteria met."])
 
 
 def _compute_metrics(df: pd.DataFrame, starting_capital: float, recent_trades_window: int = 100) -> ScorecardMetrics:
@@ -203,6 +181,108 @@ def _print_hold_due_to_missing_data(file_path: str, reason: str) -> None:
     print(f"- {reason}")
 
 
+def evaluate_scorecard(
+    file_path: str = "trade_journal.csv",
+    base_currency: str = "EUR",
+    lookback_days: int = 0,
+    starting_capital: float = 20.0,
+    min_closed_trades: int = 200,
+    min_win_rate: float = 45.0,
+    min_profit_factor: float = 1.2,
+    min_avg_pnl: float = 0.0,
+    max_drawdown_pct: float = 10.0,
+    recent_trades_window: int = 100,
+    min_recent_realized_pnl: float = 0.0,
+    min_recent_win_rate: float = 45.0,
+    min_catboost_vs_rules_pnl_delta: float = -0.05,
+    min_source_trades_for_delta: int = 50,
+) -> ScorecardResponse:
+    try:
+        df = pd.read_csv(file_path)
+    except FileNotFoundError as exc:
+        raise ScorecardDataError(
+            "Journal file not found; scorecard cannot evaluate recent trading data in this environment."
+        ) from exc
+
+    if df.empty or "action" not in df.columns:
+        raise ScorecardDataError(
+            "Journal file is empty or invalid (required column 'action' missing); collect valid trades before evaluating the scorecard."
+        )
+
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+        if lookback_days > 0:
+            cutoff = pd.Timestamp.now(
+                tz=None) - pd.Timedelta(days=lookback_days)
+            df = df[df["timestamp"] >= cutoff].copy()
+
+    if df.empty:
+        if lookback_days > 0:
+            raise ScorecardDataError(
+                f"No data in the selected lookback window (last {lookback_days} day(s)); collect more recent trades or use --lookback-days 0."
+            )
+        raise ScorecardDataError(
+            "No data available in the journal yet; collect trades before evaluating the scorecard."
+        )
+
+    df["pnl_base"] = _safe_float(df.get("pnl_base", pd.Series(dtype=float)))
+
+    metrics = _compute_metrics(
+        df,
+        starting_capital,
+        recent_trades_window=recent_trades_window,
+    )
+
+    result = _evaluate_verdict(
+        closed_trades=metrics.closed_trades,
+        min_closed_trades=min_closed_trades,
+        realized_pnl=metrics.realized_pnl,
+        win_rate=metrics.win_rate,
+        min_win_rate=min_win_rate,
+        profit_factor=metrics.profit_factor,
+        min_profit_factor=min_profit_factor,
+        avg_pnl=metrics.avg_pnl,
+        min_avg_pnl=min_avg_pnl,
+        max_drawdown_pct=metrics.max_drawdown_pct,
+        max_allowed_drawdown_pct=max_drawdown_pct,
+        recent_closed_trades=metrics.recent_closed_trades,
+        recent_realized_pnl=metrics.recent_realized_pnl,
+        min_recent_realized_pnl=min_recent_realized_pnl,
+        recent_win_rate=metrics.recent_win_rate,
+        min_recent_win_rate=min_recent_win_rate,
+        catboost_closed_trades=metrics.catboost_closed_trades,
+        catboost_realized_pnl=metrics.catboost_realized_pnl,
+        rules_closed_trades=metrics.rules_closed_trades,
+        rules_realized_pnl=metrics.rules_realized_pnl,
+        min_catboost_vs_rules_pnl_delta=min_catboost_vs_rules_pnl_delta,
+        min_source_trades_for_delta=min_source_trades_for_delta,
+    )
+
+    thresholds = ScorecardThresholds(
+        min_closed_trades=min_closed_trades,
+        min_win_rate=min_win_rate,
+        min_profit_factor=min_profit_factor,
+        min_avg_pnl=min_avg_pnl,
+        max_drawdown_pct=max_drawdown_pct,
+        recent_trades_window=recent_trades_window,
+        min_recent_realized_pnl=min_recent_realized_pnl,
+        min_recent_win_rate=min_recent_win_rate,
+        min_catboost_vs_rules_pnl_delta=min_catboost_vs_rules_pnl_delta,
+        min_source_trades_for_delta=min_source_trades_for_delta,
+        starting_capital=starting_capital,
+        lookback_days=lookback_days,
+    )
+
+    return ScorecardResponse(
+        source_file=file_path,
+        base_currency=base_currency,
+        metrics=metrics,
+        verdict=result.verdict,
+        reasons=result.reasons,
+        thresholds=thresholds,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Go/No-Go scorecard based on the trade journal")
@@ -242,132 +322,67 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        df = pd.read_csv(args.file)
-    except FileNotFoundError:
-        _print_hold_due_to_missing_data(
-            args.file,
-            "Journal file not found; scorecard cannot evaluate recent trading data in this environment.",
+        response = evaluate_scorecard(
+            file_path=args.file,
+            base_currency=args.base_currency,
+            lookback_days=args.lookback_days,
+            starting_capital=args.starting_capital,
+            min_closed_trades=args.min_closed_trades,
+            min_win_rate=args.min_win_rate,
+            min_profit_factor=args.min_profit_factor,
+            min_avg_pnl=args.min_avg_pnl,
+            max_drawdown_pct=args.max_drawdown_pct,
+            recent_trades_window=args.recent_trades_window,
+            min_recent_realized_pnl=args.min_recent_realized_pnl,
+            min_recent_win_rate=args.min_recent_win_rate,
+            min_catboost_vs_rules_pnl_delta=args.min_catboost_vs_rules_pnl_delta,
+            min_source_trades_for_delta=args.min_source_trades_for_delta,
         )
-        raise SystemExit(2)
-
-    if df.empty or "action" not in df.columns:
-        _print_hold_due_to_missing_data(
-            args.file,
-            "Journal file is empty or invalid (required column 'action' missing); collect valid trades before evaluating the scorecard.",
-        )
-        raise SystemExit(2)
-
-    if "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-        if args.lookback_days > 0:
-            cutoff = pd.Timestamp.now(
-                tz=None) - pd.Timedelta(days=args.lookback_days)
-            df = df[df["timestamp"] >= cutoff].copy()
-
-    if df.empty:
-        if args.lookback_days > 0:
-            _print_hold_due_to_missing_data(
-                args.file,
-                f"No data in the selected lookback window (last {args.lookback_days} day(s)); collect more recent trades or use --lookback-days 0.",
-            )
-        else:
-            _print_hold_due_to_missing_data(
-                args.file,
-                "No data available in the journal yet; collect trades before evaluating the scorecard.",
-            )
-        raise SystemExit(2)
-
-    df["pnl_base"] = _safe_float(df.get("pnl_base", pd.Series(dtype=float)))
-
-    metrics = _compute_metrics(
-        df,
-        args.starting_capital,
-        recent_trades_window=args.recent_trades_window,
-    )
-
-    result = _evaluate_verdict(
-        closed_trades=metrics.closed_trades,
-        min_closed_trades=args.min_closed_trades,
-        realized_pnl=metrics.realized_pnl,
-        win_rate=metrics.win_rate,
-        min_win_rate=args.min_win_rate,
-        profit_factor=metrics.profit_factor,
-        min_profit_factor=args.min_profit_factor,
-        avg_pnl=metrics.avg_pnl,
-        min_avg_pnl=args.min_avg_pnl,
-        max_drawdown_pct=metrics.max_drawdown_pct,
-        max_allowed_drawdown_pct=args.max_drawdown_pct,
-        recent_closed_trades=metrics.recent_closed_trades,
-        recent_realized_pnl=metrics.recent_realized_pnl,
-        min_recent_realized_pnl=args.min_recent_realized_pnl,
-        recent_win_rate=metrics.recent_win_rate,
-        min_recent_win_rate=args.min_recent_win_rate,
-        catboost_closed_trades=metrics.catboost_closed_trades,
-        catboost_realized_pnl=metrics.catboost_realized_pnl,
-        rules_closed_trades=metrics.rules_closed_trades,
-        rules_realized_pnl=metrics.rules_realized_pnl,
-        min_catboost_vs_rules_pnl_delta=args.min_catboost_vs_rules_pnl_delta,
-        min_source_trades_for_delta=args.min_source_trades_for_delta,
-    )
+    except ScorecardDataError as exc:
+        _print_hold_due_to_missing_data(args.file, str(exc))
+        raise SystemExit(2) from exc
 
     if args.metrics_json:
-        payload = {
-            "metrics": asdict(metrics),
-            "verdict": result.verdict,
-            "reasons": result.reasons,
-            "thresholds": {
-                "min_closed_trades": args.min_closed_trades,
-                "min_win_rate": args.min_win_rate,
-                "min_profit_factor": args.min_profit_factor,
-                "min_avg_pnl": args.min_avg_pnl,
-                "max_drawdown_pct": args.max_drawdown_pct,
-                "recent_trades_window": args.recent_trades_window,
-                "min_recent_realized_pnl": args.min_recent_realized_pnl,
-                "min_recent_win_rate": args.min_recent_win_rate,
-                "min_catboost_vs_rules_pnl_delta": args.min_catboost_vs_rules_pnl_delta,
-                "min_source_trades_for_delta": args.min_source_trades_for_delta,
-                "starting_capital": args.starting_capital,
-                "lookback_days": args.lookback_days,
-            },
-        }
         with open(args.metrics_json, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=True, indent=2)
+            json.dump(response.model_dump(mode="json"),
+                      f, ensure_ascii=True, indent=2)
 
     print("=== Go/No-Go Scorecard ===")
     print(f"File:                 {args.file}")
-    print(f"Closed trades:        {metrics.closed_trades}")
-    print(f"Win rate:             {metrics.win_rate:.2f}%")
+    print(f"Closed trades:        {response.metrics.closed_trades}")
+    print(f"Win rate:             {response.metrics.win_rate:.2f}%")
     print(
-        f"Realized PnL:         {metrics.realized_pnl:.6f} {args.base_currency}")
-    print(f"Avg PnL per sell:     {metrics.avg_pnl:.6f} {args.base_currency}")
-    if np.isinf(metrics.profit_factor):
+        f"Realized PnL:         {response.metrics.realized_pnl:.6f} {args.base_currency}")
+    print(
+        f"Avg PnL per sell:     {response.metrics.avg_pnl:.6f} {args.base_currency}")
+    if np.isinf(response.metrics.profit_factor):
         print("Profit factor:        inf")
     else:
-        print(f"Profit factor:        {metrics.profit_factor:.4f}")
+        print(f"Profit factor:        {response.metrics.profit_factor:.4f}")
     print(
-        f"Max DD (realized):    {metrics.max_drawdown_base:.6f} {args.base_currency}")
-    print(f"Max DD (% of start):  {metrics.max_drawdown_pct:.2f}%")
+        f"Max DD (realized):    {response.metrics.max_drawdown_base:.6f} {args.base_currency}")
+    print(f"Max DD (% of start):  {response.metrics.max_drawdown_pct:.2f}%")
     print(
-        f"Recent PnL ({args.recent_trades_window}): {metrics.recent_realized_pnl:.6f} {args.base_currency}"
+        f"Recent PnL ({args.recent_trades_window}): {response.metrics.recent_realized_pnl:.6f} {args.base_currency}"
     )
     print(
-        f"Recent win rate:      {metrics.recent_win_rate:.2f}%"
+        f"Recent win rate:      {response.metrics.recent_win_rate:.2f}%"
     )
     print(
         "CatBoost vs rules Δ:  "
-        f"{metrics.catboost_vs_rules_pnl_delta:.6f} {args.base_currency} "
-        f"(catboost={metrics.catboost_realized_pnl:.6f}, rules={metrics.rules_realized_pnl:.6f})"
+        f"{response.metrics.catboost_vs_rules_pnl_delta:.6f} {args.base_currency} "
+        f"(catboost={response.metrics.catboost_realized_pnl:.6f}, rules={response.metrics.rules_realized_pnl:.6f})"
     )
-    print(f"VERDICT:              {result.verdict}")
+    print(f"VERDICT:              {response.verdict}")
     print("\nReason(s):")
-    for r in result.reasons:
+    for r in response.reasons:
         print(f"- {r}")
 
     # Exit codes for automation
     # GO=0, HOLD=2, NO-GO=3
-    if result.verdict == "GO":
+    if response.verdict == ScorecardVerdict.GO:
         raise SystemExit(0)
-    if result.verdict == "HOLD":
+    if response.verdict == ScorecardVerdict.HOLD:
         raise SystemExit(2)
     raise SystemExit(3)
 

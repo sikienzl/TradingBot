@@ -1,4 +1,5 @@
 import json
+import os
 from typing import Dict, Optional
 
 import numpy as np
@@ -24,6 +25,12 @@ class CatBoostTradingPredictor:
         model_path = f"{self.model_dir}/catboost_model.cbm"
         meta_path = f"{self.model_dir}/metadata.json"
 
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"CatBoost model not found: {model_path}")
+        if not os.path.exists(meta_path):
+            raise FileNotFoundError(
+                f"CatBoost metadata not found: {meta_path}")
+
         self.model.load_model(model_path)
 
         with open(meta_path, "r", encoding="utf-8") as f:
@@ -38,14 +45,20 @@ class CatBoostTradingPredictor:
         self.margin_threshold = float(metadata.get("margin_threshold", 0.03))
 
     def predict(self, row_df: pd.DataFrame, confidence_threshold: Optional[float] = None) -> Dict:
-        if row_df.empty:
-            return {"decision": "halten", "confidence": 0.0, "proba": {}}
-
         threshold = float(
             self.recommended_confidence_threshold
             if confidence_threshold is None
             else confidence_threshold
         )
+
+        if row_df.empty:
+            return {
+                "decision": "halten",
+                "confidence": 0.0,
+                "proba": {},
+                "threshold_used": threshold,
+                "margin": 0.0,
+            }
 
         research_features = load_latest_research_signal(
             getattr(self, "research_signal_path", "")
@@ -72,7 +85,8 @@ class CatBoostTradingPredictor:
         confidence = float(np.max(proba))
         decision = self.inv_label_map.get(pred_idx, "halten")
         sorted_proba = np.sort(proba)
-        margin = float(sorted_proba[-1] - sorted_proba[-2]) if len(sorted_proba) >= 2 else 1.0
+        margin = float(sorted_proba[-1] - sorted_proba[-2]
+                       ) if len(sorted_proba) >= 2 else 1.0
 
         # Conservative guard: only trade with sufficient confidence
         if confidence < threshold or margin < self.margin_threshold:
@@ -90,3 +104,7 @@ class CatBoostTradingPredictor:
             "threshold_used": threshold,
             "margin": margin,
         }
+
+    def predict_from_features(self, features: Dict[str, float], confidence_threshold: Optional[float] = None) -> Dict:
+        row_df = pd.DataFrame([features])
+        return self.predict(row_df, confidence_threshold=confidence_threshold)

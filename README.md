@@ -91,6 +91,26 @@ Weekly decision automation is separated in `.github/workflows/weekly-scorecard.y
 
 ## Usage
 
+### Typed API with FastAPI
+
+The repository now includes a typed API layer based on FastAPI and Pydantic.
+
+Start it locally:
+
+```sh
+uvicorn fastapi_app:app --reload
+```
+
+Available endpoints:
+
+- `GET /health` for a simple readiness check
+- `GET /research-signal` to read and validate the current research JSON
+- `POST /research-signal/normalize` to normalize arbitrary research payloads into the fixed feature schema
+- `POST /predict/catboost` to run a typed single-row CatBoost inference via a strict, validated feature schema
+- `GET /scorecard` to calculate the weekly Go/No-Go scorecard as a typed JSON response
+
+Swagger UI is available at `http://127.0.0.1:8000/docs`.
+
 ### 1. Data collection
 ```sh
 python3 get_data.py
