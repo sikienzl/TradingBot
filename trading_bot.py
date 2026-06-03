@@ -445,6 +445,8 @@ class BotConfig:
             'UPTREND_RULES_FLAT_MAX_PROFIT_PCT_BY_COIN')
         self.uptrend_rules_max_hold_seconds = int(
             os.getenv('UPTREND_RULES_MAX_HOLD_SECONDS', 300))
+        self.uptrend_rules_max_hold_seconds_by_coin = _env_symbol_int_map(
+            'UPTREND_RULES_MAX_HOLD_SECONDS_BY_COIN')
         # Optional momentum quality filter for new BUY entries.
         self.entry_momentum_filter_enabled = _env_bool(
             'ENTRY_MOMENTUM_FILTER_ENABLED', True)
@@ -3695,13 +3697,15 @@ class CryptoTradingBot:
                     coin, self.config.uptrend_rules_fast_exit_seconds)
                 flat_max_profit_pct = self.config.uptrend_rules_flat_max_profit_pct_by_coin.get(
                     coin, self.config.uptrend_rules_flat_max_profit_pct)
+                uptrend_rules_max_hold_seconds = self.config.uptrend_rules_max_hold_seconds_by_coin.get(
+                    coin, self.config.uptrend_rules_max_hold_seconds)
                 if (
-                    self.config.uptrend_rules_max_hold_seconds > 0
-                    and hold_seconds >= self.config.uptrend_rules_max_hold_seconds
+                    uptrend_rules_max_hold_seconds > 0
+                    and hold_seconds >= uptrend_rules_max_hold_seconds
                 ):
                     exit_reason = (
                         '⏱️ UPTREND-RULES-MAX-HOLD '
-                        f'({int(hold_seconds)}s >= {self.config.uptrend_rules_max_hold_seconds}s)'
+                        f'({int(hold_seconds)}s >= {uptrend_rules_max_hold_seconds}s)'
                     )
                 elif (
                     fast_exit_seconds > 0
