@@ -129,16 +129,16 @@ jobs:
 
       - name: Verify module imports
         env:
-          PYTHONPATH: ${{ github.workspace }}
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/src
         run: |
-          python -c "import predict_catboost; print('import_ok')"
+          python -c "from src.predict_catboost import CatBoostTradingPredictor; print('import_ok')"
 
       - name: Run tests
         id: pytest
         shell: bash
         continue-on-error: true
         env:
-          PYTHONPATH: ${{ github.workspace }}
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/src
         run: |
           set -o pipefail
           pytest tests/ -v --maxfail=1 --junitxml=pytest-report.xml | tee pytest-output.txt
