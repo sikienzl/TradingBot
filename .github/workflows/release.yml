@@ -51,11 +51,9 @@ jobs:
           mkdir -p "${PKG}"
 
           # Core runtime files
-          cp trading_bot.py get_data.py predict_catboost.py \
-             get_account_balance.py data_preperation.py \
-             go_no_go_scorecard.py research_signal.py \
-             analyze_trade_journal.py \
-             requirements.txt requirements-pi.txt \
+          cp -r src "${PKG}/src"
+          find "${PKG}/src" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+          cp requirements.txt requirements-pi.txt \
              "${PKG}/"
 
           # Documentation and env templates used at runtime on Pi
@@ -108,9 +106,9 @@ jobs:
 
           # Release-blocking sanity checks before creating archive
           required_files=(
-            "${PKG}/trading_bot.py"
-            "${PKG}/predict_catboost.py"
-            "${PKG}/research_signal.py"
+            "${PKG}/src/trading_bot.py"
+            "${PKG}/src/predict_catboost.py"
+            "${PKG}/src/research_signal.py"
             "${PKG}/scripts/install_pi.sh"
             "${PKG}/scripts/install_monitoring_pi.sh"
             "${PKG}/deploy/prometheus.yml"
