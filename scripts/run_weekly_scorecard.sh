@@ -603,6 +603,8 @@ benchmark_monthly_calls = int(_as_float(ai_benchmark_state.get("monthly_calls"),
 benchmark_daily_calls = int(_as_float(ai_benchmark_state.get("daily_calls"), 0.0))
 benchmark_monthly_spend = _as_float(ai_benchmark_state.get("monthly_spend_usd"), 0.0)
 benchmark_monthly_budget = _as_float(ai_benchmark_state.get("budget_cap_usd"), 0.0)
+primary_model = str((ai_state.get("model") or os.environ.get("AI_COPILOT_MODEL") or "")).strip()
+benchmark_model = str((ai_benchmark_state.get("model") or os.environ.get("AI_COPILOT_BENCHMARK_MODEL") or "")).strip()
 benchmark_budget_used_pct = 0.0
 if benchmark_monthly_budget > 0:
   benchmark_budget_used_pct = (benchmark_monthly_spend / benchmark_monthly_budget) * 100.0
@@ -632,6 +634,10 @@ lines = [
     "# HELP trading_ai_copilot_benchmark_budget_used_pct Estimated percentage of benchmark AI copilot monthly budget already used",
     "# TYPE trading_ai_copilot_benchmark_budget_used_pct gauge",
     f"trading_ai_copilot_benchmark_budget_used_pct {benchmark_budget_used_pct:.4f}",
+    "# HELP trading_ai_copilot_model_info AI copilot model metadata (labelled gauge always set to 1)",
+    "# TYPE trading_ai_copilot_model_info gauge",
+    f'trading_ai_copilot_model_info{{role="primary",model="{primary_model.replace(chr(92), chr(92) * 2).replace(chr(34), chr(92) + chr(34))}"}} 1',
+    f'trading_ai_copilot_model_info{{role="benchmark",model="{benchmark_model.replace(chr(92), chr(92) * 2).replace(chr(34), chr(92) + chr(34))}"}} 1',
     "# HELP trading_runtime_portfolio_value Latest portfolio value seen by the trading bot",
     "# TYPE trading_runtime_portfolio_value gauge",
     f"trading_runtime_portfolio_value {portfolio_value:.6f}",

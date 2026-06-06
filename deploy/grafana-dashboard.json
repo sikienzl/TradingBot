@@ -723,6 +723,52 @@
     },
     {
       "datasource": "Prometheus",
+      "description": "Current primary and benchmark model names used by the AI copilot benchmark setup.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 76 },
+      "id": 35,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "show": false },
+        "showHeader": true,
+        "sortBy": [
+          { "desc": false, "displayName": "Role" }
+        ]
+      },
+      "title": "AI Models",
+      "transformations": [
+        { "id": "labelsToFields", "options": { "mode": "columns" } },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true,
+              "__name__": true,
+              "instance": true,
+              "job": true
+            },
+            "indexByName": {
+              "role": 0,
+              "model": 1
+            },
+            "renameByName": {
+              "role": "Role",
+              "model": "Model"
+            }
+          }
+        }
+      ],
+      "type": "table",
+      "targets": [
+        { "expr": "trading_ai_copilot_model_info", "format": "table", "instant": true, "refId": "A" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
       "description": "Latest Mammouth AI outcomes from the bot log, including shadow suggestions, unchanged values, and no-change decisions.",
       "fieldConfig": {
         "defaults": {},
@@ -761,7 +807,7 @@
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 76 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 82 },
       "id": 29,
       "options": {
         "cellHeight": "sm",
