@@ -1,0 +1,48 @@
+v1.0.23 - src/ package layout, FastAPI, per-coin overrides, CI fixes
+
+Date: 2026-06-06
+
+Changes
+
+Source layout
+- Consolidated all source modules into src/ package and added pyproject.toml.
+- CI PYTHONPATH updated to include both workspace root and src/ directory.
+
+New features
+- Added typed FastAPI API exposing scorecard and CatBoost prediction endpoints.
+- Added optional Postgres analytics sink for trade and signal data.
+- Added per-coin uptrend max-hold override.
+- Added per-coin uptrend fast-exit overrides.
+- Added per-coin entry momentum override.
+- Added per-coin downtrend reversal overrides.
+- Added portfolio scaling and targeted entry tuning.
+- Added portfolio snapshot freshness monitoring.
+- Added MACD histogram return in coin analysis.
+- Added fallback entry diagnostics and TRX RSI override.
+- Added simulation comparison tooling and Pi wrappers.
+
+Bug fixes
+- Fixed downtrend reversal entry gating.
+- Fixed dynamic lossmaker sell window.
+- Fixed bot logging and mixed market mode.
+- Fixed Prometheus scraping for PnL exporter.
+- Restored AI copilot config initialization.
+
+Tuning
+- Hardened reversal path and excluded lossmakers (BTC, XRP).
+- Tightened uptrend fallback entries and exits.
+- Tightened TRX fallback RSI after churn.
+- Lowered TRX uptrend buy threshold progressively.
+- Extended journal-driven lossmaker suppression.
+- Relaxed uptrend gate CatBoost dependency.
+- Added entry rejection diagnostics.
+
+CI
+- Fixed PYTHONPATH to include src/ for import check and pytest.
+- Added missing test dependencies: pydantic, fastapi, uvicorn, httpx.
+- Fixed PIPESTATUS capture by adding set +e in ruff and pytest steps.
+
+Notes
+- The src/ consolidation is a breaking layout change for any external scripts
+  importing modules directly from the repo root. Update PYTHONPATH accordingly.
+- Postgres analytics sink is opt-in; see docs/postgres_analytics_schema.md.
