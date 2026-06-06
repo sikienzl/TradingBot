@@ -1,0 +1,122 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+# ---------------------------------------------------------------------------
+# Project metadata
+# ---------------------------------------------------------------------------
+[project]
+name = "crypto-trading-bot"
+dynamic = ["version"]
+description = "Modular crypto trading pipeline: CatBoost/LLM ensemble signals, Kraken integration, simulation and live trading."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+authors = [
+  { name = "Siegfried Kienzle" },
+]
+keywords = ["trading", "crypto", "catboost", "kraken", "bot"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: BSD License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+
+# ---------------------------------------------------------------------------
+# Runtime dependencies  (compatible-release bounds, not pinned)
+# ---------------------------------------------------------------------------
+dependencies = [
+    "ccxt>=4.5",
+    "pandas>=2.2",
+    "numpy>=2.0",
+    "TA-Lib>=0.4",
+    "python-dotenv>=1.0",
+    "psycopg[binary]>=3.1",
+    "catboost>=1.2",
+    "scikit-learn>=1.4",
+    "fastapi>=0.110",
+    "pydantic>=2.7",
+    "uvicorn>=0.29",
+]
+
+# ---------------------------------------------------------------------------
+# Optional extras
+# ---------------------------------------------------------------------------
+[project.optional-dependencies]
+# pip install crypto-trading-bot[llm]  – LLM inference (predict.py)
+llm = [
+    "torch>=2.2",
+    "transformers>=4.40",
+    "peft>=0.10",
+]
+# pip install crypto-trading-bot[train]  – LLM fine-tuning (train_trading_model.py)
+train = [
+    "trl>=0.8",
+    "datasets>=2.18",
+    "accelerate>=0.30",
+    "bitsandbytes>=0.43",
+]
+# pip install crypto-trading-bot[dev]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[project.urls]
+Repository = "https://github.com/sikienzl/TradingBot"
+Issues     = "https://github.com/sikienzl/TradingBot/issues"
+
+# ---------------------------------------------------------------------------
+# Version – derived automatically from the git tag (e.g. v1.0.22 → 1.0.22)
+# ---------------------------------------------------------------------------
+[tool.hatch.version]
+source = "vcs"
+
+# hatch-vcs writes the resolved version to src/_version.py so it is
+# available at runtime without a git checkout.
+[tool.hatch.build.hooks.vcs]
+version-file = "src/_version.py"
+
+# ---------------------------------------------------------------------------
+# Wheel:  packages the src/ directory as the importable "src" namespace
+# ---------------------------------------------------------------------------
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+# ---------------------------------------------------------------------------
+# Source distribution: include everything a developer needs
+# ---------------------------------------------------------------------------
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/",
+    "scripts/",
+    "deploy/",
+    "tests/",
+    "README.md",
+    "LICENSE",
+    "requirements.txt",
+    "requirements-pi.txt",
+    ".env.example",
+    ".env.live.example",
+    ".env.simulation.example",
+]
+exclude = [
+    "*.csv",
+    "*.log",
+    "trade_journal.csv",
+    "training_data.csv",
+    "auto_tune_state*.json",
+    "tuning_policy.json",
+    ".env",
+    "results/",
+    "logs/",
+    "model/",
+    "catboost_info/",
+    ".venv/",
+    "build/",
+    "old_data/",
+]

@@ -15,7 +15,7 @@ import urllib.request
 import urllib.error
 from contextlib import suppress
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 JOURNAL_PATH = '/opt/trading_2/trade_journal.csv'
@@ -197,7 +197,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             'open_positions_count': 0,
             'portfolio_snapshot_timestamp_unixtime': 0.0,
             'portfolio_snapshot_age_seconds': 0.0,
-            'metrics_generated_unixtime': datetime.utcnow().timestamp(),
+            'metrics_generated_unixtime': datetime.now(timezone.utc).timestamp(),
         }
 
         if not os.path.exists(BOT_LOG_PATH):
@@ -369,7 +369,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     continue
                 with open(candidate, 'r', encoding='utf-8') as f:
                     state = json.load(f)
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 month_key = f"{now.year:04d}-{now.month:02d}"
                 if state.get('month_key') == month_key:
                     result['ai_copilot_budget_cap_usd'] = float(
@@ -405,7 +405,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             with open(BOT_LOG_PATH, 'r', encoding='utf-8', errors='ignore') as f:
                 tail_lines = list(deque(f, maxlen=4000))
 
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             suggestions = []
             rank = 1
 
@@ -480,7 +480,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
 
     def calculate_pnl_metrics(self, trades, time_window_hours=24):
         """Calculate PnL metrics from trades"""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=time_window_hours)
 
         all_time_realized_pnl = 0.0

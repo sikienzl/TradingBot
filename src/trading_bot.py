@@ -942,7 +942,7 @@ class CryptoTradingBot:
         self.ml_predictor = None
         if self.config.use_ml_model:
             try:
-                from predict import TradingModelPredictor
+                from src.predict import TradingModelPredictor
                 self.ml_predictor = TradingModelPredictor(
                     self.config.model_path)
                 logger.info(
@@ -954,7 +954,7 @@ class CryptoTradingBot:
         self.tabular_predictor = None
         if self.config.use_tabular_model:
             try:
-                from predict_catboost import CatBoostTradingPredictor
+                from src.predict_catboost import CatBoostTradingPredictor
                 self.tabular_predictor = CatBoostTradingPredictor(
                     self.config.tabular_model_path,
                     research_signal_path=self.config.tabular_research_signal_path,
@@ -984,9 +984,7 @@ class CryptoTradingBot:
             ])
 
     def _append_trade_journal(self, row: Dict):
-        if not self.config.performance_log_enabled:
-            pass
-        else:
+        if self.config.performance_log_enabled:
             with open(self.config.performance_log_file, 'a', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerow([

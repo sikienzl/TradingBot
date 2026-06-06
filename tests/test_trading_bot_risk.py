@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
-from trading_bot import BotConfig, CryptoTradingBot
+from src.trading_bot import BotConfig, CryptoTradingBot
 
 
 def _make_test_bot(monkeypatch):

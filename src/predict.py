@@ -33,7 +33,10 @@ class TradingModelPredictor:
             self.model_path,
             quantization_config=bnb_config,
             device_map="auto",
-            trust_remote_code=True
+            # trust_remote_code is intentionally NOT set here. The fine-tuned
+            # model at model_path uses standard architectures only and does not
+            # require executing custom remote code. Enabling it would allow
+            # arbitrary code execution from the model repository.
         )
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)

@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from predict_catboost import CatBoostTradingPredictor
+from src.predict_catboost import CatBoostTradingPredictor
 
 
 class _FakeModel:

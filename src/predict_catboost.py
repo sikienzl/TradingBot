@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier
 
-from research_signal import apply_research_features, load_latest_research_signal
+from src.research_signal import apply_research_features, load_latest_research_signal
 
 
 class CatBoostTradingPredictor:

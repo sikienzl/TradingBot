@@ -1,14 +1,17 @@
+import os
+import pathlib
+
 from fastapi import FastAPI, HTTPException, Query
 
-from api_models import (
+from src.api_models import (
     CatBoostPredictionRequest,
     CatBoostPredictionResponse,
     ResearchSignalFeatures,
     ResearchSignalPayload,
     ScorecardResponse,
 )
-from go_no_go_scorecard import ScorecardDataError, evaluate_scorecard
-from predict_catboost import CatBoostTradingPredictor
+from src.go_no_go_scorecard import ScorecardDataError, evaluate_scorecard
+from src.predict_catboost import CatBoostTradingPredictor
 from research_signal import load_research_signal_payload, normalize_research_payload_model
 
 
@@ -17,6 +20,47 @@ app = FastAPI(
     version="1.0.0",
     description="Typed FastAPI endpoints for scorecards and research signals.",
 )
+
+# Allowlist: when JOURNAL_DIR is set, restrict scorecard reads to that directory only.
+# When not set, any absolute path is accepted but relative paths with traversal are blocked.
+_SCORECARD_JOURNAL_DIR = os.getenv("JOURNAL_DIR", "")
+_SCORECARD_ALLOWED_DIR: pathlib.Path | None = (
+    pathlib.Path(_SCORECARD_JOURNAL_DIR).resolve(
+    ) if _SCORECARD_JOURNAL_DIR else None
+)
+
+
+def _validate_scorecard_path(file: str) -> pathlib.Path:
+    """Resolve and validate the scorecard file path to prevent path traversal.
+
+    - If JOURNAL_DIR is set: the file must resolve to within that directory.
+    - If JOURNAL_DIR is not set: absolute paths are accepted as-is; relative paths
+      are resolved against the project root and must not escape it.
+    """
+    project_root = pathlib.Path(__file__).parent.parent.resolve()
+    try:
+        if pathlib.Path(file).is_absolute():
+            resolved = pathlib.Path(file).resolve()
+        else:
+            resolved = (project_root / file).resolve()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail="Invalid file path.") from exc
+
+    if _SCORECARD_ALLOWED_DIR is not None:
+        if not str(resolved).startswith(str(_SCORECARD_ALLOWED_DIR) + os.sep) and resolved != _SCORECARD_ALLOWED_DIR:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: file is outside the allowed directory.",
+            )
+    elif not pathlib.Path(file).is_absolute():
+        # Relative path: block traversal that escapes the project root.
+        if not str(resolved).startswith(str(project_root) + os.sep) and resolved != project_root:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: relative path escapes the project root.",
+            )
+    return resolved
 
 
 @app.get("/health")
@@ -78,9 +122,10 @@ def get_scorecard(
     min_catboost_vs_rules_pnl_delta: float = Query(default=-0.05),
     min_source_trades_for_delta: int = Query(default=50, ge=0),
 ) -> ScorecardResponse:
+    validated_path = _validate_scorecard_path(file)
     try:
         return evaluate_scorecard(
-            file_path=file,
+            file_path=str(validated_path),
             base_currency=base_currency,
             lookback_days=lookback_days,
             starting_capital=starting_capital,

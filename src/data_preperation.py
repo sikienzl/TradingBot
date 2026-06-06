@@ -57,12 +57,15 @@ def prepare_training_data(input_file="full_crypto_data.csv", output_file="traini
         print("📈 Calculating missing indicators...")
 
         if 'rsi' not in df.columns or df['rsi'].isna().all():
-            # Einfache RSI-Berechnung (vereinfacht)
-            delta = df['close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            df['rsi'] = 100 - (100 / (1 + rs))
+            # Calculate RSI per coin to avoid cross-coin contamination at boundaries.
+            def _rsi_per_group(close: "pd.Series") -> "pd.Series":
+                delta = close.diff()
+                gain = delta.where(delta > 0, 0).rolling(window=14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                rs = gain / loss
+                return 100 - (100 / (1 + rs))
+
+            df['rsi'] = df.groupby('coin')['close'].transform(_rsi_per_group)
 
         # 5. Prepare data for training
         print("🛠️ Finalizing data...")

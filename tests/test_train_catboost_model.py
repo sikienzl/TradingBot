@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from train_catboost_model import create_profit_labels, generate_walk_forward_splits
+from src.train_catboost_model import create_profit_labels, generate_walk_forward_splits
 
 
 def test_generate_walk_forward_splits_monotonic_windows():

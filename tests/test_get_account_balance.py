@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from get_account_balance import (
+from src.get_account_balance import (
     get_nonce,
     sign,
     get_signature,

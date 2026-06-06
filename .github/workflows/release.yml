@@ -280,6 +280,15 @@ jobs:
 
           echo "NOTES_FILE=release-notes-${VERSION}.txt" >> "$GITHUB_ENV"
 
+      - name: Build Python wheel
+        run: |
+          python -m pip install --upgrade pip build hatchling hatch-vcs
+          python -m build --wheel --sdist --outdir dist/
+          WHL=$(ls dist/*.whl | head -1)
+          SDIST=$(ls dist/*.tar.gz | head -1)
+          echo "WHL=${WHL}" >> "$GITHUB_ENV"
+          echo "SDIST=${SDIST}" >> "$GITHUB_ENV"
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -291,5 +300,7 @@ jobs:
           files: |
             ${{ env.PKG }}.tar.gz
             ${{ env.PKG }}.tar.gz.sha256
+            ${{ env.WHL }}
+            ${{ env.SDIST }}
             scripts/install_pi.sh
             ${{ env.NOTES_FILE }}

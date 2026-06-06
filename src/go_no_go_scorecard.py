@@ -125,7 +125,8 @@ def _compute_metrics(df: pd.DataFrame, starting_capital: float, recent_trades_wi
 
     gross_profit = float(sells.loc[sells["pnl_base"] > 0, "pnl_base"].sum())
     gross_loss = float(-sells.loc[sells["pnl_base"] < 0, "pnl_base"].sum())
-    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else np.inf
+    # Cap at 999.0 so the value remains JSON-serialisable (JSON has no Infinity literal).
+    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 999.0
 
     equity = sells["pnl_base"].cumsum(
     ) if closed > 0 else pd.Series(dtype=float)

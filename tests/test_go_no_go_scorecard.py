@@ -1,6 +1,6 @@
 import pandas as pd
 
-from go_no_go_scorecard import (
+from src.go_no_go_scorecard import (
     _safe_float,
     _max_drawdown_base,
     _compute_metrics,

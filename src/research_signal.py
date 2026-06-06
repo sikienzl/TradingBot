@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
-from api_models import MarketRegime, ResearchSignalFeatures, ResearchSignalPayload
+from src.api_models import MarketRegime, ResearchSignalFeatures, ResearchSignalPayload
 
 
 RESEARCH_FEATURE_COLUMNS = [

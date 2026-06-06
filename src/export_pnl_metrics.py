@@ -11,7 +11,7 @@ import sys
 import json
 import re
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 MIN_DRAWDOWN_PCT_BASE_USD = 1.0
@@ -76,7 +76,7 @@ def extract_return_pct(trade):
 
 def calculate_pnl_metrics(trades, time_window_hours=24):
     """Calculate PnL metrics from trades"""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=time_window_hours)
 
     all_time_realized_pnl = 0.0
@@ -377,7 +377,7 @@ def read_ai_copilot_usage(env_path=ENV_PATH, state_path=AI_COPILOT_STATE_PATH):
         if os.path.exists(state_path):
             with open(state_path, 'r', encoding='utf-8') as f:
                 state = json.load(f)
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             month_key = f"{now.year:04d}-{now.month:02d}"
             if state.get('month_key') == month_key:
                 result['ai_copilot_budget_cap_usd'] = float(
@@ -404,7 +404,7 @@ def read_ai_shadow_suggestions(log_path=BOT_LOG_PATH):
         with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
             tail_lines = list(deque(f, maxlen=4000))
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         suggestions = []
         rank = 1
 
