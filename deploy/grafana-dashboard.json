@@ -660,6 +660,69 @@
     },
     {
       "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 50 },
+            { "color": "red", "value": 200 }
+          ] },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 72 },
+      "id": 32,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "title": "Benchmark Monthly Calls",
+      "type": "stat",
+      "targets": [{ "expr": "trading_ai_copilot_benchmark_monthly_calls", "legendFormat": "Benchmark", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "max": 100,
+          "min": 0,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 40 },
+            { "color": "red", "value": 80 }
+          ] },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 72 },
+      "id": 33,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "title": "Benchmark Budget Used %",
+      "type": "stat",
+      "targets": [{ "expr": "trading_ai_copilot_benchmark_budget_used_pct", "legendFormat": "Budget", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Primary AI monthly spend minus benchmark monthly spend. Positive means the benchmark model is currently cheaper.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "yellow", "value": 0 },
+            { "color": "green", "value": 0.01 }
+          ] },
+          "unit": "currencyUSD"
+        }
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 72 },
+      "id": 34,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "title": "Spend Delta",
+      "type": "stat",
+      "targets": [{ "expr": "trading_ai_copilot_monthly_spend_usd - trading_ai_copilot_benchmark_monthly_spend_usd", "legendFormat": "Primary - Benchmark", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
       "description": "Latest Mammouth AI outcomes from the bot log, including shadow suggestions, unchanged values, and no-change decisions.",
       "fieldConfig": {
         "defaults": {},
@@ -698,7 +761,7 @@
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 64 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 76 },
       "id": 29,
       "options": {
         "cellHeight": "sm",
