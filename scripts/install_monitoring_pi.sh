@@ -38,7 +38,7 @@ _ok "Packages installed."
 mkdir -p /opt/trading_2/results/scorecards/textfile
 chown -R trading:trading /opt/trading_2/results
 
-for unit in scorecard-status.service scorecard-status.timer node-exporter-textfile.service; do
+for unit in pnl-exporter.service scorecard-status.service scorecard-status.timer node-exporter-textfile.service; do
   src="${INSTALL_DIR}/deploy/${unit}"
   dst="${SYSTEMD_DIR}/${unit}"
   [[ -f "$src" ]] || _die "Missing unit file: $src"
@@ -52,6 +52,7 @@ cp "${INSTALL_DIR}/deploy/trading-alerts.yml" "${PROMETHEUS_RULES_DIR}/trading-a
 _ok "Prometheus config installed."
 
 systemctl daemon-reload
+systemctl enable --now pnl-exporter.service
 systemctl enable --now node-exporter-textfile.service
 systemctl enable --now scorecard-status.timer
 systemctl restart prometheus

@@ -8,7 +8,8 @@ Type=simple
 User=siegfried
 Group=trading
 WorkingDirectory=/opt/trading_2
-ExecStart=/opt/trading_2/.venv/bin/python3 /opt/trading_2/pnl_exporter.py
+Environment=PYTHONPATH=/opt/trading_2
+ExecStart=/opt/trading_2/.venv/bin/python3 /opt/trading_2/src/pnl_exporter.py
 ExecReload=/bin/kill -HUP $MAINPID
 KillMode=process
 Restart=always

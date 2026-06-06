@@ -22,6 +22,7 @@ JOURNAL_PATH = '/opt/trading_2/trade_journal.csv'
 BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
 ENV_PATH = '/opt/trading_2/.env'
 AI_COPILOT_STATE_PATH = '/opt/trading_2/ai_copilot_state.json'
+PORTFOLIO_STATE_PATH = '/opt/trading_2/.portfolio_state.json'
 MIN_DRAWDOWN_PCT_BASE_USD = 1.0
 START_VALUE_CACHE = {
     'log_mtime': None,
@@ -316,26 +317,33 @@ class MetricsHandler(BaseHTTPRequestHandler):
 
     def read_portfolio_start_value(self):
         """Read initial dry-run portfolio cash from first initialization log line."""
-        if not os.path.exists(BOT_LOG_PATH):
-            return 0.0
-
         try:
-            mtime = os.path.getmtime(BOT_LOG_PATH)
+            mtime = os.path.getmtime(BOT_LOG_PATH) if os.path.exists(
+                BOT_LOG_PATH) else None
             if START_VALUE_CACHE['log_mtime'] == mtime:
                 return START_VALUE_CACHE['value']
 
             value = 0.0
             marker = 'Portfolio initialized from exchange (dry-run mode). Cash:'
-            with open(BOT_LOG_PATH, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    if marker not in line:
-                        continue
-                    try:
-                        cash_part = line.split('Cash:', 1)[1].strip()
-                        value = float(cash_part.split(' ')[0])
-                        break
-                    except Exception:
-                        continue
+            if os.path.exists(BOT_LOG_PATH):
+                with open(BOT_LOG_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        if marker not in line:
+                            continue
+                        try:
+                            cash_part = line.split('Cash:', 1)[1].strip()
+                            value = float(cash_part.split(' ')[0])
+                            break
+                        except Exception:
+                            continue
+
+            if value <= 0.0 and os.path.exists(PORTFOLIO_STATE_PATH):
+                try:
+                    with open(PORTFOLIO_STATE_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+                        state = json.load(f)
+                    value = float(state.get('initial_portfolio_value') or 0.0)
+                except Exception:
+                    pass
 
             START_VALUE_CACHE['log_mtime'] = mtime
             START_VALUE_CACHE['value'] = value

@@ -72,6 +72,7 @@ jobs:
              scripts/fetch_research_signal.py \
              "${PKG}/scripts/"
           cp deploy/trading-bot.service \
+             pnl-exporter.service \
              deploy/scorecard.service \
              deploy/scorecard.timer \
              deploy/scorecard-status.service \
@@ -107,6 +108,7 @@ jobs:
           # Release-blocking sanity checks before creating archive
           required_files=(
             "${PKG}/src/trading_bot.py"
+            "${PKG}/deploy/pnl-exporter.service"
             "${PKG}/src/predict_catboost.py"
             "${PKG}/src/research_signal.py"
             "${PKG}/scripts/install_pi.sh"

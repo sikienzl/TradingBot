@@ -18,6 +18,7 @@ MIN_DRAWDOWN_PCT_BASE_USD = 1.0
 BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
 ENV_PATH = '/opt/trading_2/.env'
 AI_COPILOT_STATE_PATH = '/opt/trading_2/ai_copilot_state.json'
+PORTFOLIO_STATE_PATH = '/opt/trading_2/.portfolio_state.json'
 CURRENT_PRICE_RE = re.compile(
     r'📊\s+([A-Z0-9]+):\s+Buy\s+[0-9.]+\s+→\s+Current\s+([0-9.]+)'
 )
@@ -328,20 +329,23 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
 
 def read_portfolio_start_value(log_path=BOT_LOG_PATH):
     """Read initial dry-run portfolio cash from first initialization log line."""
-    if not os.path.exists(log_path):
-        return 0.0
-
     marker = 'Portfolio initialized from exchange (dry-run mode). Cash:'
     try:
-        with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
-            for line in f:
-                if marker not in line:
-                    continue
-                try:
-                    cash_part = line.split('Cash:', 1)[1].strip()
-                    return float(cash_part.split(' ')[0])
-                except Exception:
-                    continue
+        if os.path.exists(log_path):
+            with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    if marker not in line:
+                        continue
+                    try:
+                        cash_part = line.split('Cash:', 1)[1].strip()
+                        return float(cash_part.split(' ')[0])
+                    except Exception:
+                        continue
+
+        if os.path.exists(PORTFOLIO_STATE_PATH):
+            with open(PORTFOLIO_STATE_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+                state = json.load(f)
+            return float(state.get('initial_portfolio_value') or 0.0)
     except Exception:
         return 0.0
     return 0.0

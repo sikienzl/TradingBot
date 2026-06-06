@@ -237,7 +237,7 @@ install_or_update_monitoring() {
 SYSTEMD_DIR="/etc/systemd/system"
 info "Installing systemd services..."
 
-for svc_file in trading-bot.service scorecard.service scorecard.timer research-signal.service research-signal.timer tuning-cycle.service tuning-cycle.timer; do
+for svc_file in trading-bot.service pnl-exporter.service scorecard.service scorecard.timer research-signal.service research-signal.timer tuning-cycle.service tuning-cycle.timer; do
   SRC="${INSTALL_DIR}/deploy/${svc_file}"
   DEST="${SYSTEMD_DIR}/${svc_file}"
   if [[ -f "$SRC" ]]; then
@@ -290,6 +290,11 @@ fi
 if [[ -f "${SYSTEMD_DIR}/trading-bot.service" ]]; then
   systemctl enable trading-bot.service
   info "Trading bot service registered (NOT started yet)."
+fi
+
+if [[ -f "${SYSTEMD_DIR}/pnl-exporter.service" ]]; then
+  systemctl enable --now pnl-exporter.service
+  ok "PnL exporter service enabled and restarted."
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

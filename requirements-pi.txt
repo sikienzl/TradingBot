@@ -14,3 +14,4 @@ TA-Lib==0.6.8
 python-dotenv==1.2.1
 catboost==1.2.8
 scikit-learn==1.6.1
+pydantic==2.12.4
