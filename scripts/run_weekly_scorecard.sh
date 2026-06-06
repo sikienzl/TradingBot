@@ -394,6 +394,7 @@ if [[ "${STATUS_PROM_ENABLED,,}" == "true" ]]; then
   STATUS_PROM_DIR="$(dirname "$STATUS_PROM_FILE")"
   mkdir -p "$STATUS_PROM_DIR"
   AI_STATE_FILE="${AI_COPILOT_STATE_FILE:-$ROOT_DIR/ai_copilot_state.json}"
+  AI_BENCHMARK_STATE_FILE="${AI_COPILOT_BENCHMARK_STATE_FILE:-$ROOT_DIR/ai_copilot_benchmark_state.json}"
   PORTFOLIO_STATE_FILE="${PORTFOLIO_STATE_FILE:-$ROOT_DIR/.portfolio_state.json}"
   BOT_LOG_FILE="${BOT_LOG_FILE:-$ROOT_DIR/logs/bot.log}"
 
@@ -445,6 +446,7 @@ if [[ "${STATUS_PROM_ENABLED,,}" == "true" ]]; then
     STATUS_TS_UNIX="$TS_UNIX" \
     SCORECARD_STARTING_CAPITAL="$STARTING_CAPITAL" \
     AI_STATE_FILE="$AI_STATE_FILE" \
+    AI_BENCHMARK_STATE_FILE="$AI_BENCHMARK_STATE_FILE" \
     PORTFOLIO_STATE_FILE="$PORTFOLIO_STATE_FILE" \
     BOT_LOG_FILE="$BOT_LOG_FILE" \
     "$PYTHON_CMD" - <<'PY'
@@ -542,6 +544,7 @@ def _read_portfolio_values_from_log(log_path: str):
 
 
 ai_state = _read_json(os.environ["AI_STATE_FILE"])
+ai_benchmark_state = _read_json(os.environ["AI_BENCHMARK_STATE_FILE"])
 portfolio_state = _read_json(os.environ["PORTFOLIO_STATE_FILE"])
 session_start_value, latest_portfolio_value = _read_portfolio_values_from_log(os.environ["BOT_LOG_FILE"])
 portfolio_value = latest_portfolio_value
@@ -561,6 +564,14 @@ budget_used_pct = 0.0
 if monthly_budget > 0:
     budget_used_pct = (monthly_spend / monthly_budget) * 100.0
 
+benchmark_monthly_calls = int(_as_float(ai_benchmark_state.get("monthly_calls"), 0.0))
+benchmark_daily_calls = int(_as_float(ai_benchmark_state.get("daily_calls"), 0.0))
+benchmark_monthly_spend = _as_float(ai_benchmark_state.get("monthly_spend_usd"), 0.0)
+benchmark_monthly_budget = _as_float(ai_benchmark_state.get("budget_cap_usd"), 0.0)
+benchmark_budget_used_pct = 0.0
+if benchmark_monthly_budget > 0:
+  benchmark_budget_used_pct = (benchmark_monthly_spend / benchmark_monthly_budget) * 100.0
+
 lines = [
     "# HELP trading_ai_copilot_daily_calls AI copilot calls used in the current day",
     "# TYPE trading_ai_copilot_daily_calls gauge",
@@ -574,6 +585,18 @@ lines = [
     "# HELP trading_ai_copilot_budget_used_pct Estimated percentage of AI copilot monthly budget already used",
     "# TYPE trading_ai_copilot_budget_used_pct gauge",
     f"trading_ai_copilot_budget_used_pct {budget_used_pct:.4f}",
+    "# HELP trading_ai_copilot_benchmark_daily_calls Benchmark AI copilot calls used in the current day",
+    "# TYPE trading_ai_copilot_benchmark_daily_calls gauge",
+    f"trading_ai_copilot_benchmark_daily_calls {benchmark_daily_calls}",
+    "# HELP trading_ai_copilot_benchmark_monthly_calls Benchmark AI copilot calls used in the current month",
+    "# TYPE trading_ai_copilot_benchmark_monthly_calls gauge",
+    f"trading_ai_copilot_benchmark_monthly_calls {benchmark_monthly_calls}",
+    "# HELP trading_ai_copilot_benchmark_monthly_spend_usd Estimated benchmark AI copilot spend in USD for the current month",
+    "# TYPE trading_ai_copilot_benchmark_monthly_spend_usd gauge",
+    f"trading_ai_copilot_benchmark_monthly_spend_usd {benchmark_monthly_spend:.6f}",
+    "# HELP trading_ai_copilot_benchmark_budget_used_pct Estimated percentage of benchmark AI copilot monthly budget already used",
+    "# TYPE trading_ai_copilot_benchmark_budget_used_pct gauge",
+    f"trading_ai_copilot_benchmark_budget_used_pct {benchmark_budget_used_pct:.4f}",
     "# HELP trading_runtime_portfolio_value Latest portfolio value seen by the trading bot",
     "# TYPE trading_runtime_portfolio_value gauge",
     f"trading_runtime_portfolio_value {portfolio_value:.6f}",

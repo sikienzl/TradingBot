@@ -51,7 +51,7 @@
         }
       },
       "gridPos": { "h": 4, "w": 8, "x": 0, "y": 44 },
-      "id": 29,
+      "id": 31,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
       "title": "Portfolio Snapshot Age",
       "type": "stat",
@@ -444,7 +444,7 @@
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
       "title": "AI Monthly Calls",
       "type": "stat",
-      "targets": [{ "expr": "trading_ai_copilot_calls_used_monthly", "legendFormat": "Monthly", "refId": "A" }]
+      "targets": [{ "expr": "trading_ai_copilot_monthly_calls", "legendFormat": "Monthly", "refId": "A" }]
     },
     {
       "datasource": "Prometheus",
@@ -464,7 +464,27 @@
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
       "title": "Mammouth Spend",
       "type": "stat",
-      "targets": [{ "expr": "trading_ai_copilot_budget_used_usd", "legendFormat": "Spend", "refId": "A" }]
+      "targets": [{ "expr": "trading_ai_copilot_monthly_spend_usd", "legendFormat": "Spend", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 0.25 },
+            { "color": "red", "value": 0.75 }
+          ] },
+          "unit": "currencyUSD"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 44 },
+      "id": 30,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "title": "Benchmark Spend",
+      "type": "stat",
+      "targets": [{ "expr": "trading_ai_copilot_benchmark_monthly_spend_usd", "legendFormat": "Benchmark", "refId": "A" }]
     },
     {
       "datasource": "Prometheus",
@@ -519,7 +539,7 @@
           "unit": "currencyEUR"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 44 },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 44 },
       "id": 22,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
       "title": "Portfolio Value",
@@ -538,7 +558,7 @@
           "unit": "currencyEUR"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 44 },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 44 },
       "id": 23,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
       "title": "Portfolio Start",
