@@ -1,0 +1,26 @@
+v1.0.24 - Pi deployment updated to src/ package layout
+
+Date: 2026-06-06
+
+Changes
+
+Deployment
+- Set PYTHONPATH=/opt/trading_2 in all systemd service files (trading-bot, scorecard-status,
+  research-signal) so that src.* imports resolve correctly on the Pi.
+- Updated ExecStart in trading-bot.service to run src/trading_bot.py instead of trading_bot.py.
+
+Scripts
+- run_weekly_scorecard.sh: calls src/go_no_go_scorecard.py with PYTHONPATH set.
+- run_daily_dryrun_review.sh: PYTHONPATH set before Python invocation.
+
+Import normalization
+- go_no_go_scorecard.py: from api_models -> from src.api_models
+- fastapi_app.py: from research_signal -> from src.research_signal
+- train_catboost_model.py: from research_signal -> from src.research_signal
+
+All internal imports now consistently use the src. prefix, which is required when
+PYTHONPATH points to the repo/install root rather than to src/ itself.
+
+Notes
+- Pi must be updated with this release to run correctly under the src/ layout.
+- The install_pi.sh installer handles the layout automatically via the release tarball.
