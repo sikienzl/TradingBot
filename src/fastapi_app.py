@@ -12,7 +12,7 @@ from src.api_models import (
 )
 from src.go_no_go_scorecard import ScorecardDataError, evaluate_scorecard
 from src.predict_catboost import CatBoostTradingPredictor
-from research_signal import load_research_signal_payload, normalize_research_payload_model
+from src.research_signal import load_research_signal_payload, normalize_research_payload_model
 
 
 app = FastAPI(

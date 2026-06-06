@@ -5,7 +5,7 @@ from typing import List
 import numpy as np
 import pandas as pd
 
-from api_models import ScorecardMetrics, ScorecardResponse, ScorecardResult, ScorecardVerdict, ScorecardThresholds
+from src.api_models import ScorecardMetrics, ScorecardResponse, ScorecardResult, ScorecardVerdict, ScorecardThresholds
 
 
 class ScorecardDataError(ValueError):

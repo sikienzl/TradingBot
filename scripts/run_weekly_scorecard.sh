@@ -210,7 +210,7 @@ if [[ "${AUTORESEARCH_ENABLED,,}" == "true" ]]; then
 fi
 
 set +e
-"$PYTHON_CMD" "$ROOT_DIR/go_no_go_scorecard.py" \
+PYTHONPATH="$ROOT_DIR" "$PYTHON_CMD" "$ROOT_DIR/src/go_no_go_scorecard.py" \
   --file "$JOURNAL_FILE" \
   --lookback-days "$LOOKBACK_DAYS" \
   --starting-capital "$STARTING_CAPITAL" \

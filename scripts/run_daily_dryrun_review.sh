@@ -25,7 +25,7 @@ LATEST_TXT="$OUT_DIR/latest_review.txt"
 
 mkdir -p "$OUT_DIR"
 
-"$PYTHON_CMD" "$ROOT_DIR/scripts/daily_dryrun_review.py" \
+PYTHONPATH="$ROOT_DIR" "$PYTHON_CMD" "$ROOT_DIR/scripts/daily_dryrun_review.py" \
   --journal "$ROOT_DIR/trade_journal.csv" \
   --bot-log "$ROOT_DIR/logs/bot.log" \
   --ai-state "$ROOT_DIR/ai_copilot_state.json" \

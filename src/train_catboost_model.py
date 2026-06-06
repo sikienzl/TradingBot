@@ -7,7 +7,7 @@ import pandas as pd
 from catboost import CatBoostClassifier
 from sklearn.metrics import accuracy_score, classification_report, f1_score
 
-from research_signal import (
+from src.research_signal import (
     RESEARCH_FEATURE_COLUMNS,
     apply_research_features,
     load_latest_research_signal,
