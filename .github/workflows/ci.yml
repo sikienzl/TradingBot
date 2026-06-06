@@ -125,7 +125,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest numpy pandas scikit-learn catboost ccxt python-dotenv
+          pip install pytest numpy pandas scikit-learn catboost ccxt python-dotenv pydantic
 
       - name: Verify module imports
         env:
