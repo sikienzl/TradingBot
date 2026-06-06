@@ -634,6 +634,30 @@ class BotConfig:
             os.getenv('AI_COPILOT_TABULAR_BUY_CONF_MIN', 0.50))
         self.ai_copilot_tabular_buy_conf_max = float(
             os.getenv('AI_COPILOT_TABULAR_BUY_CONF_MAX', 0.65))
+        self.ai_copilot_benchmark_enabled = _env_bool(
+            'AI_COPILOT_BENCHMARK_ENABLED', False)
+        self.ai_copilot_benchmark_model = _env_str(
+            'AI_COPILOT_BENCHMARK_MODEL', '')
+        self.ai_copilot_benchmark_interval_minutes = int(
+            os.getenv('AI_COPILOT_BENCHMARK_INTERVAL_MINUTES', str(self.ai_copilot_interval_minutes)))
+        self.ai_copilot_benchmark_state_file = os.getenv(
+            'AI_COPILOT_BENCHMARK_STATE_FILE', 'ai_copilot_benchmark_state.json')
+        self.ai_copilot_benchmark_max_calls_per_day = int(
+            os.getenv('AI_COPILOT_BENCHMARK_MAX_CALLS_PER_DAY', str(self.ai_copilot_max_calls_per_day)))
+        self.ai_copilot_benchmark_max_calls_per_month = int(
+            os.getenv('AI_COPILOT_BENCHMARK_MAX_CALLS_PER_MONTH', str(self.ai_copilot_max_calls_per_month)))
+        self.ai_copilot_benchmark_max_budget_usd_per_month = float(
+            os.getenv('AI_COPILOT_BENCHMARK_MAX_BUDGET_USD_PER_MONTH', 1.0))
+        self.ai_copilot_benchmark_max_output_tokens = int(
+            os.getenv('AI_COPILOT_BENCHMARK_MAX_OUTPUT_TOKENS', str(self.ai_copilot_max_output_tokens)))
+        self.ai_copilot_benchmark_temperature = float(
+            os.getenv('AI_COPILOT_BENCHMARK_TEMPERATURE', str(self.ai_copilot_temperature)))
+        self.ai_copilot_benchmark_max_consecutive_errors = int(
+            os.getenv('AI_COPILOT_BENCHMARK_MAX_CONSECUTIVE_ERRORS', str(self.ai_copilot_max_consecutive_errors)))
+        self.ai_copilot_benchmark_cost_input_per_mtok = float(
+            os.getenv('AI_COPILOT_BENCHMARK_COST_INPUT_PER_MTOK', str(self.ai_copilot_cost_input_per_mtok)))
+        self.ai_copilot_benchmark_cost_output_per_mtok = float(
+            os.getenv('AI_COPILOT_BENCHMARK_COST_OUTPUT_PER_MTOK', str(self.ai_copilot_cost_output_per_mtok)))
 
     def analytics_db_connect_kwargs(self) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {}
@@ -1233,8 +1257,8 @@ class CryptoTradingBot:
             logger.info(
                 f"ℹ️ AUTO_TUNE disabled. Recommended TABULAR_MIN_CONFIDENCE: {recommended:.2f}")
 
-    def _read_ai_copilot_state(self) -> Dict:
-        path = self.config.ai_copilot_state_file
+    def _read_ai_copilot_state(self, path: Optional[str] = None) -> Dict:
+        path = path or self.config.ai_copilot_state_file
         if not path:
             return {}
 
@@ -1258,8 +1282,8 @@ class CryptoTradingBot:
                 f'AI co-pilot state could not be loaded: {last_error}')
         return {}
 
-    def _write_ai_copilot_state(self, state: Dict):
-        path = self.config.ai_copilot_state_file
+    def _write_ai_copilot_state(self, state: Dict, path: Optional[str] = None):
+        path = path or self.config.ai_copilot_state_file
         if not path:
             return
         tmp_path = f'{path}.tmp'
@@ -1290,13 +1314,11 @@ class CryptoTradingBot:
         now = datetime.now(timezone.utc)
         return f"{now.year:04d}-{now.month:02d}-{now.day:02d}"
 
-    def _normalize_ai_state(self, state: Dict) -> Dict:
+    def _normalize_ai_state(self, state: Dict, monthly_call_cap: int, budget_cap_usd: float) -> Dict:
         month_key = self._current_month_key()
         day_key = self._current_day_key()
-        state['budget_cap_usd'] = float(
-            self.config.ai_copilot_max_budget_usd_per_month)
-        state['calls_cap_monthly'] = int(
-            self.config.ai_copilot_max_calls_per_month)
+        state['budget_cap_usd'] = float(budget_cap_usd)
+        state['calls_cap_monthly'] = int(monthly_call_cap)
         if state.get('month_key') != month_key:
             state['month_key'] = month_key
             state['monthly_calls'] = 0
@@ -1312,40 +1334,54 @@ class CryptoTradingBot:
         state.setdefault('consecutive_errors', 0)
         return state
 
-    def _estimate_ai_cost_usd(self, prompt_tokens: int, completion_tokens: int) -> float:
+    def _estimate_ai_cost_usd(self, prompt_tokens: int, completion_tokens: int, input_cost_per_mtok: float, output_cost_per_mtok: float) -> float:
         input_cost = (max(0, prompt_tokens) / 1_000_000.0) * \
-            self.config.ai_copilot_cost_input_per_mtok
+            input_cost_per_mtok
         output_cost = (max(0, completion_tokens) / 1_000_000.0) * \
-            self.config.ai_copilot_cost_output_per_mtok
+            output_cost_per_mtok
         return float(input_cost + output_cost)
 
-    def _can_run_ai_copilot(self, state: Dict) -> Tuple[bool, str]:
-        if not self.config.ai_copilot_enabled:
+    def _can_run_ai_copilot(
+        self,
+        state: Dict,
+        *,
+        enabled: bool,
+        model: str,
+        api_key: str,
+        max_consecutive_errors: int,
+        max_calls_per_day: int,
+        max_calls_per_month: int,
+        max_budget_usd_per_month: float,
+        interval_minutes: int,
+    ) -> Tuple[bool, str]:
+        if not enabled:
             return False, 'disabled'
-        if not self.config.ai_copilot_api_key:
+        if not model:
+            return False, 'missing_model'
+        if not api_key:
             return False, 'missing_api_key'
         if (
-            self.config.ai_copilot_max_consecutive_errors > 0
-            and state.get('consecutive_errors', 0) >= self.config.ai_copilot_max_consecutive_errors
+            max_consecutive_errors > 0
+            and state.get('consecutive_errors', 0) >= max_consecutive_errors
             and state.get('last_suspended_at')
         ):
             return False, 'suspended_after_errors'
-        if self.config.ai_copilot_max_calls_per_day > 0 and state.get('daily_calls', 0) >= self.config.ai_copilot_max_calls_per_day:
+        if max_calls_per_day > 0 and state.get('daily_calls', 0) >= max_calls_per_day:
             return False, 'daily_call_limit'
-        if self.config.ai_copilot_max_calls_per_month > 0 and state.get('monthly_calls', 0) >= self.config.ai_copilot_max_calls_per_month:
+        if max_calls_per_month > 0 and state.get('monthly_calls', 0) >= max_calls_per_month:
             return False, 'monthly_call_limit'
-        if self.config.ai_copilot_max_budget_usd_per_month > 0 and state.get('monthly_spend_usd', 0.0) >= self.config.ai_copilot_max_budget_usd_per_month:
+        if max_budget_usd_per_month > 0 and state.get('monthly_spend_usd', 0.0) >= max_budget_usd_per_month:
             return False, 'monthly_budget_limit'
 
         last_run_raw = state.get('last_attempt_at') or state.get('last_run_at')
-        if last_run_raw and self.config.ai_copilot_interval_minutes > 0:
+        if last_run_raw and interval_minutes > 0:
             try:
                 last_run = datetime.fromisoformat(last_run_raw)
                 if last_run.tzinfo is None:
                     last_run = last_run.replace(tzinfo=timezone.utc)
                 elapsed_min = (datetime.now(timezone.utc) -
                                last_run).total_seconds() / 60.0
-                if elapsed_min < self.config.ai_copilot_interval_minutes:
+                if elapsed_min < interval_minutes:
                     return False, 'interval_not_reached'
             except Exception:
                 pass
@@ -1538,7 +1574,7 @@ class CryptoTradingBot:
             return None
         return None
 
-    def _call_ai_copilot(self, snapshot: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], int, int]:
+    def _call_ai_copilot(self, snapshot: Dict[str, Any], *, model: str, temperature: float, max_output_tokens: int) -> Tuple[Optional[Dict[str, Any]], int, int]:
         system_prompt = (
             "You are a conservative trading bot co-pilot. "
             "Return ONLY JSON with keys: proposed_changes (object), reason (string), confidence (0..1), risk_level (low|medium|high). "
@@ -1548,13 +1584,13 @@ class CryptoTradingBot:
         )
         user_payload = json.dumps(snapshot, ensure_ascii=True)
         request_body = {
-            'model': self.config.ai_copilot_model,
+            'model': model,
             'messages': [
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user', 'content': user_payload},
             ],
-            'temperature': self.config.ai_copilot_temperature,
-            'max_tokens': self.config.ai_copilot_max_output_tokens,
+            'temperature': temperature,
+            'max_tokens': max_output_tokens,
         }
 
         req = urllib.request.Request(
@@ -1647,33 +1683,71 @@ class CryptoTradingBot:
 
         return applied
 
-    def _maybe_run_ai_copilot(self):
-        state = self._normalize_ai_state(self._read_ai_copilot_state())
-        can_run, reason = self._can_run_ai_copilot(state)
+    def _maybe_run_ai_copilot_variant(
+        self,
+        snapshot: Dict[str, Any],
+        *,
+        label: str,
+        state_file: str,
+        enabled: bool,
+        model: str,
+        shadow_mode: bool,
+        max_calls_per_day: int,
+        max_calls_per_month: int,
+        max_budget_usd_per_month: float,
+        max_output_tokens: int,
+        temperature: float,
+        max_consecutive_errors: int,
+        cost_input_per_mtok: float,
+        cost_output_per_mtok: float,
+        interval_minutes: int,
+        allow_apply: bool,
+    ):
+        state = self._normalize_ai_state(
+            self._read_ai_copilot_state(state_file),
+            max_calls_per_month,
+            max_budget_usd_per_month,
+        )
+        state['model'] = model
+        can_run, reason = self._can_run_ai_copilot(
+            state,
+            enabled=enabled,
+            model=model,
+            api_key=self.config.ai_copilot_api_key,
+            max_consecutive_errors=max_consecutive_errors,
+            max_calls_per_day=max_calls_per_day,
+            max_calls_per_month=max_calls_per_month,
+            max_budget_usd_per_month=max_budget_usd_per_month,
+            interval_minutes=interval_minutes,
+        )
         if not can_run:
             if reason not in {'interval_not_reached', 'disabled'}:
-                logger.info(f"AI co-pilot skipped: {reason}")
-            self._write_ai_copilot_state(state)
+                logger.info(f"{label} skipped: {reason}")
+            self._write_ai_copilot_state(state, state_file)
             return
 
-        snapshot = self._ai_copilot_snapshot()
         try:
             result, prompt_tokens, completion_tokens = self._call_ai_copilot(
-                snapshot)
+                snapshot,
+                model=model,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            )
             estimated_cost = self._estimate_ai_cost_usd(
-                prompt_tokens, completion_tokens)
+                prompt_tokens, completion_tokens,
+                cost_input_per_mtok, cost_output_per_mtok)
 
             # Final budget check before recording the call.
             projected = state.get('monthly_spend_usd', 0.0) + estimated_cost
             if (
-                self.config.ai_copilot_max_budget_usd_per_month > 0
-                and projected > self.config.ai_copilot_max_budget_usd_per_month
+                max_budget_usd_per_month > 0
+                and projected > max_budget_usd_per_month
             ):
                 logger.warning(
-                    f"AI co-pilot call ignored due to monthly budget cap: projected {projected:.4f} USD")
+                    f"{label} call ignored due to monthly budget cap: projected {projected:.4f} USD")
                 state['last_attempt_at'] = datetime.now(
                     timezone.utc).isoformat()
-                self._write_ai_copilot_state(state)
+                self._write_ai_copilot_state(state, state_file)
                 return
 
             state['monthly_calls'] = int(state.get('monthly_calls', 0)) + 1
@@ -1688,8 +1762,8 @@ class CryptoTradingBot:
             state.pop('last_suspended_at', None)
 
             if not result:
-                logger.warning('AI co-pilot returned no valid JSON payload')
-                self._write_ai_copilot_state(state)
+                logger.warning(f'{label} returned no valid JSON payload')
+                self._write_ai_copilot_state(state, state_file)
                 return
 
             changes = self._clamp_ai_changes(
@@ -1699,25 +1773,41 @@ class CryptoTradingBot:
             confidence = result.get('confidence', None)
 
             if not changes:
+                state['last_suggestion'] = {
+                    'changes': {},
+                    'risk_level': risk_level,
+                    'confidence': confidence,
+                    'reason': reason_text,
+                    'mode': 'no_change',
+                    'model': model,
+                }
                 logger.info(
-                    f"AI co-pilot suggestion: no change (risk={risk_level}, confidence={confidence}, reason={reason_text})")
-                self._write_ai_copilot_state(state)
+                    f"{label} suggestion: no change (model={model}, risk={risk_level}, confidence={confidence}, reason={reason_text})")
+                self._write_ai_copilot_state(state, state_file)
                 return
 
             # Keep adaptation conservative: apply at most one parameter per run.
             first_key = next(iter(changes.keys()))
             single_change = {first_key: changes[first_key]}
+            state['last_suggestion'] = {
+                'changes': single_change,
+                'risk_level': risk_level,
+                'confidence': confidence,
+                'reason': reason_text,
+                'mode': 'shadow' if shadow_mode or not allow_apply else 'applied',
+                'model': model,
+            }
 
-            if self.config.ai_copilot_shadow_mode:
+            if shadow_mode or not allow_apply:
                 logger.info(
-                    f"AI co-pilot shadow suggestion: {single_change} "
-                    f"(risk={risk_level}, confidence={confidence}, reason={reason_text})")
+                    f"{label} shadow suggestion: {single_change} "
+                    f"(model={model}, risk={risk_level}, confidence={confidence}, reason={reason_text})")
             else:
                 applied = self._apply_ai_changes(single_change)
                 if applied:
                     logger.info(
-                        f"AI co-pilot applied: {applied} "
-                        f"(risk={risk_level}, confidence={confidence}, reason={reason_text})")
+                        f"{label} applied: {applied} "
+                        f"(model={model}, risk={risk_level}, confidence={confidence}, reason={reason_text})")
                     state['last_applied_at'] = datetime.now(
                         timezone.utc).isoformat()
                     state['last_applied_changes'] = {
@@ -1725,9 +1815,9 @@ class CryptoTradingBot:
                     }
                 else:
                     logger.info(
-                        f"AI co-pilot suggested unchanged values: {single_change}")
+                        f"{label} suggested unchanged values: {single_change}")
 
-            self._write_ai_copilot_state(state)
+            self._write_ai_copilot_state(state, state_file)
 
         except Exception as e:
             state['last_attempt_at'] = datetime.now(timezone.utc).isoformat()
@@ -1735,16 +1825,56 @@ class CryptoTradingBot:
                 state.get('consecutive_errors', 0)) + 1
             state['last_error'] = str(e)
             state['last_error_at'] = state['last_attempt_at']
-            logger.warning(f"AI co-pilot call failed: {e}")
+            logger.warning(f"{label} call failed: {e}")
             if (
-                self.config.ai_copilot_max_consecutive_errors > 0
-                and state['consecutive_errors'] >= self.config.ai_copilot_max_consecutive_errors
+                max_consecutive_errors > 0
+                and state['consecutive_errors'] >= max_consecutive_errors
             ):
                 logger.error(
-                    f"AI co-pilot suspended after {state['consecutive_errors']} consecutive errors")
+                    f"{label} suspended after {state['consecutive_errors']} consecutive errors")
                 state['last_suspended_at'] = datetime.now(
                     timezone.utc).isoformat()
-            self._write_ai_copilot_state(state)
+            self._write_ai_copilot_state(state, state_file)
+
+    def _maybe_run_ai_copilot(self, snapshot: Dict[str, Any]):
+        self._maybe_run_ai_copilot_variant(
+            snapshot,
+            label='AI co-pilot',
+            state_file=self.config.ai_copilot_state_file,
+            enabled=self.config.ai_copilot_enabled,
+            model=self.config.ai_copilot_model,
+            shadow_mode=self.config.ai_copilot_shadow_mode,
+            max_calls_per_day=self.config.ai_copilot_max_calls_per_day,
+            max_calls_per_month=self.config.ai_copilot_max_calls_per_month,
+            max_budget_usd_per_month=self.config.ai_copilot_max_budget_usd_per_month,
+            max_output_tokens=self.config.ai_copilot_max_output_tokens,
+            temperature=self.config.ai_copilot_temperature,
+            max_consecutive_errors=self.config.ai_copilot_max_consecutive_errors,
+            cost_input_per_mtok=self.config.ai_copilot_cost_input_per_mtok,
+            cost_output_per_mtok=self.config.ai_copilot_cost_output_per_mtok,
+            interval_minutes=self.config.ai_copilot_interval_minutes,
+            allow_apply=not self.config.ai_copilot_shadow_mode,
+        )
+
+    def _maybe_run_ai_copilot_benchmark(self, snapshot: Dict[str, Any]):
+        self._maybe_run_ai_copilot_variant(
+            snapshot,
+            label='AI co-pilot benchmark',
+            state_file=self.config.ai_copilot_benchmark_state_file,
+            enabled=self.config.ai_copilot_benchmark_enabled,
+            model=self.config.ai_copilot_benchmark_model,
+            shadow_mode=True,
+            max_calls_per_day=self.config.ai_copilot_benchmark_max_calls_per_day,
+            max_calls_per_month=self.config.ai_copilot_benchmark_max_calls_per_month,
+            max_budget_usd_per_month=self.config.ai_copilot_benchmark_max_budget_usd_per_month,
+            max_output_tokens=self.config.ai_copilot_benchmark_max_output_tokens,
+            temperature=self.config.ai_copilot_benchmark_temperature,
+            max_consecutive_errors=self.config.ai_copilot_benchmark_max_consecutive_errors,
+            cost_input_per_mtok=self.config.ai_copilot_benchmark_cost_input_per_mtok,
+            cost_output_per_mtok=self.config.ai_copilot_benchmark_cost_output_per_mtok,
+            interval_minutes=self.config.ai_copilot_benchmark_interval_minutes,
+            allow_apply=False,
+        )
 
     def _record_close_performance(self, entry_trade: Dict, sell_price: float, sell_amount: float):
         buy_price = float(entry_trade.get('buy_price', 0.0))
@@ -4178,8 +4308,11 @@ class CryptoTradingBot:
                 if self.iteration % max(1, self.config.performance_report_every) == 0:
                     self._log_performance_report()
 
-                # Step 8: Optional external AI co-pilot (rate- and budget-limited)
-                self._maybe_run_ai_copilot()
+                # Step 8: Optional external AI co-pilot(s) (rate- and budget-limited)
+                if self.config.ai_copilot_enabled or self.config.ai_copilot_benchmark_enabled:
+                    ai_snapshot = self._ai_copilot_snapshot()
+                    self._maybe_run_ai_copilot(ai_snapshot)
+                    self._maybe_run_ai_copilot_benchmark(ai_snapshot)
 
                 # Step 9: Wait
                 logger.info(
