@@ -453,6 +453,7 @@ if [[ "${STATUS_PROM_ENABLED,,}" == "true" ]]; then
 import json
 import os
 import re
+import urllib.request
 from pathlib import Path
 
 
@@ -473,6 +474,35 @@ def _as_float(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _read_ai_spend_from_api() -> tuple[float, float]:
+    api_key = (os.environ.get("MAMMOUTH_API_KEY") or "").strip()
+    api_url = (os.environ.get("AI_COPILOT_API_URL") or "https://api.mammouth.ai/v1/chat/completions").strip()
+    if not api_key:
+        return 0.0, 0.0
+
+    api_root = re.sub(r"/v1/chat/completions$", "", api_url).rstrip("/")
+    req = urllib.request.Request(
+        f"{api_root}/key/info",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+            "User-Agent": "trading-scorecard/1.0",
+        },
+        method="GET",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return 0.0, 0.0
+
+    info = payload.get("info", {}) if isinstance(payload, dict) else {}
+    spend = _as_float(info.get("spend"), 0.0)
+    budget = _as_float(info.get("max_budget"), 0.0)
+    return spend, budget
 
 
 def _read_latest_portfolio_value(log_path: str) -> float:
@@ -560,6 +590,11 @@ monthly_calls = int(_as_float(ai_state.get("monthly_calls"), 0.0))
 daily_calls = int(_as_float(ai_state.get("daily_calls"), 0.0))
 monthly_spend = _as_float(ai_state.get("monthly_spend_usd"), 0.0)
 monthly_budget = _as_float(ai_state.get("budget_cap_usd"), 0.0)
+api_monthly_spend, api_monthly_budget = _read_ai_spend_from_api()
+if api_monthly_spend > 0:
+  monthly_spend = api_monthly_spend
+if api_monthly_budget > 0:
+  monthly_budget = api_monthly_budget
 budget_used_pct = 0.0
 if monthly_budget > 0:
     budget_used_pct = (monthly_spend / monthly_budget) * 100.0
