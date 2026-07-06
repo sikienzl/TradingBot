@@ -109,6 +109,78 @@ def _compute_dynamic_lossmaker_entry_pairs(
     return blocked_pairs
 
 
+def _compute_degraded_entry_sources(
+    df: pd.DataFrame,
+    window: int,
+    min_sells: int,
+    min_pnl_loss: float,
+    max_profit_factor: float,
+    max_avg_hold_seconds: float,
+) -> Set[str]:
+    """Returns signal sources that recently underperform with short-hold churn."""
+    if df.empty:
+        return set()
+
+    required_columns = {"action", "pnl_base"}
+    if not required_columns.issubset(df.columns):
+        return set()
+
+    sells = df.loc[
+        df["action"].fillna("").astype(str).str.lower() == "sell"
+    ].copy()
+    if sells.empty:
+        return set()
+
+    recent_window = sells.tail(max(1, int(window))).copy()
+    if recent_window.empty:
+        return set()
+
+    recent_window["signal_source"] = recent_window.get(
+        "signal_source",
+        pd.Series(index=recent_window.index, dtype=object),
+    ).fillna("rules").astype(str).str.lower()
+    recent_window["pnl_base"] = pd.to_numeric(
+        recent_window["pnl_base"], errors="coerce"
+    ).fillna(0.0)
+    recent_window["hold_seconds"] = pd.to_numeric(
+        recent_window.get(
+            "hold_seconds",
+            pd.Series(index=recent_window.index, dtype=float),
+        ),
+        errors="coerce",
+    ).fillna(0.0)
+
+    degraded_sources: Set[str] = set()
+    for source, group in recent_window.groupby("signal_source", dropna=False):
+        if not source:
+            continue
+        if len(group) < max(1, int(min_sells)):
+            continue
+
+        pnl = pd.to_numeric(group["pnl_base"], errors="coerce").fillna(0.0)
+        pnl_sum = float(pnl.sum())
+        if pnl_sum > -float(min_pnl_loss):
+            continue
+
+        gross_profit = float(pnl[pnl > 0].sum())
+        gross_loss = float(-pnl[pnl < 0].sum())
+        profit_factor = (
+            gross_profit / gross_loss) if gross_loss > 0 else 999.0
+        if profit_factor > float(max_profit_factor):
+            continue
+
+        avg_hold_seconds = float(
+            pd.to_numeric(group["hold_seconds"],
+                          errors="coerce").fillna(0.0).mean()
+        )
+        if avg_hold_seconds > float(max_avg_hold_seconds):
+            continue
+
+        degraded_sources.add(str(source).lower())
+
+    return degraded_sources
+
+
 def configure_logging(log_file: str = 'trading_bot.log', level: int = logging.INFO) -> None:
     """Configures runtime logging lazily so importing the module has no file-system side effects."""
     root_logger = logging.getLogger()
@@ -1288,6 +1360,34 @@ class CryptoTradingBot:
             ),
         )
         return blocked_pairs
+
+    def _degraded_entry_sources(self) -> Set[str]:
+        """Builds a temporary blocklist for weak signal sources in fallback paths."""
+        if not self.config.dynamic_lossmaker_exclusion_enabled:
+            return set()
+
+        path = self.config.performance_log_file
+        if not self.config.performance_log_enabled or not os.path.exists(path):
+            return set()
+
+        try:
+            df = pd.read_csv(path)
+        except Exception as e:
+            logger.warning(
+                f"Journal could not be read for dynamic source exclusions: {e}")
+            return set()
+
+        return _compute_degraded_entry_sources(
+            df,
+            window=self.config.dynamic_lossmaker_window,
+            min_sells=self.config.dynamic_lossmaker_min_sells,
+            min_pnl_loss=self.config.dynamic_lossmaker_min_pnl_loss,
+            max_profit_factor=1.0,
+            max_avg_hold_seconds=max(
+                float(self.config.uptrend_rules_fast_exit_seconds),
+                120.0,
+            ),
+        )
 
     def _read_auto_tune_state(self) -> Dict:
         path = self.config.auto_tune_state_file
@@ -4042,6 +4142,12 @@ class CryptoTradingBot:
                         ', '.join(sorted(
                             f"{coin}/{source}" for coin, source in dynamic_excluded_entry_pairs)),
                     )
+                degraded_entry_sources = self._degraded_entry_sources()
+                if degraded_entry_sources:
+                    logger.info(
+                        "Dynamically degraded entry sources (fallback/force-fill blocked): %s",
+                        ', '.join(sorted(degraded_entry_sources)),
+                    )
 
                 def _entry_pair_allowed(coin: str, data: Dict[str, Any]) -> bool:
                     source = str(data.get('signal_source',
@@ -4079,6 +4185,7 @@ class CryptoTradingBot:
                     if coin not in occupied_positions
                     and coin not in top_buy_recommendations
                     if data.get('score', 0) >= self.config.fallback_min_score
+                    and str(data.get('signal_source', 'rules')).strip().lower() not in degraded_entry_sources
                     and self._allows_entry_signal(
                         str(data.get('recommendation', '')),
                         downtrend_filter_results.get(
@@ -4142,6 +4249,7 @@ class CryptoTradingBot:
                         if coin not in occupied_positions
                         and coin not in top_buy_recommendations
                         and data.get('score', 0) >= self.config.force_fill_min_score
+                        and str(data.get('signal_source', 'rules')).strip().lower() not in degraded_entry_sources
                         and self._allows_entry_signal(
                             str(data.get('recommendation', '')),
                             downtrend_filter_results.get(
