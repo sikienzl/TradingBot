@@ -181,6 +181,61 @@ def _compute_degraded_entry_sources(
     return degraded_sources
 
 
+def _compute_recent_pnl_guard_state(
+    df: pd.DataFrame,
+    window: int,
+    min_trades: int,
+    min_realized_pnl: float,
+    max_profit_factor: float,
+) -> Dict[str, Any]:
+    """Returns whether recent realized performance is weak enough to tighten entries."""
+    result: Dict[str, Any] = {
+        "active": False,
+        "recent_trades": 0,
+        "recent_realized_pnl": 0.0,
+        "recent_profit_factor": 999.0,
+        "reason": "insufficient_data",
+    }
+
+    if df.empty or "action" not in df.columns or "pnl_base" not in df.columns:
+        return result
+
+    sells = df.loc[
+        df["action"].fillna("").astype(str).str.lower() == "sell"
+    ].copy()
+    if sells.empty:
+        return result
+
+    recent = sells.tail(max(1, int(window))).copy()
+    if recent.empty:
+        return result
+
+    pnl = pd.to_numeric(recent["pnl_base"], errors="coerce").fillna(0.0)
+    recent_trades = int(len(recent))
+    recent_realized_pnl = float(pnl.sum())
+    gross_profit = float(pnl[pnl > 0].sum())
+    gross_loss = float(-pnl[pnl < 0].sum())
+    recent_profit_factor = (
+        (gross_profit / gross_loss) if gross_loss > 0 else 999.0
+    )
+
+    result["recent_trades"] = recent_trades
+    result["recent_realized_pnl"] = recent_realized_pnl
+    result["recent_profit_factor"] = recent_profit_factor
+
+    if recent_trades < max(1, int(min_trades)):
+        result["reason"] = "below_min_trades"
+        return result
+
+    if recent_realized_pnl < float(min_realized_pnl) and recent_profit_factor <= float(max_profit_factor):
+        result["active"] = True
+        result["reason"] = "negative_recent_pnl_and_low_pf"
+    else:
+        result["reason"] = "healthy_recent_window"
+
+    return result
+
+
 def configure_logging(log_file: str = 'trading_bot.log', level: int = logging.INFO) -> None:
     """Configures runtime logging lazily so importing the module has no file-system side effects."""
     root_logger = logging.getLogger()
@@ -472,6 +527,16 @@ class BotConfig:
             os.getenv('DYNAMIC_LOSSMAKER_MIN_PNL_LOSS', 0.003))
         self.dynamic_lossmaker_min_max_hold_exit_ratio = float(
             os.getenv('DYNAMIC_LOSSMAKER_MIN_MAX_HOLD_EXIT_RATIO', 0.5))
+        self.recent_pnl_guard_enabled = _env_bool(
+            'RECENT_PNL_GUARD_ENABLED', True)
+        self.recent_pnl_guard_window = int(
+            os.getenv('RECENT_PNL_GUARD_WINDOW', 120))
+        self.recent_pnl_guard_min_trades = int(
+            os.getenv('RECENT_PNL_GUARD_MIN_TRADES', 60))
+        self.recent_pnl_guard_min_realized_pnl = float(
+            os.getenv('RECENT_PNL_GUARD_MIN_REALIZED_PNL', 0.0))
+        self.recent_pnl_guard_max_profit_factor = float(
+            os.getenv('RECENT_PNL_GUARD_MAX_PROFIT_FACTOR', 1.0))
         # Amount in base currency per trade
         self.trade_amount = float(os.getenv('TRADE_AMOUNT', 20))
         self.portfolio_trade_amount_multipliers = _env_threshold_float_pairs(
@@ -1387,6 +1452,48 @@ class CryptoTradingBot:
                 float(self.config.uptrend_rules_fast_exit_seconds),
                 120.0,
             ),
+        )
+
+    def _recent_pnl_guard_state(self) -> Dict[str, Any]:
+        """Builds a recent realized-PnL guard state to tighten entries in weak phases."""
+        if not self.config.recent_pnl_guard_enabled:
+            return {
+                "active": False,
+                "recent_trades": 0,
+                "recent_realized_pnl": 0.0,
+                "recent_profit_factor": 999.0,
+                "reason": "disabled",
+            }
+
+        path = self.config.performance_log_file
+        if not self.config.performance_log_enabled or not os.path.exists(path):
+            return {
+                "active": False,
+                "recent_trades": 0,
+                "recent_realized_pnl": 0.0,
+                "recent_profit_factor": 999.0,
+                "reason": "journal_missing",
+            }
+
+        try:
+            df = pd.read_csv(path)
+        except Exception as e:
+            logger.warning(
+                f"Journal could not be read for recent PnL guard: {e}")
+            return {
+                "active": False,
+                "recent_trades": 0,
+                "recent_realized_pnl": 0.0,
+                "recent_profit_factor": 999.0,
+                "reason": "journal_read_error",
+            }
+
+        return _compute_recent_pnl_guard_state(
+            df,
+            window=self.config.recent_pnl_guard_window,
+            min_trades=self.config.recent_pnl_guard_min_trades,
+            min_realized_pnl=self.config.recent_pnl_guard_min_realized_pnl,
+            max_profit_factor=self.config.recent_pnl_guard_max_profit_factor,
         )
 
     def _read_auto_tune_state(self) -> Dict:
@@ -4148,6 +4255,20 @@ class CryptoTradingBot:
                         "Dynamically degraded entry sources (fallback/force-fill blocked): %s",
                         ', '.join(sorted(degraded_entry_sources)),
                     )
+                recent_pnl_guard = self._recent_pnl_guard_state()
+                recent_pnl_guard_active = bool(
+                    recent_pnl_guard.get('active', False))
+                if recent_pnl_guard_active:
+                    logger.warning(
+                        "Recent PnL guard active: trades=%d, pnl=%.6f %s, pf=%.4f, reason=%s",
+                        int(recent_pnl_guard.get('recent_trades', 0)),
+                        float(recent_pnl_guard.get(
+                            'recent_realized_pnl', 0.0)),
+                        self.config.base_currency,
+                        float(recent_pnl_guard.get(
+                            'recent_profit_factor', 999.0)),
+                        str(recent_pnl_guard.get('reason', 'n/a')),
+                    )
 
                 def _entry_pair_allowed(coin: str, data: Dict[str, Any]) -> bool:
                     source = str(data.get('signal_source',
@@ -4170,6 +4291,10 @@ class CryptoTradingBot:
                     if coin not in occupied_positions
                     and data.get('recommendation') in ['STRONG BUY', 'BUY']
                     and data.get('score', 0) >= self.config.min_entry_score
+                    and (
+                        not recent_pnl_guard_active
+                        or str(data.get('signal_source', 'rules')).strip().lower() == 'catboost'
+                    )
                     and _entry_pair_allowed(coin, data)
                 ]
                 top_buy_recommendations = strict_buy_candidates[:min(
@@ -4204,6 +4329,7 @@ class CryptoTradingBot:
                 fallback_candidates = []
                 fallback_allowed = (
                     self.config.enable_fallback_entry
+                    and not recent_pnl_guard_active
                     and available_trade_slots > len(top_buy_recommendations)
                     and (
                         not self.config.defensive_entry_mode_enabled
@@ -4237,6 +4363,7 @@ class CryptoTradingBot:
                 force_fill_candidates = []
                 force_fill_allowed = (
                     self.config.force_fill_slots
+                    and not recent_pnl_guard_active
                     and available_trade_slots > len(top_buy_recommendations)
                     and (
                         not self.config.defensive_entry_mode_enabled
