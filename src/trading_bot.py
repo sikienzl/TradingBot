@@ -25,6 +25,90 @@ logger = logging.getLogger(__name__)
 _SAFE_IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
 
+def _compute_dynamic_lossmaker_entry_pairs(
+    df: pd.DataFrame,
+    window: int,
+    min_sells: int,
+    max_win_rate_pct: float,
+    min_pnl_loss: float,
+    min_max_hold_exit_ratio: float,
+    max_avg_hold_seconds: float,
+) -> Set[Tuple[str, str]]:
+    """Returns recent coin/source pairs that should be temporarily suppressed."""
+    if df.empty:
+        return set()
+
+    required_columns = {"action", "coin", "pnl_base"}
+    if not required_columns.issubset(df.columns):
+        return set()
+
+    sells = df.loc[
+        df["action"].fillna("").astype(str).str.lower() == "sell"
+    ].copy()
+    if sells.empty:
+        return set()
+
+    recent_window = sells.tail(max(1, int(window))).copy()
+    if recent_window.empty:
+        return set()
+
+    recent_window["coin"] = recent_window["coin"].fillna(
+        "").astype(str).str.upper()
+    recent_window["signal_source"] = recent_window.get(
+        "signal_source",
+        pd.Series(index=recent_window.index, dtype=object),
+    ).fillna("rules").astype(str).str.lower()
+    recent_window["pnl_base"] = pd.to_numeric(
+        recent_window["pnl_base"], errors="coerce"
+    ).fillna(0.0)
+    recent_window["hold_seconds"] = pd.to_numeric(
+        recent_window.get(
+            "hold_seconds",
+            pd.Series(index=recent_window.index, dtype=float),
+        ),
+        errors="coerce",
+    ).fillna(0.0)
+    recent_reasons = recent_window.get(
+        "reason",
+        pd.Series(index=recent_window.index, dtype=object),
+    ).fillna("").astype(str)
+
+    blocked_pairs: Set[Tuple[str, str]] = set()
+    for (coin, signal_source), group in recent_window.groupby(["coin", "signal_source"], dropna=False):
+        if not coin or not signal_source:
+            continue
+        if len(group) < max(1, int(min_sells)):
+            continue
+
+        pnl = pd.to_numeric(group["pnl_base"], errors="coerce").fillna(0.0)
+        pnl_sum = float(pnl.sum())
+        if pnl_sum > -float(min_pnl_loss):
+            continue
+
+        win_rate_pct = float((pnl > 0).mean() * 100.0)
+        if win_rate_pct > float(max_win_rate_pct):
+            continue
+
+        avg_hold_seconds = float(
+            pd.to_numeric(group["hold_seconds"],
+                          errors="coerce").fillna(0.0).mean()
+        )
+
+        reasons = recent_reasons.loc[group.index]
+        max_hold_exit_ratio = float(
+            reasons.str.contains("MAX-HOLD-TIME", case=False, na=False).mean()
+        )
+        if (
+            max_hold_exit_ratio < float(min_max_hold_exit_ratio)
+            and avg_hold_seconds > float(max_avg_hold_seconds)
+        ):
+            continue
+
+        blocked_pairs.add((str(coin).upper(), str(signal_source).lower()))
+
+    return blocked_pairs
+
+
 def configure_logging(log_file: str = 'trading_bot.log', level: int = logging.INFO) -> None:
     """Configures runtime logging lazily so importing the module has no file-system side effects."""
     root_logger = logging.getLogger()
@@ -1174,6 +1258,36 @@ class CryptoTradingBot:
             dynamic_exclusions.add(str(coin).upper())
 
         return dynamic_exclusions
+
+    def _dynamic_excluded_entry_pairs(self) -> Set[Tuple[str, str]]:
+        """Builds a temporary exclusion set for recent coin/source entry pairs."""
+        if not self.config.dynamic_lossmaker_exclusion_enabled:
+            return set()
+
+        path = self.config.performance_log_file
+        if not self.config.performance_log_enabled or not os.path.exists(path):
+            return set()
+
+        try:
+            df = pd.read_csv(path)
+        except Exception as e:
+            logger.warning(
+                f"Journal could not be read for dynamic entry pair exclusions: {e}")
+            return set()
+
+        blocked_pairs = _compute_dynamic_lossmaker_entry_pairs(
+            df,
+            window=self.config.dynamic_lossmaker_window,
+            min_sells=self.config.dynamic_lossmaker_min_sells,
+            max_win_rate_pct=self.config.dynamic_lossmaker_max_win_rate_pct,
+            min_pnl_loss=self.config.dynamic_lossmaker_min_pnl_loss,
+            min_max_hold_exit_ratio=self.config.dynamic_lossmaker_min_max_hold_exit_ratio,
+            max_avg_hold_seconds=max(
+                float(self.config.uptrend_rules_fast_exit_seconds),
+                60.0,
+            ),
+        )
+        return blocked_pairs
 
     def _read_auto_tune_state(self) -> Dict:
         path = self.config.auto_tune_state_file
@@ -3921,6 +4035,19 @@ class CryptoTradingBot:
                     self.portfolio.holdings.keys())
                 available_trade_slots = max(
                     0, self.config.max_open_trades - len(self.portfolio.open_trades))
+                dynamic_excluded_entry_pairs = self._dynamic_excluded_entry_pairs()
+                if dynamic_excluded_entry_pairs:
+                    logger.info(
+                        "Dynamically excluded lossmaker entry pairs: %s",
+                        ', '.join(sorted(
+                            f"{coin}/{source}" for coin, source in dynamic_excluded_entry_pairs)),
+                    )
+
+                def _entry_pair_allowed(coin: str, data: Dict[str, Any]) -> bool:
+                    source = str(data.get('signal_source',
+                                 'rules')).strip().lower()
+                    return (str(coin).upper(), source) not in dynamic_excluded_entry_pairs
+
                 downtrend_filter_results = {
                     coin: self._passes_downtrend_reversal_filter(data)
                     for coin, data in market_analysis.items()
@@ -3937,6 +4064,7 @@ class CryptoTradingBot:
                     if coin not in occupied_positions
                     and data.get('recommendation') in ['STRONG BUY', 'BUY']
                     and data.get('score', 0) >= self.config.min_entry_score
+                    and _entry_pair_allowed(coin, data)
                 ]
                 top_buy_recommendations = strict_buy_candidates[:min(
                     self.config.top_n_for_analysis, available_trade_slots)]
@@ -3959,6 +4087,7 @@ class CryptoTradingBot:
                     )
                     and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
                     and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+                    and _entry_pair_allowed(coin, data)
                 ]
                 fallback_filter_results = {
                     coin: self._passes_fallback_entry_filter(
@@ -4021,6 +4150,7 @@ class CryptoTradingBot:
                         )
                         and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
                         and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+                        and _entry_pair_allowed(coin, data)
                     ]
                     if force_fill_candidates:
                         missing_slots = available_trade_slots - \

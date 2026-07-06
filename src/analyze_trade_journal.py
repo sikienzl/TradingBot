@@ -55,6 +55,92 @@ def report_daily(sells: pd.DataFrame, base_currency: str) -> None:
         f"Worst day: {worst_day} | pnl={grouped.loc[worst_day, 'pnl']:.6f} {base_currency}")
 
 
+def _print_trade_slice_summary(label: str, trades: pd.DataFrame, base_currency: str) -> None:
+    if trades.empty:
+        return
+
+    pnl = float(trades["pnl_base"].sum())
+    win_rate = float((trades["pnl_base"] > 0).mean() * 100.0)
+    avg_pnl = float(trades["pnl_base"].mean())
+    avg_hold = float(trades["hold_seconds"].mean()
+                     ) if "hold_seconds" in trades.columns else 0.0
+    print(
+        f"{label:16s} trades={len(trades):4d} pnl={pnl:+.6f} {base_currency} "
+        f"win_rate={win_rate:6.2f}% avg_pnl={avg_pnl:+.6f} avg_hold={avg_hold:7.2f}s"
+    )
+
+
+def report_coin_source_breakdown(sells: pd.DataFrame, base_currency: str) -> None:
+    if sells.empty or "coin" not in sells.columns or "signal_source" not in sells.columns:
+        return
+
+    print("\n--- By Coin / Signal Source ---")
+    work = sells.copy()
+    work["coin"] = work["coin"].fillna("unknown").astype(str)
+    work["signal_source"] = work["signal_source"].fillna(
+        "unknown").astype(str).str.lower()
+
+    grouped = work.groupby(["coin", "signal_source"],
+                           dropna=False, observed=True)
+    for (coin, source), part in sorted(grouped, key=lambda item: (item[0][0], item[0][1])):
+        _print_trade_slice_summary(f"{coin}/{source}", part, base_currency)
+
+
+def report_hold_time_bands(sells: pd.DataFrame, base_currency: str) -> None:
+    if sells.empty or "hold_seconds" not in sells.columns:
+        return
+
+    print("\n--- By Hold Time ---")
+    bins = [-0.1, 30, 60, 120, 240, 420, 720, 1200, np.inf]
+    labels = ["<=30s", "31-60s", "61-120s", "121-240s",
+              "241-420s", "421-720s", "721-1200s", ">1200s"]
+    work = sells.copy()
+    work["hold_bin"] = pd.cut(work["hold_seconds"], bins=bins, labels=labels)
+    grouped = work.groupby("hold_bin", dropna=False, observed=True).agg(
+        trades=("pnl_base", "size"),
+        pnl=("pnl_base", "sum"),
+        win_rate=("pnl_base", lambda x: float((x > 0).mean() * 100.0)),
+        avg_pnl=("pnl_base", "mean"),
+    ).reset_index()
+    print(grouped.to_string(index=False, float_format=lambda v: f"{v:.6f}"))
+
+
+def report_confidence_bands(sells: pd.DataFrame, base_currency: str) -> None:
+    if sells.empty or "signal_confidence" not in sells.columns:
+        return
+
+    work = sells.copy()
+    work["signal_confidence"] = pd.to_numeric(
+        work["signal_confidence"], errors="coerce")
+    work = work[work["signal_confidence"].notna()].copy()
+    if work.empty:
+        return
+
+    print("\n--- By Signal Confidence ---")
+    bins = [0.0, 0.25, 0.4, 0.5, 0.6, 0.7, 0.8, 1.0]
+    labels = ["0.00-0.25", "0.25-0.40", "0.40-0.50",
+              "0.50-0.60", "0.60-0.70", "0.70-0.80", "0.80-1.00"]
+    work["conf_bin"] = pd.cut(work["signal_confidence"], bins=bins,
+                              labels=labels, include_lowest=True, right=False)
+    grouped = work.groupby("conf_bin", dropna=False, observed=True).agg(
+        trades=("pnl_base", "size"),
+        pnl=("pnl_base", "sum"),
+        win_rate=("pnl_base", lambda x: float((x > 0).mean() * 100.0)),
+        avg_pnl=("pnl_base", "mean"),
+    ).reset_index()
+    print(grouped.to_string(index=False, float_format=lambda v: f"{v:.6f}"))
+
+
+def report_recent_windows(sells: pd.DataFrame, base_currency: str, windows: tuple[int, ...] = (50, 100)) -> None:
+    if sells.empty:
+        return
+
+    print("\n--- Recent Windows ---")
+    for window in windows:
+        recent = sells.tail(window)
+        _print_trade_slice_summary(f"last_{window}", recent, base_currency)
+
+
 def optimize_confidence_threshold(
     sells: pd.DataFrame,
     base_currency: str,
@@ -228,6 +314,10 @@ def run_full_report(
     sells = df[df["action"] == "sell"].copy(
     ) if "action" in df.columns else pd.DataFrame()
     report_daily(sells, base_currency)
+    report_coin_source_breakdown(sells, base_currency)
+    report_hold_time_bands(sells, base_currency)
+    report_confidence_bands(sells, base_currency)
+    report_recent_windows(sells, base_currency)
     optimize_confidence_threshold(
         sells,
         base_currency,
