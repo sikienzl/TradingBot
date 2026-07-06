@@ -481,6 +481,117 @@ def read_ai_shadow_suggestions(log_path=BOT_LOG_PATH):
     return result
 
 
+def _read_env_value(env_key, env_path=ENV_PATH):
+    try:
+        if os.path.exists(env_path):
+            with open(env_path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#') or '=' not in line:
+                        continue
+                    key, value = line.split('=', 1)
+                    if key.strip() != env_key:
+                        continue
+                    return value.strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return ''
+
+
+def _env_bool(env_key, default=False, env_path=ENV_PATH):
+    value = _read_env_value(env_key, env_path)
+    if value == '':
+        return bool(default)
+    return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def _safe_int_env(env_key, default, env_path=ENV_PATH):
+    value = _read_env_value(env_key, env_path)
+    if value == '':
+        return int(default)
+    try:
+        return int(value)
+    except ValueError:
+        return int(default)
+
+
+def _safe_float_env(env_key, default, env_path=ENV_PATH):
+    value = _read_env_value(env_key, env_path)
+    if value == '':
+        return float(default)
+    try:
+        return float(value)
+    except ValueError:
+        return float(default)
+
+
+def compute_recent_pnl_guard_state(trades, env_path=ENV_PATH):
+    enabled = _env_bool('RECENT_PNL_GUARD_ENABLED', True, env_path=env_path)
+    window = max(1, _safe_int_env(
+        'RECENT_PNL_GUARD_WINDOW', 120, env_path=env_path))
+    min_trades = max(1, _safe_int_env(
+        'RECENT_PNL_GUARD_MIN_TRADES', 60, env_path=env_path))
+    min_realized_pnl = _safe_float_env(
+        'RECENT_PNL_GUARD_MIN_REALIZED_PNL', 0.0, env_path=env_path)
+    max_profit_factor = _safe_float_env(
+        'RECENT_PNL_GUARD_MAX_PROFIT_FACTOR', 1.0, env_path=env_path)
+
+    state = {
+        'recent_pnl_guard_enabled': 1.0 if enabled else 0.0,
+        'recent_pnl_guard_active': 0.0,
+        'recent_pnl_guard_window': float(window),
+        'recent_pnl_guard_min_trades': float(min_trades),
+        'recent_pnl_guard_recent_closed_trades': 0.0,
+        'recent_pnl_guard_recent_realized_pnl': 0.0,
+        'recent_pnl_guard_recent_profit_factor': 0.0,
+        'recent_pnl_guard_min_realized_pnl': float(min_realized_pnl),
+        'recent_pnl_guard_max_profit_factor': float(max_profit_factor),
+        'recent_pnl_guard_reason': 'disabled' if not enabled else 'insufficient_recent_trades',
+    }
+    if not enabled:
+        return state
+
+    sells = []
+    for trade in trades:
+        action = (trade.get('action') or '').strip().lower()
+        if action != 'sell':
+            continue
+        try:
+            pnl = float(trade.get('pnl_base', '0') or 0.0)
+        except ValueError:
+            continue
+        sells.append(pnl)
+
+    if not sells:
+        return state
+
+    recent = sells[-window:]
+    recent_closed = len(recent)
+    state['recent_pnl_guard_recent_closed_trades'] = float(recent_closed)
+    if recent_closed < min_trades:
+        return state
+
+    realized_pnl = float(sum(recent))
+    gross_profit = float(sum(p for p in recent if p > 0.0))
+    gross_loss_abs = float(sum(-p for p in recent if p < 0.0))
+    if gross_loss_abs > 0:
+        recent_pf = gross_profit / gross_loss_abs
+    elif gross_profit > 0:
+        recent_pf = float('inf')
+    else:
+        recent_pf = 0.0
+
+    state['recent_pnl_guard_recent_realized_pnl'] = realized_pnl
+    state['recent_pnl_guard_recent_profit_factor'] = recent_pf
+
+    guard_active = realized_pnl < min_realized_pnl and recent_pf <= max_profit_factor
+    state['recent_pnl_guard_active'] = 1.0 if guard_active else 0.0
+    state['recent_pnl_guard_reason'] = (
+        'negative_recent_pnl_and_low_pf' if guard_active else 'healthy_recent_window'
+    )
+    return state
+
+
 def format_prometheus_metrics(metrics):
     """Format metrics as Prometheus lines"""
     output = []
@@ -664,6 +775,66 @@ def format_prometheus_metrics(metrics):
         )
 
     output.append(
+        '# HELP trading_recent_pnl_guard_enabled Whether recent PnL guard is enabled (1=true, 0=false)')
+    output.append('# TYPE trading_recent_pnl_guard_enabled gauge')
+    output.append(
+        f'trading_recent_pnl_guard_enabled {metrics.get("recent_pnl_guard_enabled", 0.0)}')
+
+    output.append(
+        '# HELP trading_recent_pnl_guard_active Whether recent PnL guard is currently active (1=true, 0=false)')
+    output.append('# TYPE trading_recent_pnl_guard_active gauge')
+    output.append(
+        f'trading_recent_pnl_guard_active {metrics.get("recent_pnl_guard_active", 0.0)}')
+
+    output.append(
+        '# HELP trading_recent_pnl_guard_window Number of recent sells considered by the guard')
+    output.append('# TYPE trading_recent_pnl_guard_window gauge')
+    output.append(
+        f'trading_recent_pnl_guard_window {metrics.get("recent_pnl_guard_window", 0.0)}')
+
+    output.append(
+        '# HELP trading_recent_pnl_guard_min_trades Minimum recent closed trades required for guard evaluation')
+    output.append('# TYPE trading_recent_pnl_guard_min_trades gauge')
+    output.append(
+        f'trading_recent_pnl_guard_min_trades {metrics.get("recent_pnl_guard_min_trades", 0.0)}')
+
+    output.append(
+        '# HELP trading_recent_pnl_guard_recent_closed_trades Recent closed sells currently evaluated by the guard')
+    output.append('# TYPE trading_recent_pnl_guard_recent_closed_trades gauge')
+    output.append(
+        f'trading_recent_pnl_guard_recent_closed_trades {metrics.get("recent_pnl_guard_recent_closed_trades", 0.0)}')
+
+    output.append(
+        '# HELP trading_recent_pnl_guard_recent_realized_pnl Recent realized PnL in base currency used by the guard')
+    output.append('# TYPE trading_recent_pnl_guard_recent_realized_pnl gauge')
+    output.append(
+        f'trading_recent_pnl_guard_recent_realized_pnl {metrics.get("recent_pnl_guard_recent_realized_pnl", 0.0)}')
+
+    output.append(
+        '# HELP trading_recent_pnl_guard_recent_profit_factor Recent profit factor used by the guard')
+    output.append('# TYPE trading_recent_pnl_guard_recent_profit_factor gauge')
+    output.append(
+        f'trading_recent_pnl_guard_recent_profit_factor {metrics.get("recent_pnl_guard_recent_profit_factor", 0.0)}')
+
+    output.append(
+        '# HELP trading_recent_pnl_guard_min_realized_pnl Minimum recent realized PnL threshold configured for the guard')
+    output.append('# TYPE trading_recent_pnl_guard_min_realized_pnl gauge')
+    output.append(
+        f'trading_recent_pnl_guard_min_realized_pnl {metrics.get("recent_pnl_guard_min_realized_pnl", 0.0)}')
+
+    output.append(
+        '# HELP trading_recent_pnl_guard_max_profit_factor Maximum recent profit factor threshold configured for the guard')
+    output.append('# TYPE trading_recent_pnl_guard_max_profit_factor gauge')
+    output.append(
+        f'trading_recent_pnl_guard_max_profit_factor {metrics.get("recent_pnl_guard_max_profit_factor", 0.0)}')
+
+    output.append(
+        '# HELP trading_recent_pnl_guard_reason Recent PnL guard status reason (labelled gauge set to 1 for active reason)')
+    output.append('# TYPE trading_recent_pnl_guard_reason gauge')
+    output.append(
+        f'trading_recent_pnl_guard_reason{{reason="{str(metrics.get("recent_pnl_guard_reason", "unknown")).replace(chr(92), chr(92) * 2).replace(chr(34), chr(92) + chr(34))}"}} 1')
+
+    output.append(
         '# HELP trading_coin_realized_pnl_usd Realized PnL per coin in USD (last 24h)')
     output.append('# TYPE trading_coin_realized_pnl_usd gauge')
     for coin, pnl in sorted(metrics['coin_pnl'].items()):
@@ -702,6 +873,7 @@ if __name__ == '__main__':
 
     trades = read_trades(journal_path)
     metrics = calculate_pnl_metrics(trades, time_window_hours=24)
+    metrics.update(compute_recent_pnl_guard_state(trades))
     metrics.update(read_latest_portfolio_snapshot())
     metrics['portfolio_start_value_eur'] = read_portfolio_start_value()
     metrics.update(read_ai_copilot_usage())

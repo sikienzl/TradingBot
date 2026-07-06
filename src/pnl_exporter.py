@@ -49,6 +49,95 @@ SHADOW_SUGGESTION_META_RE = re.compile(
 
 
 class MetricsHandler(BaseHTTPRequestHandler):
+    def _env_bool(self, env_key, default=False):
+        value = self._read_env_value(env_key)
+        if value == '':
+            return bool(default)
+        return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+
+    def _safe_int_env(self, env_key, default):
+        value = self._read_env_value(env_key)
+        if value == '':
+            return int(default)
+        try:
+            return int(value)
+        except ValueError:
+            return int(default)
+
+    def _safe_float_env(self, env_key, default):
+        value = self._read_env_value(env_key)
+        if value == '':
+            return float(default)
+        try:
+            return float(value)
+        except ValueError:
+            return float(default)
+
+    def _compute_recent_pnl_guard_state(self, trades):
+        enabled = self._env_bool('RECENT_PNL_GUARD_ENABLED', True)
+        window = max(1, self._safe_int_env('RECENT_PNL_GUARD_WINDOW', 120))
+        min_trades = max(1, self._safe_int_env(
+            'RECENT_PNL_GUARD_MIN_TRADES', 60))
+        min_realized_pnl = self._safe_float_env(
+            'RECENT_PNL_GUARD_MIN_REALIZED_PNL', 0.0)
+        max_profit_factor = self._safe_float_env(
+            'RECENT_PNL_GUARD_MAX_PROFIT_FACTOR', 1.0)
+
+        state = {
+            'recent_pnl_guard_enabled': 1.0 if enabled else 0.0,
+            'recent_pnl_guard_active': 0.0,
+            'recent_pnl_guard_window': float(window),
+            'recent_pnl_guard_min_trades': float(min_trades),
+            'recent_pnl_guard_recent_closed_trades': 0.0,
+            'recent_pnl_guard_recent_realized_pnl': 0.0,
+            'recent_pnl_guard_recent_profit_factor': 0.0,
+            'recent_pnl_guard_min_realized_pnl': float(min_realized_pnl),
+            'recent_pnl_guard_max_profit_factor': float(max_profit_factor),
+            'recent_pnl_guard_reason': 'disabled' if not enabled else 'insufficient_recent_trades',
+        }
+        if not enabled:
+            return state
+
+        sells = []
+        for trade in trades:
+            action = (trade.get('action') or '').strip().lower()
+            if action != 'sell':
+                continue
+            try:
+                pnl = float(trade.get('pnl_base', '0') or 0.0)
+            except ValueError:
+                continue
+            sells.append(pnl)
+
+        if not sells:
+            return state
+
+        recent = sells[-window:]
+        recent_closed = len(recent)
+        state['recent_pnl_guard_recent_closed_trades'] = float(recent_closed)
+        if recent_closed < min_trades:
+            return state
+
+        realized_pnl = float(sum(recent))
+        gross_profit = float(sum(p for p in recent if p > 0.0))
+        gross_loss_abs = float(sum(-p for p in recent if p < 0.0))
+        if gross_loss_abs > 0:
+            recent_pf = gross_profit / gross_loss_abs
+        elif gross_profit > 0:
+            recent_pf = float('inf')
+        else:
+            recent_pf = 0.0
+
+        state['recent_pnl_guard_recent_realized_pnl'] = realized_pnl
+        state['recent_pnl_guard_recent_profit_factor'] = recent_pf
+
+        guard_active = realized_pnl < min_realized_pnl and recent_pf <= max_profit_factor
+        state['recent_pnl_guard_active'] = 1.0 if guard_active else 0.0
+        state['recent_pnl_guard_reason'] = (
+            'negative_recent_pnl_and_low_pf' if guard_active else 'healthy_recent_window'
+        )
+        return state
+
     def _read_env_value(self, env_key):
         try:
             if os.path.exists(ENV_PATH):
@@ -138,6 +227,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
         metrics_dict['portfolio_start_value_eur'] = self.read_portfolio_start_value()
         metrics_dict.update(self.read_ai_copilot_usage())
         metrics_dict.update(self.read_ai_shadow_suggestions())
+        metrics_dict.update(self._compute_recent_pnl_guard_state(trades))
         return self.format_prometheus_metrics(metrics_dict)
 
     def read_trades(self):
@@ -830,6 +920,70 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 f'rank="{item["rank"]}"'
                 f'}} {item["age_minutes"]}'
             )
+
+        output.append(
+            '# HELP trading_recent_pnl_guard_enabled Whether recent PnL guard is enabled (1=true, 0=false)')
+        output.append('# TYPE trading_recent_pnl_guard_enabled gauge')
+        output.append(
+            f'trading_recent_pnl_guard_enabled {metrics.get("recent_pnl_guard_enabled", 0.0)}')
+
+        output.append(
+            '# HELP trading_recent_pnl_guard_active Whether recent PnL guard is currently active (1=true, 0=false)')
+        output.append('# TYPE trading_recent_pnl_guard_active gauge')
+        output.append(
+            f'trading_recent_pnl_guard_active {metrics.get("recent_pnl_guard_active", 0.0)}')
+
+        output.append(
+            '# HELP trading_recent_pnl_guard_window Number of recent sells considered by the guard')
+        output.append('# TYPE trading_recent_pnl_guard_window gauge')
+        output.append(
+            f'trading_recent_pnl_guard_window {metrics.get("recent_pnl_guard_window", 0.0)}')
+
+        output.append(
+            '# HELP trading_recent_pnl_guard_min_trades Minimum recent closed trades required for guard evaluation')
+        output.append('# TYPE trading_recent_pnl_guard_min_trades gauge')
+        output.append(
+            f'trading_recent_pnl_guard_min_trades {metrics.get("recent_pnl_guard_min_trades", 0.0)}')
+
+        output.append(
+            '# HELP trading_recent_pnl_guard_recent_closed_trades Recent closed sells currently evaluated by the guard')
+        output.append(
+            '# TYPE trading_recent_pnl_guard_recent_closed_trades gauge')
+        output.append(
+            f'trading_recent_pnl_guard_recent_closed_trades {metrics.get("recent_pnl_guard_recent_closed_trades", 0.0)}')
+
+        output.append(
+            '# HELP trading_recent_pnl_guard_recent_realized_pnl Recent realized PnL in base currency used by the guard')
+        output.append(
+            '# TYPE trading_recent_pnl_guard_recent_realized_pnl gauge')
+        output.append(
+            f'trading_recent_pnl_guard_recent_realized_pnl {metrics.get("recent_pnl_guard_recent_realized_pnl", 0.0)}')
+
+        output.append(
+            '# HELP trading_recent_pnl_guard_recent_profit_factor Recent profit factor used by the guard')
+        output.append(
+            '# TYPE trading_recent_pnl_guard_recent_profit_factor gauge')
+        output.append(
+            f'trading_recent_pnl_guard_recent_profit_factor {metrics.get("recent_pnl_guard_recent_profit_factor", 0.0)}')
+
+        output.append(
+            '# HELP trading_recent_pnl_guard_min_realized_pnl Minimum recent realized PnL threshold configured for the guard')
+        output.append('# TYPE trading_recent_pnl_guard_min_realized_pnl gauge')
+        output.append(
+            f'trading_recent_pnl_guard_min_realized_pnl {metrics.get("recent_pnl_guard_min_realized_pnl", 0.0)}')
+
+        output.append(
+            '# HELP trading_recent_pnl_guard_max_profit_factor Maximum recent profit factor threshold configured for the guard')
+        output.append(
+            '# TYPE trading_recent_pnl_guard_max_profit_factor gauge')
+        output.append(
+            f'trading_recent_pnl_guard_max_profit_factor {metrics.get("recent_pnl_guard_max_profit_factor", 0.0)}')
+
+        output.append(
+            '# HELP trading_recent_pnl_guard_reason Recent PnL guard status reason (labelled gauge set to 1 for active reason)')
+        output.append('# TYPE trading_recent_pnl_guard_reason gauge')
+        output.append(
+            f'trading_recent_pnl_guard_reason{{reason="{str(metrics.get("recent_pnl_guard_reason", "unknown")).replace(chr(92), chr(92) * 2).replace(chr(34), chr(92) + chr(34))}"}} 1')
 
         output.append(
             '# HELP trading_coin_realized_pnl_usd Realized PnL per coin in USD (last 24h)')
