@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trading-analytics-writer
+  namespace: trading-bot
+  labels:
+    app: trading-bot
+    component: analytics-writer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trading-bot
+      component: analytics-writer
+  template:
+    metadata:
+      labels:
+        app: trading-bot
+        component: analytics-writer
+    spec:
+      serviceAccountName: trading-bot-sa
+      nodeSelector:
+        kubernetes.io/hostname: "rasp1-node"
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: analytics-writer
+          image: trading-cloud:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - "python3"
+            - "/opt/trading_2/src/trading_bot.py"
+          envFrom:
+            - configMapRef:
+                name: trading-bot-hybrid-config
+            - secretRef:
+                name: trading-bot-credentials
+                optional: true
+            - secretRef:
+                name: trading-bot-kraken-credentials
+          env:
+            - name: DRY_RUN
+              value: "true"
+            - name: SIMULATE_DATA
+              value: "false"
+            - name: CHECK_INTERVAL
+              value: "60"
+            - name: BOT_LOG_FILE
+              value: "/opt/trading_2/logs/bot.log"
+            - name: PERFORMANCE_LOG_FILE
+              value: "/opt/trading_2/trade_journal.csv"
+            - name: PERFORMANCE_LOG_ENABLED
+              value: "true"
+            - name: LOG_LEVEL
+              value: "INFO"
+          volumeMounts:
+            - name: host-app-dir
+              mountPath: /opt/trading_2
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1
+              memory: 1Gi
+          securityContext:
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+            runAsUser: 995
+            runAsGroup: 992
+            allowPrivilegeEscalation: false
+      volumes:
+        - name: host-app-dir
+          hostPath:
+            path: /opt/trading_2
+            type: Directory
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30

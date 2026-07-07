@@ -3,17 +3,14 @@ kind: Kustomization
 
 resources:
   - ../../base
-  - storageclass-ssd1.yaml
-  - configmap-initdb.yaml
-  - service-postgres.yaml
-  - statefulset-postgres.yaml
+  - deployment-analytics-writer.yaml
 
 namespace: trading-bot
 
 commonLabels:
   app: trading-bot
-  component: postgres-analytics
-  tier: data
+  component: analytics-writer
+  tier: analytics
 
 commonAnnotations:
   node-affinity: master-only

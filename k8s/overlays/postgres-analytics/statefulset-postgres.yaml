@@ -82,7 +82,7 @@ spec:
       spec:
         accessModes:
           - ReadWriteOnce
-        storageClassName: local-path
+        storageClassName: local-path-master-ssd1
         resources:
           requests:
             storage: 200Gi

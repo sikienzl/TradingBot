@@ -50,7 +50,7 @@ kubectl apply -f k8s/overlays/hailo-worker/
 # Deploy Cloud-Strategist Deployment (Node 1+)
 kubectl apply -f k8s/overlays/cloud-strategist/
 
-# Deploy Postgres analytics on the SSD-backed master node
+# Deploy Postgres analytics on the SSD1-backed master node
 kubectl apply -k k8s/overlays/postgres-analytics/
 
 # Verify pods are running
@@ -113,6 +113,10 @@ k8s/
 │   │   ├── deployment-cloud.yaml     # GPT-5 calls on Node 1
 │   │   └── service.yaml
 │   │
+│   ├── analytics-writer/
+│   │   ├── kustomization.yaml
+│   │   └── deployment-analytics-writer.yaml # Dry-run bot writing trades/snapshots into Postgres
+│   │
 │   ├── postgres-analytics/
 │   │   ├── kustomization.yaml
 │   │   ├── configmap-initdb.yaml     # Initializes analytics schema/tables
@@ -137,9 +141,61 @@ Siehe `.env.hailo8.example` für vollständige Liste:
 
 ## Analytics Storage Layout
 
-- The master node SSD hosts the canonical Postgres analytics database.
+- The master node NVMe path hosts the canonical Postgres analytics database via the `local-path-master-ssd1` StorageClass.
+- The expected host path is `/mnt/nvme_data/trading_db` on `rasp1-node`.
 - The Hailo worker keeps `/mnt/nvme` as a local rolling tick buffer close to inference.
 - The optional analytics writer appends trade and portfolio events into Postgres and does not sit on the runtime read path.
+
+Before applying the Postgres overlay, ensure the target directory exists on the master node:
+
+```bash
+sudo mkdir -p /mnt/nvme_data/trading_db
+sudo chown root:root /mnt/nvme_data/trading_db
+```
+
+## Analytics Verification
+
+Step 1: Verify that the bot is configured to write analytics snapshots and trade events.
+
+- The write path is enabled in [src/trading_bot.py](src/trading_bot.py) through `PostgresAnalyticsWriter`.
+- Trade events are appended via `self.analytics_writer.write_trade(...)`.
+- Portfolio snapshots are appended via `self.analytics_writer.write_snapshot(...)` every `ANALYTICS_DB_SNAPSHOT_EVERY` iterations.
+
+Step 2: Verify that rows are actually landing in Postgres and that the DB is using the mounted NVMe data directory.
+
+```bash
+bash scripts/check_postgres_analytics.sh
+```
+
+This prints the active Postgres `data_directory` and the current row counts / latest timestamps for:
+
+- `trading_analytics.trade_events`
+- `trading_analytics.portfolio_snapshots`
+
+To generate analytics rows inside the cluster, deploy the dedicated dry-run writer workload:
+
+```bash
+kubectl apply -k k8s/overlays/analytics-writer/
+kubectl -n trading-bot rollout status deploy/trading-analytics-writer
+```
+
+## Existing Cluster Migration to NVMe Path
+
+If the cluster already has a `postgres-analytics` PVC, changing the `StorageClass` alone will not move the existing data. Use the migration helper after preparing the NVMe data path on `rasp1-node`:
+
+```bash
+sudo mkdir -p /mnt/nvme_data/trading_db
+sudo chown root:root /mnt/nvme_data/trading_db
+
+bash scripts/migrate_postgres_analytics_to_ssd1.sh
+```
+
+The script will:
+
+- create a logical `pg_dump` backup
+- scale down and recreate the StatefulSet/PVC on the NVMe-backed StorageClass
+- restore the dump into the recreated database
+- run `scripts/check_postgres_analytics.sh` at the end
 
 ## Secrets
 

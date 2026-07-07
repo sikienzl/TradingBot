@@ -4795,7 +4795,7 @@ def simple_strategy(row, rsi_buy=30, rsi_sell=70):
 if __name__ == "__main__":
     import argparse
 
-    configure_logging()
+    configure_logging(os.getenv("BOT_LOG_FILE", "trading_bot.log"))
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--backtest", action="store_true",

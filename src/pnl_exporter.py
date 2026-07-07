@@ -11,12 +11,21 @@ import sys
 import json
 import re
 import time
+import base64
+import hashlib
+import hmac
+import urllib.parse
 import urllib.request
 import urllib.error
 from contextlib import suppress
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
+
+try:
+    import ccxt
+except Exception:  # pragma: no cover - optional dependency in test shells
+    ccxt = None
 
 JOURNAL_PATH = '/opt/trading_2/trade_journal.csv'
 BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
@@ -25,9 +34,10 @@ AI_COPILOT_STATE_PATH = '/opt/trading_2/ai_copilot_state.json'
 PORTFOLIO_STATE_PATH = '/opt/trading_2/.portfolio_state.json'
 MIN_DRAWDOWN_PCT_BASE_USD = 1.0
 START_VALUE_CACHE = {
-    'log_mtime': None,
+    'expires_at': 0.0,
     'value': 0.0,
 }
+START_VALUE_CACHE_TTL_SECONDS = 300
 AI_SPEND_CACHE = {
     'value': None,
     'expires_at': 0.0,
@@ -153,6 +163,206 @@ class MetricsHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
         return ''
+
+    def _read_first_env_value(self, *env_keys):
+        for env_key in env_keys:
+            value = os.getenv(env_key, '').strip(
+            ) or self._read_env_value(env_key)
+            if value:
+                return value.strip().strip('"').strip("'")
+        return ''
+
+    def _currency_aliases(self, currency):
+        base = (currency or 'EUR').upper().strip()
+        aliases = [base, f'Z{base}', f'X{base}']
+        if base == 'BTC':
+            aliases.extend(['XBT', 'XXBT'])
+        return list(dict.fromkeys(aliases))
+
+    def _kraken_trade_balance_assets(self, currency):
+        base = (currency or 'EUR').upper().strip()
+        aliases = [base]
+        if base in {'EUR', 'USD', 'GBP', 'CHF', 'AUD', 'CAD', 'JPY'}:
+            aliases.append(f'Z{base}')
+        elif base == 'BTC':
+            aliases.extend(['XBT', 'XXBT'])
+        else:
+            aliases.extend([f'Z{base}', f'X{base}'])
+        return list(dict.fromkeys(aliases))
+
+    def _kraken_nonce(self):
+        return str(int(time.time() * 1000))
+
+    def _kraken_sign(self, path, payload, api_secret):
+        encoded_payload = urllib.parse.urlencode(payload)
+        nonce = payload['nonce']
+        message = path.encode() + hashlib.sha256((nonce + encoded_payload).encode()).digest()
+        signature = hmac.new(
+            base64.b64decode(api_secret),
+            message,
+            hashlib.sha512,
+        )
+        return base64.b64encode(signature.digest()).decode()
+
+    def _kraken_private_request(self, path, payload, api_key, api_secret):
+        encoded_payload = urllib.parse.urlencode(payload).encode()
+        req = urllib.request.Request(
+            f'https://api.kraken.com{path}',
+            data=encoded_payload,
+            headers={
+                'API-Key': api_key,
+                'API-Sign': self._kraken_sign(path, payload, api_secret),
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': 'trading-bot-pnl-exporter/1.0',
+            },
+            method='POST',
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            return json.loads(response.read().decode('utf-8', errors='replace'))
+
+    def _read_kraken_trade_balance(self, base_currency, api_key, api_secret):
+        path = '/0/private/TradeBalance'
+        for asset in self._kraken_trade_balance_assets(base_currency):
+            payload = {
+                'nonce': self._kraken_nonce(),
+                'asset': asset,
+            }
+            try:
+                response = self._kraken_private_request(
+                    path, payload, api_key, api_secret)
+            except Exception:
+                continue
+            errors = response.get('error', []) if isinstance(
+                response, dict) else []
+            if errors:
+                continue
+            result = response.get('result', {}) if isinstance(
+                response, dict) else {}
+            for key in ('eb', 'tb'):
+                raw_value = result.get(key)
+                if raw_value in (None, ''):
+                    continue
+                try:
+                    return float(raw_value)
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    def _normalize_asset_code(self, asset_code):
+        asset = (asset_code or '').upper().strip()
+        if not asset:
+            return ''
+
+        while len(asset) > 3 and asset[:1] in {'X', 'Z'}:
+            asset = asset[1:]
+
+        if asset == 'XBT':
+            return 'BTC'
+        if asset == 'XDG':
+            return 'DOGE'
+        return asset
+
+    def _build_base_symbol_map(self, markets, base_currency):
+        symbol_map = {}
+        normalized_quote = self._normalize_asset_code(base_currency)
+        for symbol, market in (markets or {}).items():
+            base_asset = self._normalize_asset_code(market.get('base') or '')
+            quote_asset = self._normalize_asset_code(market.get('quote') or '')
+            if not base_asset or quote_asset != normalized_quote:
+                continue
+            if market.get('active', True) is False:
+                continue
+            symbol_map.setdefault(base_asset, symbol)
+        return symbol_map
+
+    def _extract_portfolio_value_from_balance(self, exchange, balance, base_currency):
+        totals = balance.get('total', {}) if isinstance(balance, dict) else {}
+        if not totals:
+            totals = balance.get('free', {}) if isinstance(
+                balance, dict) else {}
+
+        portfolio_value = 0.0
+        held_assets = {}
+        base_aliases = {self._normalize_asset_code(
+            alias) for alias in self._currency_aliases(base_currency)}
+
+        for asset_code, raw_amount in totals.items():
+            try:
+                amount = float(raw_amount)
+            except (TypeError, ValueError):
+                continue
+            if amount <= 0.0:
+                continue
+
+            normalized_asset = self._normalize_asset_code(asset_code)
+            if normalized_asset in base_aliases:
+                portfolio_value += amount
+                continue
+            held_assets[normalized_asset] = held_assets.get(
+                normalized_asset, 0.0) + amount
+
+        if not held_assets:
+            return portfolio_value
+
+        try:
+            markets = exchange.load_markets()
+        except Exception:
+            markets = {}
+        symbol_map = self._build_base_symbol_map(markets, base_currency)
+
+        for asset, amount in held_assets.items():
+            symbol = symbol_map.get(asset)
+            if not symbol:
+                continue
+            try:
+                ticker = exchange.fetch_ticker(symbol)
+            except Exception:
+                continue
+            last_price = ticker.get('last') if isinstance(
+                ticker, dict) else None
+            if last_price is None:
+                last_price = ticker.get('close') if isinstance(
+                    ticker, dict) else None
+            try:
+                portfolio_value += amount * float(last_price)
+            except (TypeError, ValueError):
+                continue
+
+        return portfolio_value
+
+    def _read_kraken_start_value(self):
+        api_key = self._read_first_env_value('KRAKEN_API_KEY')
+        api_secret = self._read_first_env_value(
+            'KRAKEN_API_SECRET', 'KRAKEN_SECRET_KEY')
+        if not api_key or not api_secret:
+            return None
+
+        base_currency = self._read_env_value('BASE_CURRENCY') or 'EUR'
+        api_value = self._read_kraken_trade_balance(
+            base_currency, api_key, api_secret)
+        if api_value is not None:
+            return api_value
+
+        if ccxt is None:
+            return None
+
+        try:
+            exchange = ccxt.kraken({
+                'apiKey': api_key,
+                'secret': api_secret,
+                'enableRateLimit': True,
+                'timeout': 10000,
+                'options': {
+                    'adjustForTimeDifference': True,
+                    'verbose': False,
+                },
+            })
+            balance = exchange.fetch_balance()
+            return float(self._extract_portfolio_value_from_balance(exchange, balance, base_currency))
+        except Exception:
+            return None
+
+        return 0.0
 
     def _read_ai_spend_from_api(self):
         now = time.time()
@@ -406,23 +616,29 @@ class MetricsHandler(BaseHTTPRequestHandler):
         return snapshot
 
     def read_portfolio_start_value(self):
-        """Read initial dry-run portfolio cash from first initialization log line."""
+        """Read the current session's portfolio start value from Kraken first."""
         try:
-            mtime = os.path.getmtime(BOT_LOG_PATH) if os.path.exists(
-                BOT_LOG_PATH) else None
-            if START_VALUE_CACHE['log_mtime'] == mtime:
+            now = time.time()
+            if START_VALUE_CACHE['expires_at'] > now:
                 return START_VALUE_CACHE['value']
 
+            api_value = self._read_kraken_start_value()
+            if api_value is not None:
+                START_VALUE_CACHE['value'] = api_value
+                START_VALUE_CACHE['expires_at'] = now + \
+                    START_VALUE_CACHE_TTL_SECONDS
+                return api_value
+
             value = 0.0
-            marker = 'Portfolio initialized from exchange (dry-run mode). Cash:'
             if os.path.exists(BOT_LOG_PATH):
                 with open(BOT_LOG_PATH, 'r', encoding='utf-8', errors='ignore') as f:
                     for line in f:
-                        if marker not in line:
+                        if 'Portfolio value:' not in line:
                             continue
                         try:
-                            cash_part = line.split('Cash:', 1)[1].strip()
-                            value = float(cash_part.split(' ')[0])
+                            value_part = line.split(
+                                'Portfolio value:', 1)[1].strip()
+                            value = float(value_part.split(' ')[0])
                             break
                         except Exception:
                             continue
@@ -435,8 +651,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
-            START_VALUE_CACHE['log_mtime'] = mtime
             START_VALUE_CACHE['value'] = value
+            START_VALUE_CACHE['expires_at'] = now + \
+                START_VALUE_CACHE_TTL_SECONDS
             return value
         except Exception:
             return 0.0
@@ -790,7 +1007,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             f'trading_portfolio_cash_eur {metrics.get("portfolio_cash_eur", 0.0)}')
 
         output.append(
-            '# HELP trading_portfolio_start_value_eur Initial dry-run portfolio value from startup log (EUR)')
+            '# HELP trading_portfolio_start_value_eur Portfolio start value from Kraken API or local fallback (EUR)')
         output.append('# TYPE trading_portfolio_start_value_eur gauge')
         output.append(
             f'trading_portfolio_start_value_eur {metrics.get("portfolio_start_value_eur", 0.0)}')
