@@ -23,7 +23,20 @@ fi
 
 _info "Installing monitoring dependencies..."
 apt-get update -q
-apt-get install -y -q prometheus prometheus-node-exporter grafana rsync
+apt-get install -y -q prometheus prometheus-node-exporter apt-transport-https software-properties-common wget gpg rsync
+
+if [[ ! -f /etc/apt/sources.list.d/grafana.list ]]; then
+  _info "Adding Grafana APT repository..."
+  mkdir -p /etc/apt/keyrings
+  wget -q -O /tmp/grafana.gpg.asc https://apt.grafana.com/gpg.key
+  gpg --batch --yes --dearmor -o /etc/apt/keyrings/grafana.gpg /tmp/grafana.gpg.asc
+  rm -f /tmp/grafana.gpg.asc
+  echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" \
+    > /etc/apt/sources.list.d/grafana.list
+  apt-get update -q
+fi
+
+apt-get install -y -q grafana
 
 mkdir -p "$INSTALL_DIR"
 
