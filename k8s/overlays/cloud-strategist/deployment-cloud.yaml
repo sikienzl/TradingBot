@@ -72,33 +72,17 @@ spec:
         
         resources:
           requests:
-            cpu: 1      # 1 core (GPT-5 calls are I/O bound)
-            memory: 512Mi
+            cpu: 250m
+            memory: 256Mi
           limits:
-            cpu: 2
-            memory: 1Gi
+            cpu: 1
+            memory: 512Mi
         
         volumeMounts:
           - name: logs
             mountPath: /var/log/trading-bot
         
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 9202
-          initialDelaySeconds: 20
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 3
-        
-        readinessProbe:
-          httpGet:
-            path: /ready
-            port: 9202
-          initialDelaySeconds: 10
-          periodSeconds: 5
-          timeoutSeconds: 3
-          failureThreshold: 2
+        # Health probes are disabled until dedicated /health and /ready endpoints are added.
         
         securityContext:
           readOnlyRootFilesystem: false

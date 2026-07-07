@@ -23,10 +23,9 @@ spec:
     spec:
       serviceAccountName: trading-bot-sa
 
-      # Cluster-first mode: no strict nodeSelector so this can run before Hailo arrives.
-      # Re-enable selector when module is installed:
-      # nodeSelector:
-      #   hailo-node: "true"
+      # Cluster-first mode pinned to node2 (future Hailo node).
+      nodeSelector:
+        kubernetes.io/hostname: "rasp2-node"
 
       # Tolerations for taints (if any)
       tolerations:
@@ -75,11 +74,11 @@ spec:
         
         resources:
           requests:
-            cpu: 2      # 2 cores out of 4
-            memory: 1Gi # 1GB out of 2GB
+            cpu: 300m
+            memory: 256Mi
           limits:
-            cpu: 3
-            memory: 1.5Gi
+            cpu: 1
+            memory: 768Mi
         
         volumeMounts:
           - name: nvme-tick-storage
@@ -90,23 +89,7 @@ spec:
           - name: logs
             mountPath: /var/log/trading-bot
         
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 9201
-          initialDelaySeconds: 30
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 3
-        
-        readinessProbe:
-          httpGet:
-            path: /ready
-            port: 9201
-          initialDelaySeconds: 10
-          periodSeconds: 5
-          timeoutSeconds: 3
-          failureThreshold: 2
+        # Health probes are disabled until dedicated /health and /ready endpoints are added.
         
         securityContext:
           readOnlyRootFilesystem: false

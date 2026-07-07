@@ -295,19 +295,24 @@ async def main():
 
     service = GPT5StrategistService()
 
-    # Example: process mock alert
-    alert = AnomalyAlert(
-        timestamp=datetime.utcnow(),
-        hailo_score=92.5,
-        window_size=100,
-        signal_type="breakout",
-        confidence=0.85,
-        market_context={"rsi": 75, "volatility": 0.025},
-        coin="BTC/USD",
-    )
+    # Optional startup self-check in shadow mode.
+    if os.getenv("GPT5_STARTUP_SELFTEST", "false").lower() == "true":
+        alert = AnomalyAlert(
+            timestamp=datetime.utcnow(),
+            hailo_score=92.5,
+            window_size=100,
+            signal_type="breakout",
+            confidence=0.85,
+            market_context={"rsi": 75, "volatility": 0.025},
+            coin="BTC/USD",
+        )
+        decision = await service.process_anomaly_alert(alert)
+        logger.info(f"Startup self-test decision: {decision}")
 
-    decision = await service.process_anomaly_alert(alert)
-    logger.info(f"Decision: {decision}")
+    logger.info("Cloud strategist service is running.")
+    while True:
+        await asyncio.sleep(30)
+        logger.info("Cloud strategist heartbeat")
 
 
 if __name__ == "__main__":
