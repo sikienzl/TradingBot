@@ -53,6 +53,14 @@ if [[ -d "$INSTALL_DIR" ]]; then
     "${SOURCE_DIR}/" "${INSTALL_DIR}/"
 fi
 
+if ! getent group trading >/dev/null; then
+  groupadd --system trading
+fi
+
+if ! id trading >/dev/null 2>&1; then
+  useradd --system --no-create-home --shell /usr/sbin/nologin --gid trading trading
+fi
+
 if [[ ! -f "${INSTALL_DIR}/.env" ]]; then
   _info "No /opt/trading_2/.env found yet; monitoring will still install, but trading services may stay in mock mode."
 fi

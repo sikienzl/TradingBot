@@ -9,7 +9,7 @@ User=siegfried
 Group=trading
 WorkingDirectory=/opt/trading_2
 Environment=PYTHONPATH=/opt/trading_2
-ExecStart=/opt/trading_2/.venv/bin/python3 /opt/trading_2/src/pnl_exporter.py
+ExecStart=/usr/bin/python3 /opt/trading_2/src/pnl_exporter.py
 ExecReload=/bin/kill -HUP $MAINPID
 KillMode=process
 Restart=always
