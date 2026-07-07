@@ -24,14 +24,13 @@ spec:
     spec:
       serviceAccountName: trading-bot-sa
       
-      # Prefer master node
+      # Pin to current master node for this cluster-first setup.
       nodeSelector:
-        node-role.kubernetes.io/master: ""  # Stay on Node 1
+        kubernetes.io/hostname: "rasp1-node"
       
       tolerations:
-        - key: node-role.kubernetes.io/master
-          operator: Equal
-          value: ""
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
           effect: NoSchedule
       
       containers:
