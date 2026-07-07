@@ -22,11 +22,12 @@ spec:
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: trading-bot-sa
-      
-      # Node selector: only on Hailo-8 node
-      nodeSelector:
-        hailo-node: "true"  # Label your Node 2: kubectl label nodes node-2 hailo-node=true
-      
+
+      # Cluster-first mode: no strict nodeSelector so this can run before Hailo arrives.
+      # Re-enable selector when module is installed:
+      # nodeSelector:
+      #   hailo-node: "true"
+
       # Tolerations for taints (if any)
       tolerations:
         - key: hailo-workload

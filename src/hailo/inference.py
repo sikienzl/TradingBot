@@ -11,25 +11,23 @@ from typing import List, Tuple, Optional, Dict, Any
 from pathlib import Path
 import numpy as np
 
+logger = logging.getLogger(__name__)
+
 try:
     import onnxruntime as ort
     ONNX_AVAILABLE = True
 except ImportError:
     ONNX_AVAILABLE = False
-    logger = logging.getLogger(__name__)
     logger.warning(
-        "onnxruntime not installed. Hailo inference will be unavailable.")
+        "onnxruntime not installed. Inference will be unavailable until installed."
+    )
 
 try:
     import hailort
     HAILO_AVAILABLE = True
 except ImportError:
     HAILO_AVAILABLE = False
-    logger = logging.getLogger(__name__)
     logger.warning("hailort not installed. Using ONNX CPU fallback.")
-
-
-logger = logging.getLogger(__name__)
 
 
 class TimeSeriesTransformerONNX:
@@ -82,10 +80,16 @@ class TimeSeriesTransformerONNX:
         # Choose execution provider based on available hardware
         providers = []
 
-        if self.use_hailo:
+        # Allow forcing CPU mode in cluster-only environments.
+        force_cpu = os.getenv("HAILO8_FORCE_CPU", "false").lower() == "true"
+
+        if self.use_hailo and not force_cpu:
             # Hailo-8 provider (if hailort available)
             providers.append("HailoExecutionProvider")
             logger.info("Using Hailo-8 as execution provider")
+        elif force_cpu:
+            providers.append("CPUExecutionProvider")
+            logger.info("HAILO8_FORCE_CPU=true -> using CPUExecutionProvider")
         elif self.device == "gpu":
             # NVIDIA CUDA
             providers.extend(["CUDAExecutionProvider"])
