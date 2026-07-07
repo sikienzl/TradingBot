@@ -29,6 +29,7 @@ spec:
         - name: analytics-writer
           image: trading-cloud:latest
           imagePullPolicy: IfNotPresent
+          workingDir: /opt/trading_2
           command:
             - "python3"
             - "/opt/trading_2/src/trading_bot.py"
@@ -47,6 +48,10 @@ spec:
               value: "false"
             - name: CHECK_INTERVAL
               value: "60"
+            - name: AI_COPILOT_INTERVAL_MINUTES
+              value: "120"
+            - name: AI_COPILOT_BENCHMARK_ENABLED
+              value: "false"
             - name: BOT_LOG_FILE
               value: "/opt/trading_2/logs/bot.log"
             - name: PERFORMANCE_LOG_FILE
