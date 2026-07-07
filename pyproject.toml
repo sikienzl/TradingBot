@@ -60,10 +60,60 @@ train = [
     "accelerate>=0.30",
     "bitsandbytes>=0.43",
 ]
-# pip install crypto-trading-bot[dev]
+# pip install crypto-trading-bot[hybrid]  – Hailo-8 + K3s Hybrid Setup
+hybrid = [
+    "websockets>=12.0",          # Kraken WebSocket V2 API
+    "onnx>=1.16",                # ONNX model export
+    "onnxruntime>=1.17",         # ONNX runtime inference
+    "hailort>=3.23",             # Hailo Runtime for Hailo-8 acceleration
+]
+# pip install crypto-trading-bot[k3s]  – Kubernetes integration for K3s deployment
+k3s = [
+    "kubernetes>=29.0",          # K3s / Kubernetes client
+    "prometheus-client>=0.20",   # Prometheus metrics export
+    "pyyaml>=6.0",               # YAML manifest handling
+]
+# pip install crypto-trading-bot[hailo8]  – All Hailo-8 + Time-Series-Transformer
+hailo8 = [
+    "websockets>=12.0",
+    "onnx>=1.16",
+    "onnxruntime>=1.17",
+    "hailort>=3.23",
+    "torch>=2.2",
+    "transformers>=4.40",
+    "peft>=0.10",
+    "einops>=0.8",               # Efficient tensor operations for transformers
+]
+# pip install crypto-trading-bot[dev]  – Development & testing
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=0.23",      # Async test support for WebSocket
     "httpx>=0.27",
+    "black>=24.0",               # Code formatting
+    "ruff>=0.4",                 # Linting
+]
+# pip install crypto-trading-bot[all]  – Complete installation
+all = [
+    "torch>=2.2",
+    "transformers>=4.40",
+    "peft>=0.10",
+    "trl>=0.8",
+    "datasets>=2.18",
+    "accelerate>=0.30",
+    "bitsandbytes>=0.43",
+    "websockets>=12.0",
+    "onnx>=1.16",
+    "onnxruntime>=1.17",
+    "hailort>=3.23",
+    "kubernetes>=29.0",
+    "prometheus-client>=0.20",
+    "pyyaml>=6.0",
+    "einops>=0.8",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "black>=24.0",
+    "ruff>=0.4",
 ]
 
 [project.urls]

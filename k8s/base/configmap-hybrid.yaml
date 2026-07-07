@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trading-bot-hybrid-config
+  namespace: trading-bot
+data:
+  # Hybrid mode settings
+  HYBRID_MODE: "true"
+  HAILO_ENABLED: "true"
+  DEPLOYMENT_PLATFORM: "k3s"
+  
+  # Kraken WebSocket V2
+  KRAKEN_WEBSOCKET_V2_ENABLED: "true"
+  KRAKEN_WS_RECONNECT_TIMEOUT: "30"
+  KRAKEN_TICK_BUFFER_SIZE: "500"
+  
+  # Hailo-8 Configuration
+  HAILO8_ENABLED: "true"
+  HAILO8_MODEL_PATH: "/models/hailo/timeseries_transformer.onnx"
+  HAILO8_BATCH_SIZE: "32"
+  HAILO8_INFERENCE_INTERVAL_MS: "100"
+  HAILO8_ANOMALY_THRESHOLD: "85"
+  HAILO8_WINDOW_SIZE: "100"
+  HAILO8_METRICS_PORT: "9201"
+  HAILO8_LOCAL_TICK_PATH: "/mnt/nvme/trading_ticks"
+  HAILO8_LOCAL_TICK_RETENTION_DAYS: "7"
+  
+  # Time-Series Transformer
+  TIMESERIES_TRANSFORMER_ENABLED: "true"
+  TIMESERIES_SEQ_LENGTH: "60"
+  TIMESERIES_HIDDEN_DIM: "128"
+  TIMESERIES_N_LAYERS: "4"
+  TIMESERIES_N_HEADS: "8"
+  TIMESERIES_BATCH_SIZE: "32"
+  
+  # GPT-5 Chief Strategist
+  GPT5_ENABLED: "true"
+  GPT5_MODEL: "gpt-5.4-nano"
+  GPT5_MAX_CALLS_PER_DAY: "100"
+  GPT5_MAX_SPEND_PER_MONTH_USD: "500"
+  GPT5_REQUEST_TIMEOUT_SEC: "30"
+  GPT5_RETRY_COUNT: "3"
+  GPT5_SHADOW_MODE: "false"
+  
+  # Hybrid Decision Gate
+  HYBRID_GATE_ENABLED: "true"
+  HYBRID_GATE_USE_HISTORICAL_DATA: "true"
+  HYBRID_GATE_EMIT_METRICS: "true"
+  HYBRID_GATE_MIN_CONFIDENCE_FOR_EXECUTION: "0.6"
+  
+  # K3S Configuration
+  K3S_NAMESPACE: "trading-bot"
+  
+  # Trading Core
+  EXCHANGE: "kraken"
+  BASE_CURRENCY: "EUR"
+  DRY_RUN: "false"
+  MIN_ENTRY_SCORE: "65"
+  FALLBACK_MIN_SCORE: "50"
+  TABULAR_MIN_CONFIDENCE: "0.5"
+  MAX_OPEN_TRADES: "5"
+  MAX_DAILY_LOSS_PCT: "3.0"
+  MAX_BUYS_PER_HOUR: "4"
+  STOP_LOSS_PCT: "4.0"
+  TAKE_PROFIT_PCT: "8.0"
+  MAX_HOLD_SECONDS: "300"
+  
+  # Logging & Monitoring
+  LOG_LEVEL: "INFO"
+  LOG_FORMAT: "json"
+  PROMETHEUS_ENABLED: "true"
+  PROMETHEUS_SCRAPE_INTERVAL: "30s"

@@ -1,0 +1,35 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Namespace
+namespace: trading-bot
+
+# Base resources for all deployments
+resources:
+  - base/namespace.yaml
+  - base/service-account.yaml
+  - base/configmap-hybrid.yaml
+
+# Common labels for all resources
+commonLabels:
+  app: trading-bot
+  variant: hailo8-k3s-hybrid
+
+# Common annotations
+commonAnnotations:
+  version: "1.0"
+  deployment: k3s-nano-hybrid
+
+# Replicas (override in overlays)
+replicas:
+  - name: hailo-worker
+    count: 1
+  - name: cloud-strategist
+    count: 1
+
+# Images (set in overlays)
+images:
+  - name: trading-hailo
+    newTag: latest
+  - name: trading-cloud
+    newTag: latest

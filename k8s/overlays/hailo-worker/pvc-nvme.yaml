@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nvme-tick-storage
+  namespace: trading-bot
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path  # K3s default storage class
+  resources:
+    requests:
+      storage: 500Gi  # 500GB for tick buffer (7 days rolling)

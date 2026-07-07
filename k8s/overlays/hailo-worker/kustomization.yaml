@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Base resources
+resources:
+  - ../base/namespace.yaml
+  - ../base/service-account.yaml
+  - ../base/configmap-hybrid.yaml
+
+namespace: trading-bot
+
+commonLabels:
+  app: trading-bot
+  component: hailo-worker
+  tier: edge
+
+commonAnnotations:
+  node-affinity: hailo-only

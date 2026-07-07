@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trading-cloud-strategist
+  namespace: trading-bot
+  labels:
+    app: trading-bot
+    component: cloud-strategist
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trading-bot
+      component: cloud-strategist
+  template:
+    metadata:
+      labels:
+        app: trading-bot
+        component: cloud-strategist
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9202"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: trading-bot-sa
+      
+      # Prefer master node
+      nodeSelector:
+        node-role.kubernetes.io/master: ""  # Stay on Node 1
+      
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          operator: Equal
+          value: ""
+          effect: NoSchedule
+      
+      containers:
+      - name: cloud-strategist
+        image: trading-cloud:latest
+        imagePullPolicy: IfNotPresent
+        
+        command:
+          - "python3"
+          - "-m"
+          - "src.cloud.strategist_service"
+        
+        envFrom:
+          - configMapRef:
+              name: trading-bot-hybrid-config
+          - secretRef:
+              name: trading-bot-credentials
+              optional: true
+        
+        env:
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: GPT5_METRICS_PORT
+            value: "9202"
+        
+        ports:
+          - name: metrics
+            containerPort: 9202
+            protocol: TCP
+          - name: api
+            containerPort: 8002
+            protocol: TCP
+        
+        resources:
+          requests:
+            cpu: 1      # 1 core (GPT-5 calls are I/O bound)
+            memory: 512Mi
+          limits:
+            cpu: 2
+            memory: 1Gi
+        
+        volumeMounts:
+          - name: logs
+            mountPath: /var/log/trading-bot
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 9202
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 9202
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        
+        securityContext:
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+      
+      volumes:
+        - name: logs
+          emptyDir: {}
+      
+      # Restart policy
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30

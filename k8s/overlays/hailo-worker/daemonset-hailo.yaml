@@ -1,0 +1,139 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: trading-hailo-worker
+  namespace: trading-bot
+  labels:
+    app: trading-bot
+    component: hailo-worker
+spec:
+  selector:
+    matchLabels:
+      app: trading-bot
+      component: hailo-worker
+  template:
+    metadata:
+      labels:
+        app: trading-bot
+        component: hailo-worker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9201"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: trading-bot-sa
+      
+      # Node selector: only on Hailo-8 node
+      nodeSelector:
+        hailo-node: "true"  # Label your Node 2: kubectl label nodes node-2 hailo-node=true
+      
+      # Tolerations for taints (if any)
+      tolerations:
+        - key: hailo-workload
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      
+      containers:
+      - name: hailo-worker
+        image: trading-hailo:latest
+        imagePullPolicy: IfNotPresent
+        
+        command:
+          - "python3"
+          - "-m"
+          - "src.hailo.edge_filter_service"
+        
+        envFrom:
+          - configMapRef:
+              name: trading-bot-hybrid-config
+          - secretRef:
+              name: trading-bot-credentials
+              optional: true
+        
+        env:
+          - name: NODE_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.nodeName
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: HAILO_METRICS_PORT
+            value: "9201"
+        
+        ports:
+          - name: metrics
+            containerPort: 9201
+            protocol: TCP
+        
+        resources:
+          requests:
+            cpu: 2      # 2 cores out of 4
+            memory: 1Gi # 1GB out of 2GB
+          limits:
+            cpu: 3
+            memory: 1.5Gi
+        
+        volumeMounts:
+          - name: nvme-tick-storage
+            mountPath: /mnt/nvme
+          - name: models
+            mountPath: /models
+            readOnly: true
+          - name: logs
+            mountPath: /var/log/trading-bot
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 9201
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 9201
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        
+        securityContext:
+          readOnlyRootFilesystem: false
+          runAsNonRoot: false  # Needed for hardware access
+          allowPrivilegeEscalation: false
+          capabilities:
+            add:
+              - SYS_PTRACE  # For Hailo hardware
+      
+      volumes:
+        - name: nvme-tick-storage
+          persistentVolumeClaim:
+            claimName: nvme-tick-storage
+        - name: models
+          emptyDir: {}  # In production, use ConfigMap or dedicated volume
+        - name: logs
+          emptyDir: {}
+      
+      # Pod disruption budget (keep at least 1 running on edge)
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: component
+                      operator: In
+                      values:
+                        - cloud-strategist
+                topologyKey: kubernetes.io/hostname

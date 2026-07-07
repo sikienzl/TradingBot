@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloud-strategist
+  namespace: trading-bot
+  labels:
+    app: trading-bot
+    component: cloud-strategist
+spec:
+  type: ClusterIP
+  selector:
+    app: trading-bot
+    component: cloud-strategist
+  ports:
+    - name: metrics
+      port: 9202
+      targetPort: 9202
+      protocol: TCP
+    - name: api
+      port: 8002
+      targetPort: 8002
+      protocol: TCP

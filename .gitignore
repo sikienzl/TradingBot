@@ -41,3 +41,4 @@ auto_tune_state*.json
 # IDE
 .vscode/
 .idea/
+.aider*
