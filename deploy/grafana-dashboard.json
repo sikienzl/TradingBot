@@ -660,6 +660,79 @@
     },
     {
       "datasource": "Prometheus",
+      "description": "Buy activity per coin over the last 24h. Shows whether a coin was bought and how much EUR was spent.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Buy Volume (EUR)" },
+            "properties": [
+              { "id": "unit", "value": "currencyEUR" },
+              { "id": "decimals", "value": 2 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Buy Count" },
+            "properties": [
+              { "id": "unit", "value": "short" },
+              { "id": "decimals", "value": 0 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 64 },
+      "id": 25,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "show": false },
+        "showHeader": true,
+        "sortBy": [
+          { "desc": true, "displayName": "Buy Volume (EUR)" }
+        ]
+      },
+      "title": "Recent Buy Activity (24h)",
+      "transformations": [
+        { "id": "labelsToFields", "options": { "mode": "columns" } },
+        { "id": "joinByField", "options": { "byField": "coin", "mode": "outer" } },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Value": true,
+              "__name__": true,
+              "__name__ 1": true,
+              "__name__ 2": true,
+              "instance": true,
+              "instance 1": true,
+              "instance 2": true,
+              "job": true,
+              "job 1": true,
+              "job 2": true
+            },
+            "indexByName": {
+              "coin": 0,
+              "Value #A": 1,
+              "Value #B": 2
+            },
+            "renameByName": {
+              "coin": "Coin",
+              "Value #A": "Buy Count",
+              "Value #B": "Buy Volume (EUR)"
+            }
+          }
+        }
+      ],
+      "type": "table",
+      "targets": [
+        { "expr": "trading_coin_buy_count", "format": "table", "instant": true, "legendFormat": "{{coin}}", "range": false, "refId": "A" },
+        { "expr": "trading_coin_buy_volume_eur", "format": "table", "instant": true, "legendFormat": "{{coin}}", "range": false, "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
