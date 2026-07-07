@@ -48,10 +48,14 @@ spec:
               value: "false"
             - name: CHECK_INTERVAL
               value: "60"
+            - name: AI_COPILOT_ENABLED
+              value: "true"
             - name: AI_COPILOT_INTERVAL_MINUTES
-              value: "120"
+              value: "240"
             - name: AI_COPILOT_BENCHMARK_ENABLED
               value: "false"
+            - name: AI_COPILOT_MAX_OUTPUT_TOKENS
+              value: "200"
             - name: BOT_LOG_FILE
               value: "/opt/trading_2/logs/bot.log"
             - name: PERFORMANCE_LOG_FILE
