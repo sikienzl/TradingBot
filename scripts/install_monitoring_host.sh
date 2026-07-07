@@ -23,7 +23,7 @@ fi
 
 _info "Installing monitoring dependencies..."
 apt-get update -q
-apt-get install -y -q prometheus prometheus-node-exporter apt-transport-https software-properties-common wget gpg rsync
+apt-get install -y -q prometheus prometheus-node-exporter apt-transport-https software-properties-common wget gpg rsync python3-numpy python3-pandas python3-pydantic
 
 if [[ ! -f /etc/apt/sources.list.d/grafana.list ]]; then
   _info "Adding Grafana APT repository..."
