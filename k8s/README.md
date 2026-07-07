@@ -65,6 +65,25 @@ kubectl port-forward -n trading-bot svc/prometheus 9090:9090
 kubectl port-forward -n trading-bot svc/grafana 3000:3000
 ```
 
+### Host Monitoring on the Master
+
+If you want the cluster master to look like the single Raspberry Pi setup, install monitoring on the host instead of running Grafana inside K3s:
+
+```bash
+sudo bash /opt/trading_2/scripts/install_monitoring_host.sh /opt/trading_2
+```
+
+This installs and enables:
+
+- `prometheus.service`
+- `prometheus-node-exporter.service`
+- `grafana-server.service`
+- `pnl-exporter.service`
+- `scorecard-status.timer`
+- `node-exporter-textfile.service`
+
+Grafana will be available on port 3000 and use the same provisioning files as the single-Pi host setup.
+
 ## Dateien in diesem Verzeichnis
 
 ```
