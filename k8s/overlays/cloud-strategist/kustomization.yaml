@@ -3,9 +3,7 @@ kind: Kustomization
 
 # Base resources
 resources:
-  - ../../base/namespace.yaml
-  - ../../base/service-account.yaml
-  - ../../base/configmap-hybrid.yaml
+  - ../../base
   - deployment-cloud.yaml
   - service.yaml
 
