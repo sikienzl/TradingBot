@@ -15,8 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy project
 COPY . .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -e ".[hailo8]"
+# Install Python dependencies directly (works without .git metadata in build context)
+RUN pip install --no-cache-dir -r requirements.txt \
+    websockets \
+    onnxruntime \
+    aiohttp
 
 # Create volumes for NVMe & logs
 VOLUME ["/mnt/nvme", "/var/log/trading-bot"]

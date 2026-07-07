@@ -15,8 +15,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy project
 COPY . .
 
-# Install Python dependencies (no hailo needed on cloud)
-RUN pip install --no-cache-dir -e ".[k3s,hybrid]"
+# Install Python dependencies directly (avoid hatch-vcs git metadata requirement in image builds)
+RUN pip install --no-cache-dir -r requirements.txt \
+    aiohttp \
+    websockets \
+    kubernetes \
+    prometheus-client \
+    pyyaml
 
 # Non-root user
 RUN useradd -m -u 1000 trading && chown -R trading:trading /app
