@@ -23,10 +23,9 @@ spec:
     spec:
       serviceAccountName: trading-bot-sa
 
-      # Temporary bootstrap: run on master until node2 image import/SSH trust is configured.
-      # Switch back to rasp2-node once worker node image distribution is set up.
+      # Cluster-first mode pinned to node2 (future Hailo node).
       nodeSelector:
-        kubernetes.io/hostname: "rasp1-node"
+        kubernetes.io/hostname: "rasp2-node"
 
       # Tolerations for taints (if any)
       tolerations:
