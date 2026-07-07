@@ -814,6 +814,33 @@ def test_analytics_db_connect_kwargs_support_url_and_split_fields(monkeypatch):
     assert kwargs["sslmode"] == "require"
 
 
+def test_analytics_db_connect_kwargs_support_legacy_postgres_env_names(monkeypatch):
+    monkeypatch.setenv("POSTGRES_ENABLED", "true")
+    monkeypatch.setenv("POSTGRES_HOST", "postgres-analytics")
+    monkeypatch.setenv("POSTGRES_PORT", "5432")
+    monkeypatch.setenv("POSTGRES_DB", "trading_analytics")
+    monkeypatch.setenv("POSTGRES_USER", "trading_user")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "secret")
+    monkeypatch.setenv("POSTGRES_SSLMODE", "disable")
+    monkeypatch.setenv("POSTGRES_SCHEMA", "trading_analytics")
+    monkeypatch.setenv("POSTGRES_CONNECT_TIMEOUT_SECONDS", "7")
+    monkeypatch.setenv("POSTGRES_SNAPSHOT_EVERY", "5")
+
+    config = BotConfig()
+    kwargs = config.analytics_db_connect_kwargs()
+
+    assert config.analytics_db_enabled is True
+    assert config.analytics_db_schema == "trading_analytics"
+    assert config.analytics_db_snapshot_every == 5
+    assert kwargs["host"] == "postgres-analytics"
+    assert kwargs["port"] == 5432
+    assert kwargs["dbname"] == "trading_analytics"
+    assert kwargs["user"] == "trading_user"
+    assert kwargs["password"] == "secret"
+    assert kwargs["sslmode"] == "disable"
+    assert kwargs["connect_timeout"] == 7
+
+
 def test_botconfig_initializes_ai_copilot_error_limits(monkeypatch):
     monkeypatch.setenv("AI_COPILOT_ENABLED", "true")
     monkeypatch.setenv("AI_COPILOT_MAX_CONSECUTIVE_ERRORS", "7")

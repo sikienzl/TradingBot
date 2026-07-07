@@ -424,6 +424,20 @@ class BotConfig:
                 return default
             return raw.strip().strip('"').strip("'")
 
+        def _env_str_any(names: List[str], default: str = "") -> str:
+            for name in names:
+                raw = os.getenv(name)
+                if raw is not None:
+                    return raw.strip().strip('"').strip("'")
+            return default
+
+        def _env_bool_any(names: List[str], default: bool) -> bool:
+            for name in names:
+                raw = os.getenv(name)
+                if raw is not None:
+                    return raw.strip().lower() in ("1", "true", "yes", "y", "on")
+            return default
+
         def _env_symbol_int_map(name: str, default: str = "") -> Dict[str, int]:
             raw = _env_str(name, default)
             if not raw:
@@ -795,19 +809,28 @@ class BotConfig:
             'PERFORMANCE_LOG_FILE', 'trade_journal.csv')
         self.performance_report_every = int(
             os.getenv('PERFORMANCE_REPORT_EVERY', 1))
-        self.analytics_db_enabled = _env_bool('ANALYTICS_DB_ENABLED', False)
-        self.analytics_db_url = _env_str('ANALYTICS_DB_URL', '')
-        self.analytics_db_host = _env_str('ANALYTICS_DB_HOST', '')
-        self.analytics_db_port = int(os.getenv('ANALYTICS_DB_PORT', 5432))
-        self.analytics_db_name = _env_str('ANALYTICS_DB_NAME', '')
-        self.analytics_db_user = _env_str('ANALYTICS_DB_USER', '')
-        self.analytics_db_password = _env_str('ANALYTICS_DB_PASSWORD', '')
-        self.analytics_db_sslmode = _env_str('ANALYTICS_DB_SSLMODE', 'prefer')
+        self.analytics_db_enabled = _env_bool_any(
+            ['ANALYTICS_DB_ENABLED', 'POSTGRES_ENABLED'], False)
+        self.analytics_db_url = _env_str_any(
+            ['ANALYTICS_DB_URL', 'POSTGRES_URL'], '')
+        self.analytics_db_host = _env_str_any(
+            ['ANALYTICS_DB_HOST', 'POSTGRES_HOST'], '')
+        self.analytics_db_port = int(_env_str_any(
+            ['ANALYTICS_DB_PORT', 'POSTGRES_PORT'], '5432'))
+        self.analytics_db_name = _env_str_any(
+            ['ANALYTICS_DB_NAME', 'POSTGRES_DB'], '')
+        self.analytics_db_user = _env_str_any(
+            ['ANALYTICS_DB_USER', 'POSTGRES_USER'], '')
+        self.analytics_db_password = _env_str_any(
+            ['ANALYTICS_DB_PASSWORD', 'POSTGRES_PASSWORD'], '')
+        self.analytics_db_sslmode = _env_str_any(
+            ['ANALYTICS_DB_SSLMODE', 'POSTGRES_SSLMODE'], 'prefer')
         self.analytics_db_connect_timeout_seconds = int(
-            os.getenv('ANALYTICS_DB_CONNECT_TIMEOUT_SECONDS', 5))
-        self.analytics_db_schema = _env_str('ANALYTICS_DB_SCHEMA', 'public')
+            _env_str_any(['ANALYTICS_DB_CONNECT_TIMEOUT_SECONDS', 'POSTGRES_CONNECT_TIMEOUT_SECONDS'], '5'))
+        self.analytics_db_schema = _env_str_any(
+            ['ANALYTICS_DB_SCHEMA', 'POSTGRES_SCHEMA'], 'public')
         self.analytics_db_snapshot_every = int(
-            os.getenv('ANALYTICS_DB_SNAPSHOT_EVERY', 1))
+            _env_str_any(['ANALYTICS_DB_SNAPSHOT_EVERY', 'POSTGRES_SNAPSHOT_EVERY'], '1'))
         # Hard risk guardrails (0 = disabled)
         self.max_daily_loss_pct = float(os.getenv('MAX_DAILY_LOSS_PCT', 0))
         self.max_buys_per_hour = int(os.getenv('MAX_BUYS_PER_HOUR', 0))

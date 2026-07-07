@@ -70,3 +70,14 @@ data:
   LOG_FORMAT: "json"
   PROMETHEUS_ENABLED: "true"
   PROMETHEUS_SCRAPE_INTERVAL: "30s"
+
+  # Optional analytics Postgres sink on the master node SSD
+  ANALYTICS_DB_ENABLED: "true"
+  ANALYTICS_DB_HOST: "postgres-analytics"
+  ANALYTICS_DB_PORT: "5432"
+  ANALYTICS_DB_NAME: "trading_analytics"
+  ANALYTICS_DB_USER: "trading_user"
+  ANALYTICS_DB_SSLMODE: "disable"
+  ANALYTICS_DB_SCHEMA: "trading_analytics"
+  ANALYTICS_DB_CONNECT_TIMEOUT_SECONDS: "5"
+  ANALYTICS_DB_SNAPSHOT_EVERY: "1"
