@@ -61,7 +61,11 @@ mkdir -p /opt/trading_2/results/scorecards/textfile
 mkdir -p /opt/trading_2/logs
 
 for unit in pnl-exporter.service scorecard-status.service scorecard-status.timer node-exporter-textfile.service; do
-  src="${SOURCE_DIR}/deploy/${unit}"
+  if [[ "$unit" == "pnl-exporter.service" ]]; then
+    src="${SOURCE_DIR}/pnl-exporter.service"
+  else
+    src="${SOURCE_DIR}/deploy/${unit}"
+  fi
   dst="${SYSTEMD_DIR}/${unit}"
   [[ -f "$src" ]] || _die "Missing unit file: $src"
   cp "$src" "$dst"
