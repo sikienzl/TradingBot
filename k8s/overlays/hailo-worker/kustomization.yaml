@@ -4,6 +4,8 @@ kind: Kustomization
 # Base resources
 resources:
   - ../../base
+  - pvc-nvme.yaml
+  - daemonset-hailo.yaml
 
 namespace: trading-bot
 

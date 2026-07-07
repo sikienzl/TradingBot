@@ -36,7 +36,7 @@ spec:
       containers:
       - name: cloud-strategist
         image: trading-cloud:latest
-        imagePullPolicy: Never
+        imagePullPolicy: IfNotPresent
         
         command:
           - "python3"
