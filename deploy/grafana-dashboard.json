@@ -948,7 +948,7 @@
     },
     {
       "datasource": "Prometheus",
-      "description": "Rolling realized PnL over the last 24h from the live exporter.",
+      "description": "All-time realized PnL from the live exporter.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -963,9 +963,9 @@
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 90 },
       "id": 36,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
-      "title": "Live Realized PnL (24h)",
+      "title": "Live Realized PnL (All-time)",
       "type": "stat",
-      "targets": [{ "expr": "trading_realized_pnl_usd", "legendFormat": "24h", "refId": "A" }]
+      "targets": [{ "expr": "trading_realized_pnl_usd_all_time", "legendFormat": "All-time", "refId": "A" }]
     },
     {
       "datasource": "Prometheus",
