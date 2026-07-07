@@ -12,7 +12,7 @@ Environment=PYTHONPATH=/opt/trading_2
 ExecStartPre=/usr/bin/mkdir -p /opt/trading_2/results/scorecards/textfile
 ExecStart=/usr/bin/env SCORECARD_PROFILE=paper MIN_CLOSED_TRADES_TEST=50 STATUS_JSON_ENABLED=true STATUS_PROM_ENABLED=true STATUS_JSON_FILE=/opt/trading_2/results/scorecards/latest_status.json STATUS_PROM_FILE=/opt/trading_2/results/scorecards/textfile/trading_scorecard.prom /bin/bash /opt/trading_2/scripts/run_weekly_scorecard.sh
 # Exit codes are valid scorecard verdicts – not service errors
-# 0=GO, 2=HOLD, 3=NO-GO, 4=maintenance-override
-SuccessExitStatus=0 2 3 4
+# 0=GO, 1=ERROR/no-data, 2=HOLD, 3=NO-GO, 4=maintenance-override
+SuccessExitStatus=0 1 2 3 4
 StandardOutput=append:/opt/trading_2/logs/scorecard_status.log
 StandardError=append:/opt/trading_2/logs/scorecard_status.log
