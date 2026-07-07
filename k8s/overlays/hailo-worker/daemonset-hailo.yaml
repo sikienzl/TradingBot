@@ -38,7 +38,7 @@ spec:
       containers:
       - name: hailo-worker
         image: trading-hailo:latest
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Never
         
         command:
           - "python3"
