@@ -37,19 +37,27 @@ class HailoEdgeFilterService:
         self.enabled = os.getenv("HAILO8_ENABLED", "true").lower() == "true"
         self.pairs = os.getenv("CRYPTO_PAIRS", "BTC/USD,ETH/USD").split(",")
 
-        # Load ONNX model
+        # Load ONNX model (cluster-only mode tolerates missing model and runs pass-through).
+        self.model = None
+        self.detector = None
+        self.inference_enabled = True
         model_path = os.getenv(
             "HAILO8_MODEL_PATH",
             "/models/hailo/timeseries_transformer.onnx"
         )
-        self.model = TimeSeriesTransformerONNX(model_path)
-
-        # Anomaly detector
         threshold = float(os.getenv("HAILO8_ANOMALY_THRESHOLD", "85"))
         window_size = int(os.getenv("HAILO8_WINDOW_SIZE", "100"))
-        self.detector = AnomalyDetector(
-            self.model, threshold=threshold, window_size=window_size)
-
+        try:
+            self.model = TimeSeriesTransformerONNX(model_path)
+            self.detector = AnomalyDetector(
+                self.model, threshold=threshold, window_size=window_size
+            )
+        except Exception as e:
+            self.inference_enabled = False
+            logger.warning(
+                f"Inference disabled (model/runtime unavailable): {e}. "
+                "Worker continues in pass-through mode."
+            )
         # WebSocket client
         self.ws_client = None
         self.metrics = {
@@ -72,8 +80,10 @@ class HailoEdgeFilterService:
         tick_dict = tick.to_dict()
 
         try:
-            # Run inference & check for anomalies
-            alert_dict = self.detector.update(tick_dict)
+            alert_dict = None
+            if self.inference_enabled and self.detector is not None:
+                # Run inference & check for anomalies
+                alert_dict = self.detector.update(tick_dict)
 
             self.metrics["ticks_processed"] += 1
             self.metrics["last_update"] = datetime.utcnow().isoformat()
@@ -94,7 +104,6 @@ class HailoEdgeFilterService:
 
                 # Emit alert (via Redis/RabbitMQ in production)
                 await self.emit_alert(anomaly_alert)
-
         except Exception as e:
             logger.error(f"Error processing tick: {e}")
 
@@ -147,8 +156,16 @@ class HailoEdgeFilterService:
 
     def get_metrics(self):
         """Get service metrics for Prometheus"""
+        if self.detector is None:
+            return {
+                **self.metrics,
+                "inference_enabled": False,
+                "detector_buffer_stats": {},
+                "detector_alerts": 0,
+            }
         return {
             **self.metrics,
+            "inference_enabled": True,
             "detector_buffer_stats": self.detector.get_buffer_stats(),
             "detector_alerts": len(self.detector.alerts),
         }
