@@ -410,7 +410,8 @@ class BotConfig:
     """Configuration class for the trading bot."""
 
     def __init__(self):
-        load_dotenv()
+        # Ensure project .env wins over inherited shell/service variables.
+        load_dotenv(override=True)
 
         def _env_bool(name: str, default: bool) -> bool:
             raw = os.getenv(name)
