@@ -31,6 +31,7 @@ JOURNAL_PATH = '/opt/trading_2/trade_journal.csv'
 BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
 ENV_PATH = '/opt/trading_2/.env'
 AI_COPILOT_STATE_PATH = '/opt/trading_2/ai_copilot_state.json'
+AI_COPILOT_BENCHMARK_STATE_PATH = '/opt/trading_2/ai_copilot_benchmark_state.json'
 PORTFOLIO_STATE_PATH = '/opt/trading_2/.portfolio_state.json'
 MIN_DRAWDOWN_PCT_BASE_USD = 1.0
 START_VALUE_CACHE = {
@@ -436,6 +437,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
         metrics_dict['metrics_generated_unixtime'] = snapshot['metrics_generated_unixtime']
         metrics_dict['portfolio_start_value_eur'] = self.read_portfolio_start_value()
         metrics_dict.update(self.read_ai_copilot_usage())
+        metrics_dict.update(self.read_ai_model_info())
         metrics_dict.update(self.read_ai_shadow_suggestions())
         metrics_dict.update(self._compute_recent_pnl_guard_state(trades))
         return self.format_prometheus_metrics(metrics_dict)
@@ -706,6 +708,42 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 result.update(api_usage)
         except Exception:
             pass
+
+        return result
+
+    def read_ai_model_info(self):
+        """Read current primary and benchmark AI model names for dashboard display."""
+        result = {'ai_copilot_model_info': []}
+
+        def _read_state_model(path):
+            for candidate in (path, f'{path}.bak'):
+                if not os.path.exists(candidate):
+                    continue
+                try:
+                    with open(candidate, 'r', encoding='utf-8') as f:
+                        state = json.load(f)
+                    model = str(state.get('model', '') or '').strip()
+                    if model:
+                        return model
+                except Exception:
+                    continue
+            return ''
+
+        primary_model = _read_state_model(
+            AI_COPILOT_STATE_PATH) or self._read_env_value('AI_COPILOT_MODEL')
+        benchmark_model = _read_state_model(
+            AI_COPILOT_BENCHMARK_STATE_PATH) or self._read_env_value('AI_COPILOT_BENCHMARK_MODEL')
+        benchmark_enabled = self._env_bool(
+            'AI_COPILOT_BENCHMARK_ENABLED', False)
+
+        if primary_model:
+            result['ai_copilot_model_info'].append(
+                {'role': 'primary', 'model': primary_model})
+
+        if benchmark_model:
+            role = 'benchmark' if benchmark_enabled else 'benchmark-disabled'
+            result['ai_copilot_model_info'].append(
+                {'role': role, 'model': benchmark_model})
 
         return result
 
@@ -1095,6 +1133,19 @@ class MetricsHandler(BaseHTTPRequestHandler):
         output.append('# TYPE trading_ai_copilot_calls_cap_monthly gauge')
         output.append(
             f'trading_ai_copilot_calls_cap_monthly {metrics.get("ai_copilot_calls_cap_monthly", 0.0)}')
+
+        output.append(
+            '# HELP trading_ai_copilot_model_info Current AI co-pilot model names by role')
+        output.append('# TYPE trading_ai_copilot_model_info gauge')
+        for item in metrics.get('ai_copilot_model_info', []):
+            role = str(item.get('role', '')).replace(
+                '\\', '\\\\').replace('"', '\\"')
+            model = str(item.get('model', '')).replace(
+                '\\', '\\\\').replace('"', '\\"')
+            if not role or not model:
+                continue
+            output.append(
+                f'trading_ai_copilot_model_info{{role="{role}",model="{model}"}} 1')
 
         output.append(
             '# HELP trading_ai_copilot_shadow_suggestion_value Latest AI shadow suggestion value by parameter and recency rank')
