@@ -436,6 +436,8 @@ class MetricsHandler(BaseHTTPRequestHandler):
         metrics_dict['portfolio_snapshot_age_seconds'] = snapshot['portfolio_snapshot_age_seconds']
         metrics_dict['metrics_generated_unixtime'] = snapshot['metrics_generated_unixtime']
         metrics_dict['portfolio_start_value_eur'] = self.read_portfolio_start_value()
+        metrics_dict['portfolio_target_eur'] = self._safe_float_env(
+            'PORTFOLIO_TARGET_EUR', 25.0)
         metrics_dict.update(self.read_ai_copilot_usage())
         metrics_dict.update(self.read_ai_model_info())
         metrics_dict.update(self.read_ai_shadow_suggestions())
@@ -455,17 +457,20 @@ class MetricsHandler(BaseHTTPRequestHandler):
         return trades
 
     def _parse_timestamp(self, timestamp_str):
-        """Parse ISO timestamps with or without microseconds."""
+        """Parse ISO timestamps with or without microseconds, treating naive timestamps as UTC."""
         ts = (timestamp_str or '').strip()
         if not ts:
             return None
         try:
-            return datetime.fromisoformat(ts)
+            dt = datetime.fromisoformat(ts)
         except ValueError:
             try:
-                return datetime.fromisoformat(ts.split('.')[0])
+                dt = datetime.fromisoformat(ts.split('.')[0])
             except Exception:
                 return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
 
     def _extract_log_line_timestamp(self, line):
         """Extract a datetime from standard bot log lines like 'YYYY-MM-DD HH:MM:SS,mmm - ...'."""
@@ -1049,6 +1054,12 @@ class MetricsHandler(BaseHTTPRequestHandler):
         output.append('# TYPE trading_portfolio_start_value_eur gauge')
         output.append(
             f'trading_portfolio_start_value_eur {metrics.get("portfolio_start_value_eur", 0.0)}')
+
+        output.append(
+            '# HELP trading_portfolio_target_eur Portfolio target value in EUR (configurable via PORTFOLIO_TARGET_EUR)')
+        output.append('# TYPE trading_portfolio_target_eur gauge')
+        output.append(
+            f'trading_portfolio_target_eur {metrics.get("portfolio_target_eur", 0.0)}')
 
         output.append(
             '# HELP trading_metrics_generated_unixtime Unix timestamp when the exporter generated this metrics payload')

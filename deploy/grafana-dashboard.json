@@ -1270,6 +1270,71 @@
         { "expr": "trading_recent_pnl_guard_enabled", "legendFormat": "Guard Enabled", "refId": "B" },
         { "expr": "trading_recent_pnl_guard_recent_closed_trades", "legendFormat": "Recent Closed", "refId": "C" }
       ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "decimals": 2,
+          "max": 25,
+          "min": 19,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "yellow", "value": 22 },
+            { "color": "green", "value": 25 }
+          ] },
+          "unit": "currencyEUR"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 118 },
+      "id": 49,
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "title": "Ziel-Fortschritt (→ 25 €)",
+      "type": "gauge",
+      "targets": [
+        { "expr": "trading_portfolio_value_eur", "legendFormat": "Portfolio", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "decimals": 2,
+          "unit": "currencyEUR"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Ziel (25 \u20ac)" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } },
+              { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Start (19.52 \u20ac)" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } },
+              { "id": "custom.lineStyle", "value": { "dash": [4, 4], "fill": "dash" } }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 16, "x": 8, "y": 118 },
+      "id": 50,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Portfolio-Verlauf vs. Ziel",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "trading_portfolio_value_eur", "legendFormat": "Portfolio (EUR)", "refId": "A" },
+        { "expr": "trading_portfolio_target_eur", "legendFormat": "Ziel (25 \u20ac)", "refId": "B" },
+        { "expr": "trading_portfolio_start_value_eur", "legendFormat": "Start (19.52 \u20ac)", "refId": "C" }
+      ]
     }
   ],
   "refresh": "30s",
