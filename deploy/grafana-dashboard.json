@@ -55,7 +55,7 @@
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
       "title": "Portfolio Snapshot Age",
       "type": "stat",
-      "targets": [{ "expr": "trading_portfolio_snapshot_age_seconds", "instant": true, "legendFormat": "Age", "range": false, "refId": "A" }]
+      "targets": [{ "expr": "trading_portfolio_snapshot_age_seconds", "legendFormat": "Age", "refId": "A" }]
     },
     {
       "datasource": "Prometheus",
@@ -503,7 +503,7 @@
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
       "title": "Open Positions",
       "type": "stat",
-      "targets": [{ "expr": "trading_open_positions_count", "instant": true, "legendFormat": "Current", "range": false, "refId": "A" }]
+      "targets": [{ "expr": "trading_open_positions_count", "legendFormat": "Current", "refId": "A" }]
     },
     {
       "datasource": "Prometheus",
@@ -523,7 +523,7 @@
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
       "title": "Unrealized PnL",
       "type": "stat",
-      "targets": [{ "expr": "trading_current_holdings_unrealized_pnl_total_eur", "instant": true, "legendFormat": "Current", "range": false, "refId": "A" }]
+      "targets": [{ "expr": "trading_current_holdings_unrealized_pnl_total_eur", "legendFormat": "Current", "refId": "A" }]
     },
     {
       "datasource": "Prometheus",
@@ -543,7 +543,7 @@
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
       "title": "Open Simulated Buys",
       "type": "stat",
-      "targets": [{ "expr": "trading_open_positions_count", "instant": true, "legendFormat": "Open", "range": false, "refId": "A" }]
+      "targets": [{ "expr": "trading_open_positions_count", "legendFormat": "Open", "refId": "A" }]
     },
     {
       "datasource": "Prometheus",
@@ -580,7 +580,7 @@
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
       "title": "Portfolio Value",
       "type": "stat",
-      "targets": [{ "expr": "trading_portfolio_value_eur", "instant": true, "legendFormat": "Current", "range": false, "refId": "A" }]
+      "targets": [{ "expr": "trading_portfolio_value_eur", "legendFormat": "Current", "refId": "A" }]
     },
     {
       "datasource": "Prometheus",
@@ -599,7 +599,7 @@
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
       "title": "Portfolio Start",
       "type": "stat",
-      "targets": [{ "expr": "trading_portfolio_start_value_eur", "instant": true, "legendFormat": "Start", "range": false, "refId": "A" }]
+      "targets": [{ "expr": "trading_portfolio_start_value_eur", "legendFormat": "Start", "refId": "A" }]
     },
     {
       "datasource": "Prometheus",
