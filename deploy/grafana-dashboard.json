@@ -378,8 +378,8 @@
       "title": "Trading KPI History (%)",
       "type": "timeseries",
       "targets": [
-        { "expr": "trading_scorecard_win_rate_percent", "legendFormat": "Win Rate %", "refId": "A" },
-        { "expr": "trading_scorecard_max_drawdown_pct", "legendFormat": "Max DD %", "refId": "B" }
+        { "expr": "trading_win_rate", "legendFormat": "Win Rate %", "refId": "A" },
+        { "expr": "trading_max_drawdown_pct", "legendFormat": "Max DD %", "refId": "B" }
       ]
     },
     {
@@ -401,9 +401,9 @@
       "title": "Trading KPI History (Absolute)",
       "type": "timeseries",
       "targets": [
-        { "expr": "trading_scorecard_closed_trades", "legendFormat": "Closed Trades", "refId": "A" },
-        { "expr": "trading_scorecard_profit_factor", "legendFormat": "Profit Factor", "refId": "B" },
-        { "expr": "trading_scorecard_realized_pnl", "legendFormat": "Realized PnL", "refId": "C" }
+        { "expr": "trading_closed_trades", "legendFormat": "Closed Trades", "refId": "A" },
+        { "expr": "trading_profit_factor", "legendFormat": "Profit Factor", "refId": "B" },
+        { "expr": "trading_realized_pnl_usd", "legendFormat": "Realized PnL", "refId": "C" }
       ]
     },
     {
@@ -1294,7 +1294,7 @@
         "showThresholdLabels": false,
         "showThresholdMarkers": true
       },
-      "title": "Ziel-Fortschritt (→ 25 €)",
+      "title": "Target Progress (→ €25)",
       "type": "gauge",
       "targets": [
         { "expr": "trading_portfolio_value_eur", "legendFormat": "Portfolio", "refId": "A" }
@@ -1310,14 +1310,14 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "Ziel (25 \u20ac)" },
+            "matcher": { "id": "byName", "options": "Target (\u20ac25)" },
             "properties": [
               { "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } },
               { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Start (19.52 \u20ac)" },
+            "matcher": { "id": "byName", "options": "Start (\u20ac19.52)" },
             "properties": [
               { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } },
               { "id": "custom.lineStyle", "value": { "dash": [4, 4], "fill": "dash" } }
@@ -1328,12 +1328,12 @@
       "gridPos": { "h": 8, "w": 16, "x": 8, "y": 118 },
       "id": 50,
       "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "title": "Portfolio-Verlauf vs. Ziel",
+      "title": "Portfolio vs. Target",
       "type": "timeseries",
       "targets": [
         { "expr": "trading_portfolio_value_eur", "legendFormat": "Portfolio (EUR)", "refId": "A" },
-        { "expr": "trading_portfolio_target_eur", "legendFormat": "Ziel (25 \u20ac)", "refId": "B" },
-        { "expr": "trading_portfolio_start_value_eur", "legendFormat": "Start (19.52 \u20ac)", "refId": "C" }
+        { "expr": "trading_portfolio_target_eur", "legendFormat": "Target (\u20ac25)", "refId": "B" },
+        { "expr": "trading_portfolio_start_value_eur", "legendFormat": "Start (\u20ac19.52)", "refId": "C" }
       ]
     }
   ],
