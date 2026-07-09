@@ -636,6 +636,50 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 continue
         return 0.0
 
+    def _read_live_portfolio_snapshot_from_kraken(self):
+        """Fallback snapshot from Kraken when bot log data is unavailable."""
+        base_currency = self._read_env_value('BASE_CURRENCY') or 'EUR'
+        api_key = self._read_first_env_value('KRAKEN_API_KEY')
+        api_secret = self._read_first_env_value(
+            'KRAKEN_API_SECRET', 'KRAKEN_SECRET_KEY')
+        if not api_key or not api_secret:
+            return None
+
+        balances = self._read_kraken_balance(api_key, api_secret)
+        if not balances:
+            return None
+
+        base_aliases = {self._normalize_asset_code(
+            alias) for alias in self._currency_aliases(base_currency)}
+        portfolio_cash = 0.0
+        open_positions_count = 0
+
+        for asset_code, raw_amount in balances.items():
+            try:
+                amount = float(raw_amount)
+            except (TypeError, ValueError):
+                continue
+            if amount <= 0.0:
+                continue
+            normalized_asset = self._normalize_asset_code(asset_code)
+            if normalized_asset in base_aliases:
+                portfolio_cash += amount
+            else:
+                open_positions_count += 1
+
+        portfolio_value = self._read_kraken_balance_portfolio_value(
+            base_currency, api_key, api_secret)
+        if portfolio_value is None:
+            portfolio_value = portfolio_cash
+
+        return {
+            'portfolio_value_eur': float(max(portfolio_value, 0.0)),
+            'portfolio_cash_eur': float(max(portfolio_cash, 0.0)),
+            'open_positions_count': int(max(open_positions_count, 0)),
+            'portfolio_snapshot_timestamp_unixtime': datetime.now(timezone.utc).timestamp(),
+            'portfolio_snapshot_age_seconds': 0.0,
+        }
+
     def read_latest_portfolio_snapshot(self):
         """Read latest portfolio value and cash from bot log."""
         snapshot = {
@@ -652,6 +696,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
         }
 
         if not os.path.exists(BOT_LOG_PATH):
+            fallback = self._read_live_portfolio_snapshot_from_kraken()
+            if fallback is not None:
+                snapshot.update(fallback)
             return snapshot
 
         try:
