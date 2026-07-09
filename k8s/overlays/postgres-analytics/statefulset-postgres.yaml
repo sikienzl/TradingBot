@@ -18,7 +18,7 @@ spec:
     spec:
       serviceAccountName: trading-bot-sa
       nodeSelector:
-        kubernetes.io/hostname: "rasp1-node"
+        trading-role: "master-ssd"
       tolerations:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
@@ -33,9 +33,9 @@ spec:
               protocol: TCP
           env:
             - name: POSTGRES_DB
-              value: "trading_analytics"
+              value: "appdb"
             - name: POSTGRES_USER
-              value: "trading_user"
+              value: "trading_db"
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:

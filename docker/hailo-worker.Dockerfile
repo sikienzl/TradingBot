@@ -5,28 +5,18 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system dependencies (minimal for edge)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libssl-dev \
-    libffi-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy project
 COPY . .
 
-# Install Python dependencies directly (works without .git metadata in build context)
-RUN pip install --no-cache-dir -r requirements.txt \
-    websockets \
-    onnxruntime \
-    aiohttp
+# Keep the edge image focused on the runtime path used by the Hailo worker.
+RUN pip install --no-cache-dir \
+    aiohttp==3.13.2 \
+    numpy==2.3.4 \
+    onnxruntime==1.23.2 \
+    websockets==15.0.1
 
-# Create volumes for NVMe & logs
 VOLUME ["/mnt/nvme", "/var/log/trading-bot"]
 
-# Health check
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
     CMD python -c "import src.hailo.edge_filter_service; print('OK')" || exit 1
 
-# Run edge filter service
 CMD ["python", "-m", "src.hailo.edge_filter_service"]

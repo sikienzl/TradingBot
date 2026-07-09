@@ -23,9 +23,8 @@ spec:
     spec:
       serviceAccountName: trading-bot-sa
 
-      # Cluster-first mode pinned to node2 (future Hailo node).
       nodeSelector:
-        kubernetes.io/hostname: "rasp2-node"
+        trading-role: "hailo-worker"
 
       # Tolerations for taints (if any)
       tolerations:
@@ -49,6 +48,9 @@ spec:
               name: trading-bot-hybrid-config
           - secretRef:
               name: trading-bot-credentials
+              optional: true
+          - secretRef:
+              name: trading-bot-runtime-env
               optional: true
         
         env:

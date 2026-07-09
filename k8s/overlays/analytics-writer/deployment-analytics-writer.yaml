@@ -20,7 +20,7 @@ spec:
     spec:
       serviceAccountName: trading-bot-sa
       nodeSelector:
-        kubernetes.io/hostname: "rasp1-node"
+        trading-role: "master-ssd"
       tolerations:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
@@ -40,7 +40,8 @@ spec:
                 name: trading-bot-credentials
                 optional: true
             - secretRef:
-                name: trading-bot-kraken-credentials
+                name: trading-bot-runtime-env
+                optional: true
           env:
             - name: DRY_RUN
               value: "true"

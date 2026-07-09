@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HOST="${1:-siegfried@192.168.62.87}"
+HOST="${1:-pi@192.168.1.20}"
 COIN="${2:-${SIGNAL_COIN:-VVV}}"
 LOG_PATH="${SIGNAL_LOG_PATH:-/opt/trading_2/logs/bot.log}"
 

@@ -23,10 +23,9 @@ spec:
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: trading-bot-sa
-      
-      # Pin to current master node for this cluster-first setup.
+
       nodeSelector:
-        kubernetes.io/hostname: "rasp1-node"
+        trading-role: "master-ssd"
       
       tolerations:
         - key: node-role.kubernetes.io/control-plane
@@ -48,6 +47,9 @@ spec:
               name: trading-bot-hybrid-config
           - secretRef:
               name: trading-bot-credentials
+              optional: true
+          - secretRef:
+              name: trading-bot-runtime-env
               optional: true
         
         env:

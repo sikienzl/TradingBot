@@ -56,6 +56,9 @@ kubectl apply -k k8s/overlays/postgres-analytics/
 # Verify pods are running
 kubectl get pods -n trading-bot
 kubectl logs -f <pod-name> -n trading-bot
+
+# Full re-setup from this repo (K3s repair/join, .env migration, secret apply, deploy)
+DB_PASSWORD='<set-postgres-password>' bash scripts/setup_rpi_k3s_cluster.sh
 ```
 
 ### Phase 3: Monitoring
@@ -86,6 +89,15 @@ This installs and enables:
 - `node-exporter-textfile.service`
 
 Grafana will be available on port 3000 and use the same provisioning files as the single-Pi host setup.
+
+## Node Labels
+
+The overlays are scheduled by stable node labels instead of hostnames:
+
+- `trading-role=master-ssd` for the control-plane node with the SSD-backed Postgres volume
+- `trading-role=hailo-worker` for the worker node with the Hailo module
+
+The setup script applies these labels automatically.
 
 ## Dateien in diesem Verzeichnis
 
@@ -142,7 +154,7 @@ Siehe `.env.hailo8.example` für vollständige Liste:
 ## Analytics Storage Layout
 
 - The master node NVMe path hosts the canonical Postgres analytics database via the `local-path-master-ssd1` StorageClass.
-- The expected host path is `/mnt/nvme_data/trading_db` on `rasp1-node`.
+- The expected host path is `/mnt/nvme_data/trading_db` on the node labeled `trading-role=master-ssd`.
 - The Hailo worker keeps `/mnt/nvme` as a local rolling tick buffer close to inference.
 - The optional analytics writer appends trade and portfolio events into Postgres and does not sit on the runtime read path.
 
@@ -181,7 +193,7 @@ kubectl -n trading-bot rollout status deploy/trading-analytics-writer
 
 ## Existing Cluster Migration to NVMe Path
 
-If the cluster already has a `postgres-analytics` PVC, changing the `StorageClass` alone will not move the existing data. Use the migration helper after preparing the NVMe data path on `rasp1-node`:
+If the cluster already has a `postgres-analytics` PVC, changing the `StorageClass` alone will not move the existing data. Use the migration helper after preparing the NVMe data path on the node labeled `trading-role=master-ssd`:
 
 ```bash
 sudo mkdir -p /mnt/nvme_data/trading_db
