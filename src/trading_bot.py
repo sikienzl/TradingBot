@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 import ccxt
 import numpy as np
 from dotenv import load_dotenv
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 import urllib.request
 import urllib.error
 import re
@@ -867,6 +867,20 @@ class BotConfig:
             os.getenv('AI_COPILOT_COST_INPUT_PER_MTOK', 0.2))
         self.ai_copilot_cost_output_per_mtok = float(
             os.getenv('AI_COPILOT_COST_OUTPUT_PER_MTOK', 1.25))
+        self.ai_copilot_hailo_gate_enabled = _env_bool(
+            'AI_COPILOT_HAILO_GATE_ENABLED', False)
+        self.ai_copilot_hailo_alerts_file = _env_str(
+            'AI_COPILOT_HAILO_ALERTS_FILE', '/tmp/hailo_alerts.jsonl')
+        self.ai_copilot_hailo_min_score = float(
+            os.getenv('AI_COPILOT_HAILO_MIN_SCORE', os.getenv('HAILO8_ANOMALY_THRESHOLD', '85')))
+        self.ai_copilot_hailo_min_confidence = float(
+            os.getenv('AI_COPILOT_HAILO_MIN_CONFIDENCE', '0.6'))
+        self.ai_copilot_hailo_max_alert_age_seconds = int(
+            os.getenv('AI_COPILOT_HAILO_MAX_ALERT_AGE_SECONDS', '900'))
+        self.ai_copilot_hailo_required_alerts = int(
+            os.getenv('AI_COPILOT_HAILO_REQUIRED_ALERTS', '1'))
+        self.ai_copilot_hailo_max_lines_scan = int(
+            os.getenv('AI_COPILOT_HAILO_MAX_LINES_SCAN', '400'))
         self.ai_copilot_min_entry_score_min = int(
             os.getenv('AI_COPILOT_MIN_ENTRY_SCORE_MIN', 55))
         self.ai_copilot_min_entry_score_max = int(
@@ -1732,6 +1746,118 @@ class CryptoTradingBot:
                 pass
         return True, 'ok'
 
+    @staticmethod
+    def _parse_iso8601_utc(raw: Any) -> Optional[datetime]:
+        text = str(raw or '').strip()
+        if not text:
+            return None
+        normalized = text.replace('Z', '+00:00')
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except Exception:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def _read_recent_hailo_alerts(self) -> List[Dict[str, Any]]:
+        path = self.config.ai_copilot_hailo_alerts_file
+        if not path or not os.path.exists(path):
+            return []
+
+        max_lines = max(1, int(self.config.ai_copilot_hailo_max_lines_scan))
+        buffered: List[str] = []
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                buffered = list(deque(f, maxlen=max_lines))
+        except Exception as exc:
+            logger.warning(
+                'Could not read Hailo alerts file %s: %s', path, exc)
+            return []
+
+        now_utc = datetime.now(timezone.utc)
+        max_age = max(
+            0, int(self.config.ai_copilot_hailo_max_alert_age_seconds))
+        min_score = float(self.config.ai_copilot_hailo_min_score)
+        min_confidence = float(self.config.ai_copilot_hailo_min_confidence)
+
+        recent: List[Dict[str, Any]] = []
+        for raw_line in reversed(buffered):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except Exception:
+                continue
+
+            timestamp = self._parse_iso8601_utc(payload.get('timestamp'))
+            if timestamp is None:
+                continue
+            age_seconds = (now_utc - timestamp).total_seconds()
+            if age_seconds < 0:
+                age_seconds = 0.0
+            if max_age > 0 and age_seconds > max_age:
+                break
+
+            try:
+                score = float(payload.get('hailo_score', 0.0))
+            except Exception:
+                score = 0.0
+            try:
+                confidence = float(payload.get('confidence', 0.0))
+            except Exception:
+                confidence = 0.0
+
+            if score < min_score or confidence < min_confidence:
+                continue
+
+            recent.append({
+                'timestamp': timestamp.isoformat(),
+                'age_seconds': round(float(age_seconds), 2),
+                'hailo_score': round(score, 4),
+                'confidence': round(confidence, 4),
+                'coin': str(payload.get('coin', '') or ''),
+                'signal_type': str(payload.get('signal_type', '') or ''),
+            })
+
+        return recent
+
+    def _evaluate_ai_copilot_hailo_gate(self) -> Tuple[bool, Dict[str, Any]]:
+        if not self.config.ai_copilot_hailo_gate_enabled:
+            return True, {
+                'enabled': False,
+                'allowed': True,
+                'reason': 'disabled',
+            }
+
+        required_alerts = max(
+            1, int(self.config.ai_copilot_hailo_required_alerts))
+        recent_alerts = self._read_recent_hailo_alerts()
+        allowed = len(recent_alerts) >= required_alerts
+        reason = 'ok' if allowed else 'insufficient_recent_alerts'
+        latest_age = recent_alerts[0]['age_seconds'] if recent_alerts else None
+        max_score = max((a['hailo_score'] for a in recent_alerts), default=0.0)
+        max_confidence = max((a['confidence']
+                             for a in recent_alerts), default=0.0)
+
+        details = {
+            'enabled': True,
+            'allowed': allowed,
+            'reason': reason,
+            'required_alerts': required_alerts,
+            'recent_alert_count': len(recent_alerts),
+            'max_alert_age_seconds': int(self.config.ai_copilot_hailo_max_alert_age_seconds),
+            'min_score': float(self.config.ai_copilot_hailo_min_score),
+            'min_confidence': float(self.config.ai_copilot_hailo_min_confidence),
+            'latest_age_seconds': latest_age,
+            'max_score': round(float(max_score), 4),
+            'max_confidence': round(float(max_confidence), 4),
+            'alerts_file': self.config.ai_copilot_hailo_alerts_file,
+            'recent_alerts': recent_alerts[:5],
+        }
+        return allowed, details
+
     def _ai_copilot_snapshot(self) -> Dict[str, Any]:
         trades_recent = []
         recent_trade_summary: Dict[str, Any] = {
@@ -1902,6 +2028,14 @@ class CryptoTradingBot:
                 'tabular_buy_conf_min': self.config.ai_copilot_tabular_buy_conf_min,
                 'tabular_buy_conf_max': self.config.ai_copilot_tabular_buy_conf_max,
             },
+            'hailo_gate': {
+                'enabled': bool(self.config.ai_copilot_hailo_gate_enabled),
+                'alerts_file': self.config.ai_copilot_hailo_alerts_file,
+                'required_alerts': int(self.config.ai_copilot_hailo_required_alerts),
+                'min_score': float(self.config.ai_copilot_hailo_min_score),
+                'min_confidence': float(self.config.ai_copilot_hailo_min_confidence),
+                'max_alert_age_seconds': int(self.config.ai_copilot_hailo_max_alert_age_seconds),
+            },
         }
 
     def _extract_json_object(self, text: str) -> Optional[Dict[str, Any]]:
@@ -2071,9 +2205,28 @@ class CryptoTradingBot:
             self._write_ai_copilot_state(state, state_file)
             return
 
+        gate_allows_run, gate_details = self._evaluate_ai_copilot_hailo_gate()
+        snapshot_with_gate = dict(snapshot)
+        snapshot_with_gate['hailo_gate_runtime'] = gate_details
+        state['last_hailo_gate'] = gate_details
+
+        if not gate_allows_run:
+            logger.info(
+                '%s skipped: hailo_gate=%s (recent=%s required=%s min_score=%.1f min_conf=%.2f max_age=%ss)',
+                label,
+                gate_details.get('reason', 'blocked'),
+                gate_details.get('recent_alert_count', 0),
+                gate_details.get('required_alerts', 0),
+                gate_details.get('min_score', 0.0),
+                gate_details.get('min_confidence', 0.0),
+                gate_details.get('max_alert_age_seconds', 0),
+            )
+            self._write_ai_copilot_state(state, state_file)
+            return
+
         try:
             result, prompt_tokens, completion_tokens = self._call_ai_copilot(
-                snapshot,
+                snapshot_with_gate,
                 model=model,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,

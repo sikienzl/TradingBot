@@ -14,6 +14,7 @@ Architecture:
 import os
 import json
 import logging
+import argparse
 from pathlib import Path
 from typing import Tuple, Dict, List, Optional
 import pickle
@@ -70,35 +71,148 @@ class TimeSeriesDataset(Dataset):
             feature_cols: Columns to use as features
             label_col: Column with anomaly labels (0/1)
         """
-        self.ticks_df = ticks_df
         self.seq_length = seq_length
         self.feature_cols = feature_cols or [
             "bid", "ask", "mid", "bid_size", "ask_size",
             "last_trade_price", "last_trade_size", "bid_ask_ratio", "spread"
         ]
         self.label_col = label_col
+        prepared = self._prepare_sequences(ticks_df.copy())
+        self.sequences = prepared["sequences"]
+        self.labels = prepared["labels"]
 
-        # Normalize features
-        self.feature_mean = self.ticks_df[self.feature_cols].mean()
-        self.feature_std = self.ticks_df[self.feature_cols].std() + 1e-8
-        self.ticks_df_norm = (
-            (self.ticks_df[self.feature_cols] -
-             self.feature_mean) / self.feature_std
+    def _prepare_sequences(self, ticks_df: pd.DataFrame) -> Dict[str, List[np.ndarray]]:
+        feature_cols = list(self.feature_cols)
+        required_feature_set = set(feature_cols)
+
+        if not required_feature_set.issubset(ticks_df.columns):
+            ticks_df = self._build_feature_frame(ticks_df)
+
+        if self.label_col not in ticks_df.columns:
+            ticks_df[self.label_col] = self._build_anomaly_labels(ticks_df)
+
+        ticks_df = ticks_df.copy()
+        ticks_df[feature_cols] = ticks_df[feature_cols].replace(
+            [np.inf, -np.inf], np.nan
         )
+        ticks_df[feature_cols] = ticks_df[feature_cols].ffill().bfill().fillna(0.0)
+        ticks_df[self.label_col] = pd.to_numeric(
+            ticks_df[self.label_col], errors="coerce"
+        ).fillna(0.0).clip(0.0, 1.0)
+
+        feature_mean = ticks_df[feature_cols].mean()
+        feature_std = ticks_df[feature_cols].std().replace(
+            0, np.nan).fillna(1.0)
+        normalized = ((ticks_df[feature_cols] -
+                      feature_mean) / feature_std).astype(np.float32)
+
+        group_key = "symbol" if "symbol" in ticks_df.columns else "coin" if "coin" in ticks_df.columns else None
+        if group_key is not None:
+            grouped_frames = [group.copy()
+                              for _, group in ticks_df.groupby(group_key, sort=False)]
+        else:
+            grouped_frames = [ticks_df.copy()]
+
+        sequences: List[np.ndarray] = []
+        labels: List[float] = []
+
+        for group in grouped_frames:
+            if "timestamp" in group.columns:
+                group = group.sort_values("timestamp").reset_index(drop=True)
+            group_features = normalized.loc[group.index].reset_index(drop=True)
+            group_labels = ticks_df.loc[group.index,
+                                        self.label_col].reset_index(drop=True)
+
+            if len(group_features) < self.seq_length:
+                continue
+
+            for end_idx in range(self.seq_length - 1, len(group_features)):
+                start_idx = end_idx - self.seq_length + 1
+                sequences.append(
+                    group_features.iloc[start_idx:end_idx +
+                                        1].to_numpy(dtype=np.float32)
+                )
+                labels.append(float(group_labels.iloc[end_idx]))
+
+        if not sequences:
+            raise ValueError(
+                f"No sequences could be built from the input data for seq_length={self.seq_length}"
+            )
+
+        return {"sequences": sequences, "labels": labels}
+
+    def _build_feature_frame(self, ticks_df: pd.DataFrame) -> pd.DataFrame:
+        required_ohlcv = {"open", "high", "low", "close", "volume"}
+        if not required_ohlcv.issubset(ticks_df.columns):
+            missing = sorted(required_ohlcv.difference(set(ticks_df.columns)))
+            raise ValueError(
+                f"Training data is missing required feature columns: {missing}"
+            )
+
+        frame = ticks_df.copy()
+        close = pd.to_numeric(frame["close"], errors="coerce").fillna(0.0)
+        open_ = pd.to_numeric(frame["open"], errors="coerce").fillna(close)
+        high = pd.to_numeric(frame["high"], errors="coerce").fillna(close)
+        low = pd.to_numeric(frame["low"], errors="coerce").fillna(close)
+        volume = pd.to_numeric(frame["volume"], errors="coerce").fillna(0.0)
+        prev_volume = volume.shift(1).fillna(volume)
+
+        frame["bid"] = np.minimum(open_, close)
+        frame["ask"] = np.maximum(open_, close)
+        frame["mid"] = (high + low + close) / 3.0
+        frame["bid_size"] = prev_volume.clip(lower=0.0)
+        frame["ask_size"] = volume.clip(lower=0.0)
+        frame["last_trade_price"] = close
+        frame["last_trade_size"] = volume.diff(
+        ).abs().fillna(volume).clip(lower=0.0)
+        frame["bid_ask_ratio"] = frame["bid"] / \
+            frame["ask"].replace(0.0, np.nan)
+        frame["spread"] = (high - low).clip(lower=0.0)
+        return frame
+
+    def _build_anomaly_labels(self, ticks_df: pd.DataFrame) -> pd.Series:
+        frame = ticks_df.copy()
+        if "timestamp" in frame.columns:
+            frame = frame.sort_values("timestamp").reset_index(drop=True)
+
+            close = pd.to_numeric(frame.get("close"),
+                                  errors="coerce").ffill().fillna(0.0)
+        high = pd.to_numeric(frame.get("high"), errors="coerce").fillna(close)
+        low = pd.to_numeric(frame.get("low"), errors="coerce").fillna(close)
+        volume = pd.to_numeric(frame.get("volume"),
+                               errors="coerce").fillna(0.0)
+
+        abs_return = close.pct_change().abs().fillna(0.0)
+        range_pct = ((high - low) / close.replace(0.0, np.nan)
+                     ).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        volume_ratio = (volume / volume.rolling(20, min_periods=3).median().replace(
+            0.0, np.nan)).replace([np.inf, -np.inf], np.nan).fillna(1.0)
+
+        return_threshold = abs_return.rolling(50, min_periods=10).mean(
+        ) + 2.0 * abs_return.rolling(50, min_periods=10).std().fillna(0.0)
+        range_threshold = range_pct.rolling(50, min_periods=10).mean(
+        ) + 2.0 * range_pct.rolling(50, min_periods=10).std().fillna(0.0)
+
+        anomaly_mask = (
+            (abs_return > return_threshold.fillna(abs_return.quantile(0.90)))
+            | (range_pct > range_threshold.fillna(range_pct.quantile(0.90)))
+            | (volume_ratio > 2.5)
+        )
+        return anomaly_mask.astype(np.float32)
 
     def __len__(self):
-        return len(self.ticks_df)
+        return len(self.sequences)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """Get one sequence"""
         X = torch.tensor(
-            self.ticks_df_norm.iloc[idx].values,
+            self.sequences[idx],
             dtype=torch.float32
-        ).unsqueeze(0)  # Add sequence dimension
+        )
 
         y = torch.tensor(
-            self.ticks_df[self.label_col].iloc[idx],
-            dtype=torch.long  # Classification
+            self.labels[idx],
+            dtype=torch.float32
         )
 
         return X, y
@@ -315,7 +429,8 @@ def export_to_onnx(
     model.eval()
 
     # Dummy input
-    dummy_input = torch.randn(1, seq_length, n_features)
+    model_device = next(model.parameters()).device
+    dummy_input = torch.randn(1, seq_length, n_features, device=model_device)
 
     # Export
     try:
@@ -358,8 +473,8 @@ def train_transformer(
 
     # Split train/val
     n_train = int(0.8 * len(df))
-    train_df = df[:n_train]
-    val_df = df[n_train:]
+    train_df = df[:n_train].reset_index(drop=True)
+    val_df = df[n_train:].reset_index(drop=True)
 
     train_dataset = TimeSeriesDataset(train_df, seq_length=config.seq_length)
     val_dataset = TimeSeriesDataset(val_df, seq_length=config.seq_length)
@@ -408,5 +523,87 @@ if __name__ == "__main__":
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
-    # Example: train_transformer("training_data.csv")
-    logger.info("Time-Series-Transformer training module ready.")
+    parser = argparse.ArgumentParser(
+        description="Train and export Time-Series-Transformer for Hailo-8 prefiltering"
+    )
+    parser.add_argument(
+        "--train-data",
+        default=os.getenv("TIMESERIES_TRAIN_DATA", "training_data.csv"),
+        help="Path to CSV training data",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=os.getenv("TIMESERIES_OUTPUT_DIR", "/models/hailo"),
+        help="Output directory for model artifacts",
+    )
+    parser.add_argument(
+        "--seq-length",
+        type=int,
+        default=int(os.getenv("TIMESERIES_SEQ_LENGTH", "60")),
+        help="Sequence length for transformer input",
+    )
+    parser.add_argument(
+        "--hidden-dim",
+        type=int,
+        default=int(os.getenv("TIMESERIES_HIDDEN_DIM", "128")),
+        help="Transformer hidden dimension",
+    )
+    parser.add_argument(
+        "--n-layers",
+        type=int,
+        default=int(os.getenv("TIMESERIES_N_LAYERS", "4")),
+        help="Number of transformer encoder layers",
+    )
+    parser.add_argument(
+        "--n-heads",
+        type=int,
+        default=int(os.getenv("TIMESERIES_N_HEADS", "8")),
+        help="Number of attention heads",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=int(os.getenv("TIMESERIES_BATCH_SIZE", "32")),
+        help="Training batch size",
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=int(os.getenv("TIMESERIES_EPOCHS", "50")),
+        help="Maximum training epochs",
+    )
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=float(os.getenv("TIMESERIES_LEARNING_RATE", "0.0001")),
+        help="Optimizer learning rate",
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=int(os.getenv("TIMESERIES_PATIENCE", "5")),
+        help="Early stopping patience (epochs)",
+    )
+
+    args = parser.parse_args()
+
+    config = TimeSeriesTransformerConfig(
+        seq_length=max(1, args.seq_length),
+        hidden_dim=max(8, args.hidden_dim),
+        n_layers=max(1, args.n_layers),
+        n_heads=max(1, args.n_heads),
+        batch_size=max(1, args.batch_size),
+        epochs=max(1, args.epochs),
+        learning_rate=max(1e-7, args.learning_rate),
+        patience=max(1, args.patience),
+    )
+
+    try:
+        train_transformer(
+            training_data_path=args.train_data,
+            output_model_dir=args.output_dir,
+            config=config,
+        )
+    except Exception as exc:
+        logger.error("Training failed: %s", exc)
+        raise
