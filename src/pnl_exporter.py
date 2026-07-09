@@ -256,6 +256,135 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     continue
         return None
 
+    def _read_kraken_balance(self, api_key, api_secret):
+        payload = {
+            'nonce': self._kraken_nonce(),
+        }
+        try:
+            response = self._kraken_private_request(
+                '/0/private/Balance', payload, api_key, api_secret)
+        except Exception:
+            return {}
+        errors = response.get('error', []) if isinstance(
+            response, dict) else []
+        if errors:
+            return {}
+        result = response.get('result', {}) if isinstance(
+            response, dict) else {}
+        return result if isinstance(result, dict) else {}
+
+    def _read_kraken_asset_pairs(self):
+        req = urllib.request.Request(
+            'https://api.kraken.com/0/public/AssetPairs',
+            headers={
+                'Accept': 'application/json',
+                'User-Agent': 'trading-bot-pnl-exporter/1.0',
+            },
+            method='GET',
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                payload = json.loads(
+                    response.read().decode('utf-8', errors='replace'))
+        except Exception:
+            return {}
+        errors = payload.get('error', []) if isinstance(payload, dict) else []
+        if errors:
+            return {}
+        result = payload.get('result', {}) if isinstance(payload, dict) else {}
+        return result if isinstance(result, dict) else {}
+
+    def _read_kraken_ticker_last(self, pair):
+        req = urllib.request.Request(
+            f'https://api.kraken.com/0/public/Ticker?pair={urllib.parse.quote(pair)}',
+            headers={
+                'Accept': 'application/json',
+                'User-Agent': 'trading-bot-pnl-exporter/1.0',
+            },
+            method='GET',
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                payload = json.loads(
+                    response.read().decode('utf-8', errors='replace'))
+        except Exception:
+            return None
+        errors = payload.get('error', []) if isinstance(payload, dict) else []
+        if errors:
+            return None
+        result = payload.get('result', {}) if isinstance(payload, dict) else {}
+        if not isinstance(result, dict) or not result:
+            return None
+        first = next(iter(result.values()))
+        if not isinstance(first, dict):
+            return None
+        close_arr = first.get('c')
+        if not isinstance(close_arr, list) or not close_arr:
+            return None
+        try:
+            return float(close_arr[0])
+        except (TypeError, ValueError):
+            return None
+
+    def _read_kraken_balance_portfolio_value(self, base_currency, api_key, api_secret):
+        balances = self._read_kraken_balance(api_key, api_secret)
+        if not balances:
+            return None
+
+        base_aliases = {self._normalize_asset_code(
+            alias) for alias in self._currency_aliases(base_currency)}
+        total_value = 0.0
+        non_base_assets = {}
+
+        for asset_code, raw_amount in balances.items():
+            try:
+                amount = float(raw_amount)
+            except (TypeError, ValueError):
+                continue
+            if amount <= 0.0:
+                continue
+
+            normalized_asset = self._normalize_asset_code(asset_code)
+            if normalized_asset in base_aliases:
+                total_value += amount
+            else:
+                non_base_assets[normalized_asset] = non_base_assets.get(
+                    normalized_asset, 0.0) + amount
+
+        if not non_base_assets:
+            return total_value
+
+        asset_pairs = self._read_kraken_asset_pairs()
+        if not asset_pairs:
+            return total_value if total_value > 0.0 else None
+
+        pair_map = {}
+        normalized_quote = self._normalize_asset_code(base_currency)
+        for pair_name, pair_info in asset_pairs.items():
+            if '.d' in pair_name:
+                continue
+            if not isinstance(pair_info, dict):
+                continue
+            base_asset = self._normalize_asset_code(
+                pair_info.get('base') or '')
+            quote_asset = self._normalize_asset_code(
+                pair_info.get('quote') or '')
+            if not base_asset or quote_asset != normalized_quote:
+                continue
+            altname = pair_info.get('altname') or pair_name
+            pair_map.setdefault(base_asset, altname)
+
+        for asset, amount in non_base_assets.items():
+            pair = pair_map.get(asset)
+            if not pair:
+                continue
+            last_price = self._read_kraken_ticker_last(pair)
+            if last_price is None:
+                continue
+            total_value += amount * last_price
+
+        return total_value if total_value > 0.0 else None
+
     def _normalize_asset_code(self, asset_code):
         asset = (asset_code or '').upper().strip()
         if not asset:
@@ -346,6 +475,13 @@ class MetricsHandler(BaseHTTPRequestHandler):
             return None
 
         base_currency = self._read_env_value('BASE_CURRENCY') or 'EUR'
+
+        # Prefer direct REST valuation from current balances for exact live portfolio value.
+        balance_value = self._read_kraken_balance_portfolio_value(
+            base_currency, api_key, api_secret)
+        if balance_value is not None:
+            return balance_value
+
         api_value = self._read_kraken_trade_balance(
             base_currency, api_key, api_secret)
         if api_value is not None:
