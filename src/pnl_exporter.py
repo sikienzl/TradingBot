@@ -33,6 +33,7 @@ ENV_PATH = '/opt/trading_2/.env'
 AI_COPILOT_STATE_PATH = '/opt/trading_2/ai_copilot_state.json'
 AI_COPILOT_BENCHMARK_STATE_PATH = '/opt/trading_2/ai_copilot_benchmark_state.json'
 PORTFOLIO_STATE_PATH = '/opt/trading_2/.portfolio_state.json'
+SCORECARD_PROM_PATH = '/opt/trading_2/results/scorecards/textfile/trading_scorecard.prom'
 MIN_DRAWDOWN_PCT_BASE_USD = 1.0
 START_VALUE_CACHE = {
     'expires_at': 0.0,
@@ -655,6 +656,20 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     with open(PORTFOLIO_STATE_PATH, 'r', encoding='utf-8', errors='ignore') as f:
                         state = json.load(f)
                     value = float(state.get('initial_portfolio_value') or 0.0)
+                except Exception:
+                    pass
+
+            # Final fallback: reuse the scorecard runtime start value metric.
+            if value <= 0.0 and os.path.exists(SCORECARD_PROM_PATH):
+                try:
+                    with open(SCORECARD_PROM_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+                        for line in f:
+                            if not line.startswith('trading_runtime_portfolio_start_value'):
+                                continue
+                            parts = line.strip().split()
+                            if len(parts) >= 2:
+                                value = float(parts[-1])
+                                break
                 except Exception:
                     pass
 
