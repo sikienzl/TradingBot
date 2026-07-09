@@ -39,6 +39,7 @@ START_VALUE_CACHE = {
     'expires_at': 0.0,
     'value': 0.0,
 }
+LAST_KRAKEN_NONCE = 0
 START_VALUE_CACHE_TTL_SECONDS = 300
 AI_SPEND_CACHE = {
     'value': None,
@@ -193,7 +194,12 @@ class MetricsHandler(BaseHTTPRequestHandler):
         return list(dict.fromkeys(aliases))
 
     def _kraken_nonce(self):
-        return str(int(time.time() * 1000))
+        global LAST_KRAKEN_NONCE
+        now_ms = int(time.time() * 1000)
+        if now_ms <= LAST_KRAKEN_NONCE:
+            now_ms = LAST_KRAKEN_NONCE + 1
+        LAST_KRAKEN_NONCE = now_ms
+        return str(now_ms)
 
     def _kraken_sign(self, path, payload, api_secret):
         encoded_payload = urllib.parse.urlencode(payload)
