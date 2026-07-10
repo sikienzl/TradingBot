@@ -36,3 +36,21 @@ groups:
         annotations:
           summary: "Trading portfolio snapshot is stale"
           description: "The PnL exporter has not parsed a fresh portfolio snapshot from bot.log for over 120 seconds."
+
+      - alert: TradingOpenPositions
+        expr: trading_open_positions_count > 0
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: "Trading opened position(s)"
+          description: "The exporter reports trading_open_positions_count > 0 for at least 1 minute — a Buy has been opened."
+
+      - alert: TradingPortfolioReturnChanged
+        expr: changes(trading_portfolio_return_pct[5m]) > 0
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: "Portfolio return percent changed"
+          description: "`trading_portfolio_return_pct` changed in the last 5 minutes — review dashboard for returns and unrealized PnL."
