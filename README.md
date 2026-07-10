@@ -51,6 +51,21 @@ cp .env.live.example .env
 cat .env.autoresearch.active.example >> .env
 ```
 
+## Hailo Hybrid Cluster
+
+The repo includes a two-node hybrid deployment path for:
+
+- market-data relay on the storage / dashboard node
+- strategist service on the control-plane node
+- Hailo edge worker on the compute node
+
+The worker now supports two inference modes:
+
+- ONNX runtime fallback
+- direct Hailo HEF execution when `model/hailo_prefilter/timeseries_transformer.hef` is present
+
+Deployment and compile details are documented in [docs/hailo_hybrid_cluster.md](docs/hailo_hybrid_cluster.md).
+
 ## Quickstart (60 seconds)
 
 ```sh
