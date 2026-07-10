@@ -579,6 +579,21 @@ class MetricsHandler(BaseHTTPRequestHandler):
         metrics_dict['portfolio_snapshot_age_seconds'] = snapshot['portfolio_snapshot_age_seconds']
         metrics_dict['metrics_generated_unixtime'] = snapshot['metrics_generated_unixtime']
         metrics_dict['portfolio_start_value_eur'] = self.read_portfolio_start_value()
+        # If we're running in DRY_RUN but using the real Kraken API (not simulated data),
+        # force the primary exported portfolio value to the Kraken-derived start value
+        # so dashboards reflect the live account rather than any synthetic snapshot.
+        try:
+            start_val = metrics_dict['portfolio_start_value_eur']
+            if (
+                start_val
+                and float(start_val) > 0.0
+                and self._env_bool('DRY_RUN', False)
+                and not self._env_bool('SIMULATE_DATA', False)
+            ):
+                metrics_dict['portfolio_value_eur'] = float(start_val)
+        except Exception:
+            pass
+
         metrics_dict['portfolio_target_eur'] = self._safe_float_env(
             'PORTFOLIO_TARGET_EUR', 25.0)
         metrics_dict.update(self.read_ai_copilot_usage())
@@ -694,6 +709,122 @@ class MetricsHandler(BaseHTTPRequestHandler):
             'portfolio_snapshot_age_seconds': 0.0,
             'metrics_generated_unixtime': datetime.now(timezone.utc).timestamp(),
         }
+
+        # Prefer a persisted portfolio snapshot file when available (written by the bot)
+        try:
+            if os.path.exists(PORTFOLIO_STATE_PATH):
+                with open(PORTFOLIO_STATE_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+                    state = json.load(f)
+                now_ts = datetime.now(timezone.utc).timestamp()
+                cash = float(state.get('cash', 0.0) or 0.0)
+                holdings_raw = state.get('holdings', {}) or {}
+                holdings = {str(k).upper(): float(v) for k, v in holdings_raw.items() if (
+                    v not in (None, '') and float(v) != 0.0)}
+                open_trades_raw = state.get('open_trades', {}) or {}
+                cost_basis = {}
+                for coin, trade in (open_trades_raw.items()):
+                    try:
+                        amount_base = float(
+                            trade.get('amount_base', 0.0) or 0.0)
+                    except Exception:
+                        amount_base = 0.0
+                    if amount_base > 0.0:
+                        cost_basis[str(coin).upper()] = amount_base
+
+                snapshot.update({
+                    # Compute a live portfolio value if possible: prefer cash + current market value
+                    # of holdings (when ccxt is available) falling back to stored initial value.
+                    'portfolio_value_eur': float(state.get('initial_portfolio_value') or 0.0) or 0.0,
+                    'portfolio_cash_eur': cash,
+                    'holdings_amount_coin': holdings,
+                    'holdings_cost_basis_eur': cost_basis,
+                    'open_positions_count': int(max(len(holdings), len(open_trades_raw))),
+                    'portfolio_snapshot_timestamp_unixtime': float(datetime.fromisoformat(state.get('timestamp')).timestamp()) if state.get('timestamp') else now_ts,
+                    'portfolio_snapshot_age_seconds': max(0.0, now_ts - (float(datetime.fromisoformat(state.get('timestamp')).timestamp()) if state.get('timestamp') else now_ts)),
+                    'metrics_generated_unixtime': now_ts,
+                })
+                # Do a best-effort mapping for holdings_value: try to value each holding
+                # using live market prices via ccxt (preferred). If ccxt is unavailable
+                # or pricing fails, fall back to the stored cost basis.
+                try:
+                    if ccxt is not None and snapshot['holdings_amount_coin']:
+                        exchange_name = self._read_first_env_value(
+                            'EXCHANGE_NAME') or 'kraken'
+                        try:
+                            exchange_cls = getattr(
+                                ccxt, exchange_name.lower(), None)
+                            if exchange_cls is None:
+                                # Some CCXT ids differ from common names (kraken -> kraken)
+                                exchange = ccxt.__dict__.get(
+                                    exchange_name, None)
+                            else:
+                                exchange = exchange_cls(
+                                    {'enableRateLimit': True})
+                        except Exception:
+                            exchange = None
+
+                        symbol_map = {}
+                        try:
+                            if exchange is not None:
+                                try:
+                                    markets = exchange.load_markets()
+                                except Exception:
+                                    markets = {}
+                                symbol_map = self._build_base_symbol_map(
+                                    markets, self._read_env_value('BASE_CURRENCY') or 'EUR')
+                        except Exception:
+                            symbol_map = {}
+
+                        for coin, amt in snapshot['holdings_amount_coin'].items():
+                            valued = None
+                            symbol = symbol_map.get(coin)
+                            if symbol and exchange is not None:
+                                try:
+                                    ticker = exchange.fetch_ticker(symbol)
+                                    last_price = ticker.get('last') if isinstance(
+                                        ticker, dict) else None
+                                    if last_price is None:
+                                        last_price = ticker.get('close') if isinstance(
+                                            ticker, dict) else None
+                                    if last_price is not None:
+                                        valued = float(amt) * float(last_price)
+                                except Exception:
+                                    valued = None
+                            if valued is None:
+                                # Fallback: use cost basis as current value when available
+                                if coin in snapshot['holdings_cost_basis_eur']:
+                                    valued = float(
+                                        snapshot['holdings_cost_basis_eur'][coin])
+                                else:
+                                    valued = 0.0
+                            snapshot['holdings_value_eur'][coin] = float(
+                                valued)
+                except Exception:
+                    # On any failure above, fall back to cost-basis mapping
+                    for coin, amt in snapshot['holdings_amount_coin'].items():
+                        if coin in snapshot['holdings_cost_basis_eur']:
+                            snapshot['holdings_value_eur'][coin] = float(
+                                snapshot['holdings_cost_basis_eur'][coin])
+                        else:
+                            snapshot['holdings_value_eur'][coin] = 0.0
+                # If possible and we're in DRY_RUN but not SIMULATE_DATA,
+                # prefer the live Kraken start value over the synthetic
+                # snapshot so dashboards reflect the real account value.
+                try:
+                    start_val = self.read_portfolio_start_value()
+                    if (
+                        start_val
+                        and float(start_val) > 0.0
+                        and self._env_bool('DRY_RUN', False)
+                        and not self._env_bool('SIMULATE_DATA', False)
+                    ):
+                        snapshot['portfolio_value_eur'] = float(start_val)
+                except Exception:
+                    pass
+                return snapshot
+        except Exception:
+            # If snapshot file is unreadable, continue to bot log parsing fallback
+            pass
 
         if not os.path.exists(BOT_LOG_PATH):
             fallback = self._read_live_portfolio_snapshot_from_kraken()
@@ -1246,6 +1377,28 @@ class MetricsHandler(BaseHTTPRequestHandler):
         output.append('# TYPE trading_portfolio_value_eur gauge')
         output.append(
             f'trading_portfolio_value_eur {metrics.get("portfolio_value_eur", 0.0)}')
+
+        # Portfolio return (absolute and percent) relative to start value
+        try:
+            start_val = float(metrics.get(
+                'portfolio_start_value_eur', 0.0) or 0.0)
+            curr_val = float(metrics.get('portfolio_value_eur', 0.0) or 0.0)
+            return_eur = curr_val - start_val
+            return_pct = (return_eur / start_val *
+                          100.0) if start_val > 0.0 else 0.0
+        except Exception:
+            return_eur = 0.0
+            return_pct = 0.0
+
+        output.append(
+            '# HELP trading_portfolio_return_eur Absolute portfolio return since start (EUR)')
+        output.append('# TYPE trading_portfolio_return_eur gauge')
+        output.append(f'trading_portfolio_return_eur {return_eur}')
+
+        output.append(
+            '# HELP trading_portfolio_return_pct Portfolio return since start in percent (%%)')
+        output.append('# TYPE trading_portfolio_return_pct gauge')
+        output.append(f'trading_portfolio_return_pct {return_pct}')
 
         output.append(
             '# HELP trading_portfolio_cash_eur Latest portfolio cash from bot log (EUR)')

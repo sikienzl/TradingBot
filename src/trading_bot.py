@@ -292,12 +292,22 @@ class Portfolio:
         self.open_trades: Dict[str, Dict] = {}
         self.last_update: Optional[datetime] = None
         self.initial_portfolio_value: Optional[float] = None
-        self.state_file: str = ".portfolio_state.json"  # Persistency file for dry-run
+        # Persistency file for dry-run / simulation. Prefer explicit env override.
+        self.state_file: str = os.getenv(
+            'PORTFOLIO_STATE_PATH', '/opt/trading_2/.portfolio_state.json')
 
     def save_state(self, filepath: Optional[str] = None) -> bool:
         """Save portfolio state to JSON file (for dry-run persistency)."""
         try:
             state_file = filepath or self.state_file
+            # Ensure parent directory exists
+            parent = os.path.dirname(state_file)
+            if parent and not os.path.exists(parent):
+                try:
+                    os.makedirs(parent, exist_ok=True)
+                except Exception:
+                    pass
+
             state = {
                 'cash': self.cash,
                 'holdings': self.holdings,
@@ -309,6 +319,28 @@ class Portfolio:
             with open(state_file, 'w') as f:
                 json.dump(state, f, indent=2, default=lambda o: o.isoformat(
                 ) if isinstance(o, datetime) else str(o))
+            # Ensure the file has secure permissions and, when possible, correct ownership
+            try:
+                os.chmod(state_file, 0o640)
+            except Exception:
+                pass
+            try:
+                # Prefer shutil.chown where available (handles names)
+                try:
+                    shutil.chown(state_file, user='trading', group='trading')
+                except Exception:
+                    # Fallback to os.chown with numeric ids if possible
+                    try:
+                        import pwd
+                        import grp
+
+                        uid = pwd.getpwnam('trading').pw_uid
+                        gid = grp.getgrnam('trading').gr_gid
+                        os.chown(state_file, uid, gid)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             logger.debug(f"Portfolio state saved to {state_file}")
             return True
         except Exception as e:
@@ -327,7 +359,26 @@ class Portfolio:
             self.cash = float(state.get('cash', 0.0))
             self.holdings = {k: float(v)
                              for k, v in state.get('holdings', {}).items()}
-            self.open_trades = state.get('open_trades', {})
+            # Normalize open_trades: older snapshots or manual files may store a
+            # list; the code expects a dict keyed by coin symbol. Coerce to dict.
+            raw_open_trades = state.get('open_trades', {})
+            if isinstance(raw_open_trades, dict):
+                self.open_trades = raw_open_trades
+            else:
+                try:
+                    # If it's a list of trade entries, convert to dict using coin field
+                    if isinstance(raw_open_trades, list):
+                        converted = {}
+                        for entry in raw_open_trades:
+                            coin_key = entry.get('coin') if isinstance(
+                                entry, dict) else None
+                            if coin_key:
+                                converted[coin_key] = entry
+                        self.open_trades = converted
+                    else:
+                        self.open_trades = {}
+                except Exception:
+                    self.open_trades = {}
             initial_value = state.get('initial_portfolio_value')
             self.initial_portfolio_value = float(
                 initial_value) if initial_value not in (None, '') else None
@@ -4022,8 +4073,8 @@ class CryptoTradingBot:
                     'reason': reason,
                     'dry_run': True,
                 })
-                # Persist portfolio state after successful dry-run buy
-                if self.config.dry_run:
+                # Persist portfolio state after successful dry-run or simulation buy
+                if self.config.dry_run or self.config.simulate_data:
                     self.portfolio.save_state()
             elif action == "sell":
                 held = self.portfolio.holdings.get(coin, 0.0)
@@ -4072,8 +4123,8 @@ class CryptoTradingBot:
                         entry_trade.get('amount_base', 0.0)) * remaining_ratio
                 else:
                     self.portfolio.remove_trade(coin)
-                # Persist portfolio state after successful dry-run sell
-                if self.config.dry_run:
+                # Persist portfolio state after successful dry-run or simulation sell
+                if self.config.dry_run or self.config.simulate_data:
                     self.portfolio.save_state()
             return True
 
@@ -4386,6 +4437,25 @@ class CryptoTradingBot:
         if self.config.simulate_data:
             logger.warning(
                 "SIMULATION MODE IS ACTIVE! No real exchange data will be fetched or trades executed.")
+
+        # Ensure there's a persistent portfolio snapshot at startup so monitoring
+        # components (exporter / prometheus) have something to read even before
+        # the bot performs any trades.
+        try:
+            try:
+                restored = self.portfolio.load_state()
+            except Exception:
+                restored = False
+            if not restored:
+                saved = self.portfolio.save_state()
+                if saved:
+                    logger.info(
+                        f"Initial portfolio snapshot written to {self.portfolio.state_file}")
+                else:
+                    logger.warning(
+                        f"Could not write initial portfolio snapshot to {self.portfolio.state_file}")
+        except Exception as exc:
+            logger.warning(f"Failed to initialize portfolio snapshot: {exc}")
 
         try:
             while True:
@@ -4779,7 +4849,9 @@ class CryptoTradingBot:
                                             'recommendation', 'HOLD'),
                                         reason='ENTRY',
                                     ):
-                                        successful_buy_count += 1
+                                        # Persist portfolio state after successful dry-run or simulation buy
+                                        if self.config.dry_run or self.config.simulate_data:
+                                            self.portfolio.save_state()
                                         # Update available capital
                                         available_funds_for_trade = self.portfolio.cash
                                         current_open_trades_count = len(
@@ -4835,7 +4907,7 @@ class CryptoTradingBot:
                     {coin: data['price'] for coin, data in current_market_data.items()})
                 if self.portfolio.initial_portfolio_value is None:
                     self.portfolio.initial_portfolio_value = portfolio_value
-                    if self.config.dry_run:
+                    if self.config.dry_run or self.config.simulate_data:
                         self.portfolio.save_state()
                 logger.info(
                     f"📈 Portfolio value: {portfolio_value:.2f} {self.config.base_currency}")
