@@ -1,8 +1,10 @@
 {
   "__inputs": [],
   "__requires": [],
-  "annotations": { "list": [] },
-  "description": "Trading Bot operational dashboard — scorecard verdict, system health, Pi metrics",
+  "annotations": {
+    "list": []
+  },
+  "description": "Trading Bot operational dashboard \u2014 scorecard verdict, system health, Pi metrics",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -13,593 +15,1560 @@
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "mappings": [
-            { "options": { "0": { "color": "green",  "index": 0, "text": "GO" },
-                           "2": { "color": "yellow", "index": 1, "text": "HOLD" },
-                           "3": { "color": "red",    "index": 2, "text": "NO-GO" },
-                           "4": { "color": "blue",   "index": 3, "text": "MAINTENANCE" } },
-              "type": "value" }
+            {
+              "options": {
+                "0": {
+                  "color": "green",
+                  "index": 0,
+                  "text": "GO"
+                },
+                "2": {
+                  "color": "yellow",
+                  "index": 1,
+                  "text": "HOLD"
+                },
+                "3": {
+                  "color": "red",
+                  "index": 2,
+                  "text": "NO-GO"
+                },
+                "4": {
+                  "color": "blue",
+                  "index": 3,
+                  "text": "MAINTENANCE"
+                }
+              },
+              "type": "value"
+            }
           ],
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green",  "value": null },
-            { "color": "yellow", "value": 2 },
-            { "color": "red",    "value": 3 }
-          ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 2
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "auto"
+      },
       "title": "Scorecard Verdict",
       "type": "stat",
-      "targets": [{ "expr": "trading_scorecard_final_exit_code", "legendFormat": "Verdict", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "(trading_scorecard_final_exit_code) or vector(0)",
+          "legendFormat": "Verdict",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "decimals": 0,
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "yellow", "value": 30 },
-            { "color": "red", "value": 120 }
-          ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 30
+              },
+              {
+                "color": "red",
+                "value": 120
+              }
+            ]
+          },
           "unit": "s"
         }
       },
-      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 44 },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 44
+      },
       "id": 31,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
       "title": "Portfolio Snapshot Age",
       "type": "stat",
-      "targets": [{ "expr": "trading_portfolio_snapshot_age_seconds", "legendFormat": "Age", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_portfolio_snapshot_age_seconds",
+          "legendFormat": "Age",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "yellow", "value": 300 },
-            { "color": "red",    "value": 600 }
-          ] },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 300
+              },
+              {
+                "color": "red",
+                "value": 600
+              }
+            ]
+          },
           "unit": "s"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
       "id": 2,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "auto"
+      },
       "title": "Metrics Age",
       "type": "stat",
-      "targets": [{ "expr": "time() - trading_scorecard_timestamp_seconds", "legendFormat": "Age", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "time() - trading_scorecard_timestamp_seconds",
+          "legendFormat": "Age",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green",  "value": null },
-            { "color": "yellow", "value": 55 },
-            { "color": "red",    "value": 70 }
-          ] },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 55
+              },
+              {
+                "color": "red",
+                "value": 70
+              }
+            ]
+          },
           "unit": "celsius"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
       "id": 3,
-      "options": { "colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "auto"
+      },
       "title": "CPU Temperature",
       "type": "stat",
-      "targets": [{ "expr": "node_hwmon_temp_celsius{chip=\"thermal_thermal_zone0\",sensor=\"temp0\"}", "legendFormat": "°C", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "node_hwmon_temp_celsius{chip=\"thermal_thermal_zone0\",sensor=\"temp0\"}",
+          "legendFormat": "\u00b0C",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "max": 100,
           "min": 0,
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green",  "value": null },
-            { "color": "yellow", "value": 70 },
-            { "color": "red",    "value": 90 }
-          ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
           "unit": "percent"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
       "id": 4,
-      "options": { "colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "auto"
+      },
       "title": "RAM Used % (per node)",
       "type": "stat",
-      "targets": [{ "expr": "100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)", "legendFormat": "{{instance}}", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": { "color": { "mode": "palette-classic" }, "unit": "percent" },
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "percent"
+        },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
       "id": 5,
-      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
       "title": "CPU Usage % (per node)",
       "type": "timeseries",
-      "targets": [{
-        "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[2m])) * 100)",
-        "legendFormat": "{{instance}}",
-        "refId": "A"
-      }]
+      "targets": [
+        {
+          "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[2m])) * 100)",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": { "color": { "mode": "palette-classic" }, "unit": "bytes" },
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "bytes"
+        },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
       "id": 6,
-      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
       "title": "Memory",
       "type": "timeseries",
       "targets": [
-        { "expr": "node_memory_MemTotal_bytes",     "legendFormat": "Total",     "refId": "A" },
-        { "expr": "node_memory_MemAvailable_bytes", "legendFormat": "Available", "refId": "B" }
+        {
+          "expr": "node_memory_MemTotal_bytes",
+          "legendFormat": "Total",
+          "refId": "A"
+        },
+        {
+          "expr": "node_memory_MemAvailable_bytes",
+          "legendFormat": "Available",
+          "refId": "B"
+        }
       ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": { "color": { "mode": "palette-classic" }, "unit": "celsius" },
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "celsius"
+        },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
       "id": 7,
-      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
       "title": "CPU Temperature Over Time",
       "type": "timeseries",
-      "targets": [{
-        "expr": "node_hwmon_temp_celsius{chip=\"thermal_thermal_zone0\",sensor=\"temp0\"}",
-        "legendFormat": "Temperature",
-        "refId": "A"
-      }]
+      "targets": [
+        {
+          "expr": "node_hwmon_temp_celsius{chip=\"thermal_thermal_zone0\",sensor=\"temp0\"}",
+          "legendFormat": "Temperature",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" },
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short"
+        },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
       "id": 8,
-      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
       "title": "Scorecard Verdict History",
       "type": "timeseries",
-      "targets": [{
-        "expr": "trading_scorecard_final_exit_code",
-        "legendFormat": "Exit Code (0=GO 2=HOLD 3=NO-GO)",
-        "refId": "A"
-      }]
+      "targets": [
+        {
+          "expr": "(trading_scorecard_final_exit_code) or vector(0)",
+          "legendFormat": "Exit Code (0=GO 2=HOLD 3=NO-GO)",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" },
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short"
+        },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
       "id": 9,
-      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
       "title": "System Load (1m / 15m)",
       "type": "timeseries",
       "targets": [
-        { "expr": "node_load1",  "legendFormat": "Load 1m",  "refId": "A" },
-        { "expr": "node_load15", "legendFormat": "Load 15m", "refId": "B" }
+        {
+          "expr": "node_load1",
+          "legendFormat": "Load 1m",
+          "refId": "A"
+        },
+        {
+          "expr": "node_load15",
+          "legendFormat": "Load 15m",
+          "refId": "B"
+        }
       ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": { "color": { "mode": "palette-classic" }, "unit": "bytes" },
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "bytes"
+        },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
       "id": 10,
-      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
       "title": "Disk Free (root /)",
       "type": "timeseries",
-      "targets": [{
-        "expr": "node_filesystem_avail_bytes{mountpoint=\"/\",fstype=\"ext4\"}",
-        "legendFormat": "Free on /",
-        "refId": "A"
-      }]
+      "targets": [
+        {
+          "expr": "node_filesystem_avail_bytes{mountpoint=\"/\",fstype=\"ext4\"}",
+          "legendFormat": "Free on /",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "red", "value": null },
-            { "color": "yellow", "value": 50 },
-            { "color": "green", "value": 100 }
-          ] },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "green",
+                "value": 100
+              }
+            ]
+          },
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 28 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 28
+      },
       "id": 12,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      },
       "title": "Closed Trades",
       "type": "stat",
-      "targets": [{ "expr": "trading_scorecard_closed_trades", "legendFormat": "Closed", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_scorecard_closed_trades",
+          "legendFormat": "Closed",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "max": 100,
           "min": 0,
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "red", "value": null },
-            { "color": "yellow", "value": 45 },
-            { "color": "green", "value": 50 }
-          ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 45
+              },
+              {
+                "color": "green",
+                "value": 50
+              }
+            ]
+          },
           "unit": "percent"
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 28 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 28
+      },
       "id": 13,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      },
       "title": "Win Rate",
       "type": "stat",
-      "targets": [{ "expr": "trading_scorecard_win_rate_percent", "legendFormat": "Win Rate", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_scorecard_win_rate_percent",
+          "legendFormat": "Win Rate",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "red", "value": null },
-            { "color": "yellow", "value": 1.0 },
-            { "color": "green", "value": 1.2 }
-          ] },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1.0
+              },
+              {
+                "color": "green",
+                "value": 1.2
+              }
+            ]
+          },
           "unit": "short"
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "Profit Factor" },
+            "matcher": {
+              "id": "byName",
+              "options": "Profit Factor"
+            },
             "properties": [
               {
                 "id": "mappings",
                 "value": [
-                  { "options": { "match": "-1", "result": { "color": "green", "text": "inf" } }, "type": "value" }
+                  {
+                    "options": {
+                      "match": "-1",
+                      "result": {
+                        "color": "green",
+                        "text": "inf"
+                      }
+                    },
+                    "type": "value"
+                  }
                 ]
               }
             ]
           }
         ]
       },
-      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 28 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 28
+      },
       "id": 14,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      },
       "title": "Profit Factor",
       "type": "stat",
-      "targets": [{ "expr": "trading_scorecard_profit_factor", "legendFormat": "Profit Factor", "refId": "A" }]
-    },
-    {
-      "datasource": "Prometheus",
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "red", "value": null },
-            { "color": "green", "value": 0 }
-          ] },
-          "unit": "currencyEUR"
+      "targets": [
+        {
+          "expr": "(trading_scorecard_profit_factor) or vector(0)",
+          "legendFormat": "Profit Factor",
+          "refId": "A"
         }
-      },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 28 },
-      "id": 15,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
-      "title": "Realized PnL",
-      "type": "stat",
-      "targets": [{ "expr": "trading_scorecard_realized_pnl", "legendFormat": "PnL", "refId": "A" }]
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "yellow", "value": 10 },
-            { "color": "red", "value": 15 }
-          ] },
-          "unit": "percent"
-        }
-      },
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 28 },
-      "id": 16,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
-      "title": "Max Drawdown %",
-      "type": "stat",
-      "targets": [{ "expr": "trading_scorecard_max_drawdown_pct", "legendFormat": "Max DD %", "refId": "A" }]
-    },
-    {
-      "datasource": "Prometheus",
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "orange", "value": null }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "currencyEUR"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 28
+      },
+      "id": 15,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      },
+      "title": "Realized PnL",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "trading_scorecard_realized_pnl",
+          "legendFormat": "PnL",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 15
+              }
+            ]
+          },
+          "unit": "percent"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 28
+      },
+      "id": 16,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      },
+      "title": "Max Drawdown %",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "trading_scorecard_max_drawdown_pct",
+          "legendFormat": "Max DD %",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              }
             ]
           },
           "unit": "short"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 32 },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
       "id": 11,
       "options": {
         "colorMode": "background",
         "graphMode": "none",
         "justifyMode": "center",
         "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "textMode": "name"
       },
       "title": "Primary Fail Reason",
       "type": "stat",
-      "targets": [{
-        "expr": "trading_scorecard_fail_reason",
-        "legendFormat": "{{reason}}",
-        "refId": "A"
-      }]
-    },
-    {
-      "datasource": "Prometheus",
-      "fieldConfig": {
-        "defaults": { "color": { "mode": "palette-classic" }, "unit": "percent" },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
-      "id": 17,
-      "options": { "legend": { "calcs": ["lastNotNull", "min", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "title": "Trading KPI History (%)",
-      "type": "timeseries",
       "targets": [
-        { "expr": "trading_win_rate", "legendFormat": "Win Rate %", "refId": "A" },
-        { "expr": "trading_max_drawdown_pct", "legendFormat": "Max DD %", "refId": "B" }
+        {
+          "expr": "trading_scorecard_fail_reason",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
       ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" },
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 36
+      },
+      "id": 17,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "title": "Trading KPI History (%)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "trading_win_rate",
+          "legendFormat": "Win Rate %",
+          "refId": "A"
+        },
+        {
+          "expr": "trading_max_drawdown_pct",
+          "legendFormat": "Max DD %",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short"
+        },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "Realized PnL" },
+            "matcher": {
+              "id": "byName",
+              "options": "Realized PnL"
+            },
             "properties": [
-              { "id": "unit", "value": "currencyEUR" }
+              {
+                "id": "unit",
+                "value": "currencyEUR"
+              }
             ]
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 36
+      },
       "id": 18,
-      "options": { "legend": { "calcs": ["lastNotNull", "min", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
       "title": "Trading KPI History (Absolute)",
       "type": "timeseries",
       "targets": [
-        { "expr": "trading_closed_trades", "legendFormat": "Closed Trades", "refId": "A" },
-        { "expr": "trading_profit_factor", "legendFormat": "Profit Factor", "refId": "B" },
-        { "expr": "trading_realized_pnl_usd", "legendFormat": "Realized PnL", "refId": "C" }
+        {
+          "expr": "trading_closed_trades",
+          "legendFormat": "Closed Trades",
+          "refId": "A"
+        },
+        {
+          "expr": "trading_profit_factor",
+          "legendFormat": "Profit Factor",
+          "refId": "B"
+        },
+        {
+          "expr": "trading_realized_pnl_usd",
+          "legendFormat": "Realized PnL",
+          "refId": "C"
+        }
       ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "yellow", "value": 5 },
-            { "color": "red", "value": 10 }
-          ] },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 44 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 44
+      },
       "id": 19,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      },
       "title": "AI Daily Calls",
       "type": "stat",
-      "targets": [{ "expr": "trading_ai_copilot_daily_calls", "legendFormat": "Daily", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "(trading_ai_copilot_daily_calls) or vector(0)",
+          "legendFormat": "Daily",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "yellow", "value": 250 },
-            { "color": "red", "value": 500 }
-          ] },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 250
+              },
+              {
+                "color": "red",
+                "value": 500
+              }
+            ]
+          },
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 44 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 44
+      },
       "id": 20,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      },
       "title": "AI Monthly Calls",
       "type": "stat",
-      "targets": [{ "expr": "trading_ai_copilot_monthly_calls", "legendFormat": "Monthly", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "(trading_ai_copilot_monthly_calls) or vector(0)",
+          "legendFormat": "Monthly",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "yellow", "value": 1 },
-            { "color": "red", "value": 3 }
-          ] },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
           "unit": "currencyUSD"
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 44 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 44
+      },
       "id": 21,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      },
       "title": "Mammouth Spend",
       "type": "stat",
-      "targets": [{ "expr": "trading_ai_copilot_monthly_spend_usd", "legendFormat": "Spend", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "(trading_ai_copilot_monthly_spend_usd) or vector(0)",
+          "legendFormat": "Spend",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "yellow", "value": 0.25 },
-            { "color": "red", "value": 0.75 }
-          ] },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.25
+              },
+              {
+                "color": "red",
+                "value": 0.75
+              }
+            ]
+          },
           "unit": "currencyUSD"
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 44 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 44
+      },
       "id": 30,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      },
       "title": "Benchmark Spend",
       "type": "stat",
-      "targets": [{ "expr": "trading_ai_copilot_benchmark_monthly_spend_usd", "legendFormat": "Benchmark", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_ai_copilot_benchmark_monthly_spend_usd",
+          "legendFormat": "Benchmark",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "blue", "value": null },
-            { "color": "green", "value": 1 }
-          ] },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 40 },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 40
+      },
       "id": 28,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
       "title": "Open Positions",
       "type": "stat",
-      "targets": [{ "expr": "trading_open_positions_count", "legendFormat": "Current", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_open_positions_count",
+          "legendFormat": "Current",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "decimals": 2,
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "red", "value": null },
-            { "color": "green", "value": 0 }
-          ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
           "unit": "currencyEUR"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 40 },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 40
+      },
       "id": 27,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
       "title": "Unrealized PnL",
       "type": "stat",
-      "targets": [{ "expr": "trading_current_holdings_unrealized_pnl_total_eur", "legendFormat": "Current", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_current_holdings_unrealized_pnl_total_eur",
+          "legendFormat": "Current",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "yellow", "value": 1 },
-            { "color": "red", "value": 3 }
-          ] },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 48 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 48
+      },
       "id": 33,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
       "title": "Open Simulated Buys",
       "type": "stat",
-      "targets": [{ "expr": "trading_open_positions_count", "legendFormat": "Open", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_open_positions_count",
+          "legendFormat": "Open",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "short"
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 8, "x": 4, "y": 48 },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 4,
+        "y": 48
+      },
       "id": 34,
-      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
       "title": "Open Position History",
       "type": "timeseries",
-      "targets": [{ "expr": "trading_open_positions_count", "legendFormat": "Open Positions", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_open_positions_count",
+          "legendFormat": "Open Positions",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "decimals": 2,
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "red", "value": null },
-            { "color": "yellow", "value": 0 },
-            { "color": "green", "value": 20 }
-          ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 20
+              }
+            ]
+          },
           "unit": "currencyEUR"
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 44 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 44
+      },
       "id": 22,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
       "title": "Portfolio Value",
       "type": "stat",
-      "targets": [{ "expr": "trading_portfolio_value_eur", "legendFormat": "Current", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_portfolio_value_eur",
+          "legendFormat": "Current",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "decimals": 2,
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "blue", "value": null }
-          ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
           "unit": "currencyEUR"
         }
       },
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 44 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 44
+      },
       "id": 23,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
       "title": "Portfolio Start",
       "type": "stat",
-      "targets": [{ "expr": "trading_portfolio_start_value_eur", "legendFormat": "Start", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "(trading_portfolio_start_value_eur) or vector(0)",
+          "legendFormat": "Start",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
@@ -608,49 +1577,106 @@
         "defaults": {},
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "Bought (EUR)" },
+            "matcher": {
+              "id": "byName",
+              "options": "Bought (EUR)"
+            },
             "properties": [
-              { "id": "unit", "value": "currencyEUR" },
-              { "id": "decimals", "value": 2 }
+              {
+                "id": "unit",
+                "value": "currencyEUR"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Current Value (EUR)" },
+            "matcher": {
+              "id": "byName",
+              "options": "Current Value (EUR)"
+            },
             "properties": [
-              { "id": "unit", "value": "currencyEUR" },
-              { "id": "decimals", "value": 2 }
+              {
+                "id": "unit",
+                "value": "currencyEUR"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Amount (Coin)" },
+            "matcher": {
+              "id": "byName",
+              "options": "Amount (Coin)"
+            },
             "properties": [
-              { "id": "unit", "value": "short" },
-              { "id": "decimals", "value": 8 }
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "decimals",
+                "value": 8
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Unrealized PnL (EUR)" },
+            "matcher": {
+              "id": "byName",
+              "options": "Unrealized PnL (EUR)"
+            },
             "properties": [
-              { "id": "unit", "value": "currencyEUR" },
-              { "id": "decimals", "value": 2 }
+              {
+                "id": "unit",
+                "value": "currencyEUR"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
             ]
           }
         ]
       },
-      "gridPos": { "h": 16, "w": 24, "x": 0, "y": 48 },
+      "gridPos": {
+        "h": 16,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
       "id": 24,
       "options": {
         "cellHeight": "sm",
-        "footer": { "show": false },
+        "footer": {
+          "show": false
+        },
         "showHeader": true,
         "sortBy": [
-          { "desc": true, "displayName": "Current Value (EUR)" }
+          {
+            "desc": true,
+            "displayName": "Current Value (EUR)"
+          }
         ]
       },
       "title": "Current Open Holdings",
       "transformations": [
-        { "id": "labelsToFields", "options": { "mode": "columns" } },
-        { "id": "joinByField", "options": { "byField": "coin", "mode": "outer" } },
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "coin",
+            "mode": "outer"
+          }
+        },
         {
           "id": "organize",
           "options": {
@@ -688,10 +1714,38 @@
       ],
       "type": "table",
       "targets": [
-        { "expr": "trading_current_holding_cost_basis_eur", "format": "table", "instant": true, "legendFormat": "{{coin}}", "range": false, "refId": "A" },
-        { "expr": "trading_current_holding_value_eur", "format": "table", "instant": true, "legendFormat": "{{coin}}", "range": false, "refId": "B" },
-        { "expr": "trading_current_holding_amount_coin", "format": "table", "instant": true, "legendFormat": "{{coin}}", "range": false, "refId": "C" },
-        { "expr": "trading_current_holding_unrealized_pnl_eur", "format": "table", "instant": true, "legendFormat": "{{coin}}", "range": false, "refId": "D" }
+        {
+          "expr": "trading_current_holding_cost_basis_eur",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{coin}}",
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "expr": "trading_current_holding_value_eur",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{coin}}",
+          "range": false,
+          "refId": "B"
+        },
+        {
+          "expr": "trading_current_holding_amount_coin",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{coin}}",
+          "range": false,
+          "refId": "C"
+        },
+        {
+          "expr": "trading_current_holding_unrealized_pnl_eur",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{coin}}",
+          "range": false,
+          "refId": "D"
+        }
       ]
     },
     {
@@ -701,35 +1755,74 @@
         "defaults": {},
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "Buy Volume (EUR)" },
+            "matcher": {
+              "id": "byName",
+              "options": "Buy Volume (EUR)"
+            },
             "properties": [
-              { "id": "unit", "value": "currencyEUR" },
-              { "id": "decimals", "value": 2 }
+              {
+                "id": "unit",
+                "value": "currencyEUR"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Buy Count" },
+            "matcher": {
+              "id": "byName",
+              "options": "Buy Count"
+            },
             "properties": [
-              { "id": "unit", "value": "short" },
-              { "id": "decimals", "value": 0 }
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
             ]
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 64 },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 64
+      },
       "id": 25,
       "options": {
         "cellHeight": "sm",
-        "footer": { "show": false },
+        "footer": {
+          "show": false
+        },
         "showHeader": true,
         "sortBy": [
-          { "desc": true, "displayName": "Buy Volume (EUR)" }
+          {
+            "desc": true,
+            "displayName": "Buy Volume (EUR)"
+          }
         ]
       },
       "title": "Recent Buy Activity (24h)",
       "transformations": [
-        { "id": "labelsToFields", "options": { "mode": "columns" } },
-        { "id": "joinByField", "options": { "byField": "coin", "mode": "outer" } },
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "coin",
+            "mode": "outer"
+          }
+        },
         {
           "id": "organize",
           "options": {
@@ -763,72 +1856,194 @@
       ],
       "type": "table",
       "targets": [
-        { "expr": "trading_coin_buy_count", "format": "table", "instant": true, "legendFormat": "{{coin}}", "range": false, "refId": "A" },
-        { "expr": "trading_coin_buy_volume_eur", "format": "table", "instant": true, "legendFormat": "{{coin}}", "range": false, "refId": "B" }
+        {
+          "expr": "trading_coin_buy_count",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{coin}}",
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "expr": "trading_coin_buy_volume_eur",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{coin}}",
+          "range": false,
+          "refId": "B"
+        }
       ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "yellow", "value": 50 },
-            { "color": "red", "value": 200 }
-          ] },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 200
+              }
+            ]
+          },
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 72 },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 72
+      },
       "id": 32,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
       "title": "Benchmark Monthly Calls",
       "type": "stat",
-      "targets": [{ "expr": "trading_ai_copilot_benchmark_monthly_calls", "legendFormat": "Benchmark", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_ai_copilot_benchmark_monthly_calls",
+          "legendFormat": "Benchmark",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "max": 100,
           "min": 0,
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "yellow", "value": 40 },
-            { "color": "red", "value": 80 }
-          ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 40
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
           "unit": "percent"
         }
       },
-      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 72 },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 72
+      },
       "id": 33,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
       "title": "Benchmark Budget Used %",
       "type": "stat",
-      "targets": [{ "expr": "trading_ai_copilot_benchmark_budget_used_pct", "legendFormat": "Budget", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_ai_copilot_benchmark_budget_used_pct",
+          "legendFormat": "Budget",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "description": "Primary AI monthly spend minus benchmark monthly spend. Positive means the benchmark model is currently cheaper.",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "red", "value": null },
-            { "color": "yellow", "value": 0 },
-            { "color": "green", "value": 0.01 }
-          ] },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 0.01
+              }
+            ]
+          },
           "unit": "currencyUSD"
         }
       },
-      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 72 },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 72
+      },
       "id": 34,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
       "title": "Spend Delta",
       "type": "stat",
-      "targets": [{ "expr": "trading_ai_copilot_monthly_spend_usd - trading_ai_copilot_benchmark_monthly_spend_usd", "legendFormat": "Primary - Benchmark", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_ai_copilot_monthly_spend_usd - trading_ai_copilot_benchmark_monthly_spend_usd",
+          "legendFormat": "Primary - Benchmark",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
@@ -837,19 +2052,34 @@
         "defaults": {},
         "overrides": []
       },
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 76 },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 76
+      },
       "id": 35,
       "options": {
         "cellHeight": "sm",
-        "footer": { "show": false },
+        "footer": {
+          "show": false
+        },
         "showHeader": true,
         "sortBy": [
-          { "desc": false, "displayName": "Role" }
+          {
+            "desc": false,
+            "displayName": "Role"
+          }
         ]
       },
       "title": "AI Models",
       "transformations": [
-        { "id": "labelsToFields", "options": { "mode": "columns" } },
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
         {
           "id": "organize",
           "options": {
@@ -873,7 +2103,12 @@
       ],
       "type": "table",
       "targets": [
-        { "expr": "trading_ai_copilot_model_info", "format": "table", "instant": true, "refId": "A" }
+        {
+          "expr": "trading_ai_copilot_model_info",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
       ]
     },
     {
@@ -883,53 +2118,110 @@
         "defaults": {},
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "Mode" },
+            "matcher": {
+              "id": "byName",
+              "options": "Mode"
+            },
             "properties": [
-              { "id": "custom.width", "value": 140 }
+              {
+                "id": "custom.width",
+                "value": 140
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Parameter" },
+            "matcher": {
+              "id": "byName",
+              "options": "Parameter"
+            },
             "properties": [
-              { "id": "custom.width", "value": 180 }
+              {
+                "id": "custom.width",
+                "value": 180
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Suggested Value" },
+            "matcher": {
+              "id": "byName",
+              "options": "Suggested Value"
+            },
             "properties": [
-              { "id": "decimals", "value": 2 }
+              {
+                "id": "decimals",
+                "value": 2
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Confidence" },
+            "matcher": {
+              "id": "byName",
+              "options": "Confidence"
+            },
             "properties": [
-              { "id": "unit", "value": "percentunit" },
-              { "id": "decimals", "value": 2 }
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Age (min)" },
+            "matcher": {
+              "id": "byName",
+              "options": "Age (min)"
+            },
             "properties": [
-              { "id": "unit", "value": "m" },
-              { "id": "decimals", "value": 1 }
+              {
+                "id": "unit",
+                "value": "m"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
             ]
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 82 },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 82
+      },
       "id": 29,
       "options": {
         "cellHeight": "sm",
-        "footer": { "show": false },
+        "footer": {
+          "show": false
+        },
         "showHeader": true,
         "sortBy": [
-          { "desc": false, "displayName": "Rank" }
+          {
+            "desc": false,
+            "displayName": "Rank"
+          }
         ]
       },
       "title": "AI Suggestions",
       "transformations": [
-        { "id": "labelsToFields", "options": { "mode": "columns" } },
-        { "id": "joinByField", "options": { "byField": "suggestion_id", "mode": "outer" } },
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "suggestion_id",
+            "mode": "outer"
+          }
+        },
         {
           "id": "organize",
           "options": {
@@ -977,9 +2269,30 @@
       ],
       "type": "table",
       "targets": [
-        { "expr": "trading_ai_copilot_shadow_suggestion_value", "format": "table", "instant": true, "legendFormat": "{{parameter}}", "range": false, "refId": "A" },
-        { "expr": "trading_ai_copilot_shadow_suggestion_confidence", "format": "table", "instant": true, "legendFormat": "{{parameter}}", "range": false, "refId": "B" },
-        { "expr": "trading_ai_copilot_shadow_suggestion_age_minutes", "format": "table", "instant": true, "legendFormat": "{{parameter}}", "range": false, "refId": "C" }
+        {
+          "expr": "trading_ai_copilot_shadow_suggestion_value",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{parameter}}",
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "expr": "trading_ai_copilot_shadow_suggestion_confidence",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{parameter}}",
+          "range": false,
+          "refId": "B"
+        },
+        {
+          "expr": "trading_ai_copilot_shadow_suggestion_age_minutes",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{parameter}}",
+          "range": false,
+          "refId": "C"
+        }
       ]
     },
     {
@@ -987,362 +2300,926 @@
       "description": "All-time realized PnL from the live exporter.",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "decimals": 2,
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "red", "value": null },
-            { "color": "green", "value": 0 }
-          ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
           "unit": "currencyEUR"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 90 },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 90
+      },
       "id": 36,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
       "title": "Live Realized PnL (All-time)",
       "type": "stat",
-      "targets": [{ "expr": "trading_realized_pnl_usd_all_time", "legendFormat": "All-time", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_realized_pnl_usd_all_time",
+          "legendFormat": "All-time",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "red", "value": null },
-            { "color": "yellow", "value": 1.0 },
-            { "color": "green", "value": 1.2 }
-          ] },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1.0
+              },
+              {
+                "color": "green",
+                "value": 1.2
+              }
+            ]
+          },
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 90 },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 90
+      },
       "id": 37,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
       "title": "Live Profit Factor (24h)",
       "type": "stat",
-      "targets": [{ "expr": "trading_profit_factor", "legendFormat": "24h", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_profit_factor",
+          "legendFormat": "24h",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "max": 100,
           "min": 0,
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "red", "value": null },
-            { "color": "yellow", "value": 45 },
-            { "color": "green", "value": 52 }
-          ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 45
+              },
+              {
+                "color": "green",
+                "value": 52
+              }
+            ]
+          },
           "unit": "percent"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 90 },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 90
+      },
       "id": 38,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
       "title": "Live Win Rate (24h)",
       "type": "stat",
-      "targets": [{ "expr": "trading_win_rate", "legendFormat": "24h", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_win_rate",
+          "legendFormat": "24h",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "red", "value": null },
-            { "color": "yellow", "value": 10 },
-            { "color": "green", "value": 30 }
-          ] },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "green",
+                "value": 30
+              }
+            ]
+          },
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 90 },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 90
+      },
       "id": 39,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
       "title": "Live Closed Trades (24h)",
       "type": "stat",
-      "targets": [{ "expr": "trading_closed_trades", "legendFormat": "24h", "refId": "A" }]
-    },
-    {
-      "datasource": "Prometheus",
-      "fieldConfig": {
-        "defaults": { "color": { "mode": "palette-classic" }, "unit": "currencyEUR" },
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "Scorecard Realized PnL" },
-            "properties": [
-              { "id": "custom.lineStyle", "value": { "dash": [8, 4], "fill": "dash" } }
-            ]
-          }
-        ]
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 94 },
-      "id": 40,
-      "options": { "legend": { "calcs": ["lastNotNull", "min", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "title": "Live vs Scorecard Realized PnL",
-      "type": "timeseries",
       "targets": [
-        { "expr": "trading_realized_pnl_usd", "legendFormat": "Live Realized PnL (24h)", "refId": "A" },
-        { "expr": "trading_scorecard_realized_pnl", "legendFormat": "Scorecard Realized PnL", "refId": "B" }
-      ]
-    },
-    {
-      "datasource": "Prometheus",
-      "fieldConfig": {
-        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" },
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "Live Win Rate (24h)" },
-            "properties": [
-              { "id": "unit", "value": "percent" }
-            ]
-          }
-        ]
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 94 },
-      "id": 41,
-      "options": { "legend": { "calcs": ["lastNotNull", "min", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "title": "Live Quality Metrics (24h)",
-      "type": "timeseries",
-      "targets": [
-        { "expr": "trading_profit_factor", "legendFormat": "Live Profit Factor (24h)", "refId": "A" },
-        { "expr": "trading_win_rate", "legendFormat": "Live Win Rate (24h)", "refId": "B" }
+        {
+          "expr": "trading_closed_trades",
+          "legendFormat": "24h",
+          "refId": "A"
+        }
       ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "currencyEUR"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Scorecard Realized PnL"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    8,
+                    4
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 94
+      },
+      "id": 40,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "title": "Live vs Scorecard Realized PnL",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "trading_realized_pnl_usd",
+          "legendFormat": "Live Realized PnL (24h)",
+          "refId": "A"
+        },
+        {
+          "expr": "trading_scorecard_realized_pnl",
+          "legendFormat": "Scorecard Realized PnL",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Live Win Rate (24h)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 94
+      },
+      "id": 41,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "title": "Live Quality Metrics (24h)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "trading_profit_factor",
+          "legendFormat": "Live Profit Factor (24h)",
+          "refId": "A"
+        },
+        {
+          "expr": "trading_win_rate",
+          "legendFormat": "Live Win Rate (24h)",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
           "mappings": [
             {
               "options": {
-                "0": { "color": "green", "index": 0, "text": "inactive" },
-                "1": { "color": "red", "index": 1, "text": "active" }
+                "0": {
+                  "color": "green",
+                  "index": 0,
+                  "text": "inactive"
+                },
+                "1": {
+                  "color": "red",
+                  "index": 1,
+                  "text": "active"
+                }
               },
               "type": "value"
             }
           ],
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "red", "value": 1 }
-          ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 102 },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 102
+      },
       "id": 42,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
       "title": "Recent PnL Guard",
       "type": "stat",
-      "targets": [{ "expr": "trading_recent_pnl_guard_active", "legendFormat": "State", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_recent_pnl_guard_active",
+          "legendFormat": "State",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "orange", "value": null }
-          ] },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              }
+            ]
+          },
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 18, "x": 6, "y": 102 },
+      "gridPos": {
+        "h": 4,
+        "w": 18,
+        "x": 6,
+        "y": 102
+      },
       "id": 43,
       "options": {
         "colorMode": "background",
         "graphMode": "none",
         "justifyMode": "center",
         "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "textMode": "name"
       },
       "title": "Recent PnL Guard Reason",
       "type": "stat",
-      "targets": [{ "expr": "trading_recent_pnl_guard_reason", "legendFormat": "{{reason}}", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_recent_pnl_guard_reason",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "decimals": 4,
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "red", "value": null },
-            { "color": "green", "value": 0 }
-          ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
           "unit": "currencyEUR"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 106 },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 106
+      },
       "id": 44,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
       "title": "Recent Realized PnL",
       "type": "stat",
-      "targets": [{ "expr": "trading_recent_pnl_guard_recent_realized_pnl", "legendFormat": "Recent", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_recent_pnl_guard_recent_realized_pnl",
+          "legendFormat": "Recent",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "red", "value": null },
-            { "color": "yellow", "value": 1.0 },
-            { "color": "green", "value": 1.2 }
-          ] },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1.0
+              },
+              {
+                "color": "green",
+                "value": 1.2
+              }
+            ]
+          },
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 106 },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 106
+      },
       "id": 45,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
       "title": "Recent Profit Factor",
       "type": "stat",
-      "targets": [{ "expr": "trading_recent_pnl_guard_recent_profit_factor", "legendFormat": "Recent", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_recent_pnl_guard_recent_profit_factor",
+          "legendFormat": "Recent",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "red", "value": null },
-            { "color": "yellow", "value": 30 },
-            { "color": "green", "value": 60 }
-          ] },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 30
+              },
+              {
+                "color": "green",
+                "value": 60
+              }
+            ]
+          },
           "unit": "short"
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 106 },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 106
+      },
       "id": 46,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      },
       "title": "Recent Closed Trades",
       "type": "stat",
-      "targets": [{ "expr": "trading_recent_pnl_guard_recent_closed_trades", "legendFormat": "Recent", "refId": "A" }]
+      "targets": [
+        {
+          "expr": "trading_recent_pnl_guard_recent_closed_trades",
+          "legendFormat": "Recent",
+          "refId": "A"
+        }
+      ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "short"
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "Recent PnL" },
+            "matcher": {
+              "id": "byName",
+              "options": "Recent PnL"
+            },
             "properties": [
-              { "id": "unit", "value": "currencyEUR" }
+              {
+                "id": "unit",
+                "value": "currencyEUR"
+              }
             ]
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 110 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 110
+      },
       "id": 47,
-      "options": { "legend": { "calcs": ["lastNotNull", "min", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
       "title": "Guard Inputs vs Thresholds",
       "type": "timeseries",
       "targets": [
-        { "expr": "trading_recent_pnl_guard_recent_realized_pnl", "legendFormat": "Recent PnL", "refId": "A" },
-        { "expr": "trading_recent_pnl_guard_min_realized_pnl", "legendFormat": "Min PnL Threshold", "refId": "B" },
-        { "expr": "trading_recent_pnl_guard_recent_profit_factor", "legendFormat": "Recent PF", "refId": "C" },
-        { "expr": "trading_recent_pnl_guard_max_profit_factor", "legendFormat": "Max PF Threshold", "refId": "D" }
+        {
+          "expr": "trading_recent_pnl_guard_recent_realized_pnl",
+          "legendFormat": "Recent PnL",
+          "refId": "A"
+        },
+        {
+          "expr": "trading_recent_pnl_guard_min_realized_pnl",
+          "legendFormat": "Min PnL Threshold",
+          "refId": "B"
+        },
+        {
+          "expr": "trading_recent_pnl_guard_recent_profit_factor",
+          "legendFormat": "Recent PF",
+          "refId": "C"
+        },
+        {
+          "expr": "trading_recent_pnl_guard_max_profit_factor",
+          "legendFormat": "Max PF Threshold",
+          "refId": "D"
+        }
       ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "short"
         }
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 110 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 110
+      },
       "id": 48,
-      "options": { "legend": { "calcs": ["lastNotNull", "min", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
       "title": "Guard Activity History",
       "type": "timeseries",
       "targets": [
-        { "expr": "trading_recent_pnl_guard_active", "legendFormat": "Guard Active", "refId": "A" },
-        { "expr": "trading_recent_pnl_guard_enabled", "legendFormat": "Guard Enabled", "refId": "B" },
-        { "expr": "trading_recent_pnl_guard_recent_closed_trades", "legendFormat": "Recent Closed", "refId": "C" }
+        {
+          "expr": "trading_recent_pnl_guard_active",
+          "legendFormat": "Guard Active",
+          "refId": "A"
+        },
+        {
+          "expr": "trading_recent_pnl_guard_enabled",
+          "legendFormat": "Guard Enabled",
+          "refId": "B"
+        },
+        {
+          "expr": "trading_recent_pnl_guard_recent_closed_trades",
+          "legendFormat": "Recent Closed",
+          "refId": "C"
+        }
       ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "decimals": 2,
           "max": 25,
           "min": 19,
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "red", "value": null },
-            { "color": "yellow", "value": 22 },
-            { "color": "green", "value": 25 }
-          ] },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 22
+              },
+              {
+                "color": "green",
+                "value": 25
+              }
+            ]
+          },
           "unit": "currencyEUR"
         }
       },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 118 },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 118
+      },
       "id": 49,
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "showThresholdLabels": false,
         "showThresholdMarkers": true
       },
-      "title": "Target Progress (→ €25)",
+      "title": "Target Progress (\u2192 \u20ac25)",
       "type": "gauge",
       "targets": [
-        { "expr": "trading_portfolio_value_eur", "legendFormat": "Portfolio", "refId": "A" }
+        {
+          "expr": "trading_portfolio_value_eur",
+          "legendFormat": "Portfolio",
+          "refId": "A"
+        }
       ]
     },
     {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
+          "color": {
+            "mode": "palette-classic"
+          },
           "decimals": 2,
           "unit": "currencyEUR"
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "Target (\u20ac25)" },
+            "matcher": {
+              "id": "byName",
+              "options": "Target (\u20ac25)"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } },
-              { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    10,
+                    10
+                  ],
+                  "fill": "dash"
+                }
+              }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Start (\u20ac19.52)" },
+            "matcher": {
+              "id": "byName",
+              "options": "Start (\u20ac19.52)"
+            },
             "properties": [
-              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } },
-              { "id": "custom.lineStyle", "value": { "dash": [4, 4], "fill": "dash" } }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    4,
+                    4
+                  ],
+                  "fill": "dash"
+                }
+              }
             ]
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 16, "x": 8, "y": 118 },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 8,
+        "y": 118
+      },
       "id": 50,
-      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
       "title": "Portfolio vs. Target",
       "type": "timeseries",
       "targets": [
-        { "expr": "trading_portfolio_value_eur", "legendFormat": "Portfolio (EUR)", "refId": "A" },
-        { "expr": "trading_portfolio_target_eur", "legendFormat": "Target (\u20ac25)", "refId": "B" },
-        { "expr": "trading_portfolio_start_value_eur", "legendFormat": "Start (\u20ac19.52)", "refId": "C" }
+        {
+          "expr": "trading_portfolio_value_eur",
+          "legendFormat": "Portfolio (EUR)",
+          "refId": "A"
+        },
+        {
+          "expr": "trading_portfolio_target_eur",
+          "legendFormat": "Target (\u20ac25)",
+          "refId": "B"
+        },
+        {
+          "expr": "(trading_portfolio_start_value_eur) or vector(0)",
+          "legendFormat": "Start (\u20ac19.52)",
+          "refId": "C"
+        }
       ]
     }
   ],
   "refresh": "30s",
   "schemaVersion": 38,
-  "tags": ["trading", "pi", "monitoring"],
-  "time": { "from": "now-3h", "to": "now" },
+  "tags": [
+    "trading",
+    "pi",
+    "monitoring"
+  ],
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
   "timepicker": {},
-  "title": "Trading Bot — Pi Ops",
+  "title": "Trading Bot \u2014 Pi Ops",
   "uid": "trading-bot-pi-ops",
   "version": 8
 }
