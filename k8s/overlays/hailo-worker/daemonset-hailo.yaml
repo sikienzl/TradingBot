@@ -68,8 +68,15 @@ spec:
                 fieldPath: metadata.namespace
           - name: HAILO_METRICS_PORT
             value: "9201"
+          - name: PYTHONPATH
+            value: "/host_hailo"
+          - name: HAILO8_DEVICE_PATH
+            value: "/dev/hailo0"
         
         ports:
+          - name: grpc
+            containerPort: 50051
+            protocol: TCP
           - name: metrics
             containerPort: 9201
             protocol: TCP
@@ -85,11 +92,19 @@ spec:
         volumeMounts:
           - name: nvme-tick-storage
             mountPath: /mnt/nvme
-          - name: models
-            mountPath: /models
-            readOnly: true
           - name: logs
             mountPath: /var/log/trading-bot
+          - name: hailo-device
+            mountPath: /dev/hailo0
+          - name: host-hailo-platform
+            mountPath: /host_hailo/hailo_platform
+            readOnly: true
+          - name: host-libhailort-soname
+            mountPath: /lib/libhailort.so.4.23.0
+            readOnly: true
+          - name: host-libhailort-link
+            mountPath: /lib/libhailort.so
+            readOnly: true
         
         # Health probes are disabled until dedicated /health and /ready endpoints are added.
         
@@ -105,10 +120,24 @@ spec:
         - name: nvme-tick-storage
           persistentVolumeClaim:
             claimName: nvme-tick-storage
-        - name: models
-          emptyDir: {}  # In production, use ConfigMap or dedicated volume
         - name: logs
           emptyDir: {}
+        - name: hailo-device
+          hostPath:
+            path: /dev/hailo0
+            type: CharDevice
+        - name: host-hailo-platform
+          hostPath:
+            path: /usr/lib/python3/dist-packages/hailo_platform
+            type: Directory
+        - name: host-libhailort-soname
+          hostPath:
+            path: /lib/libhailort.so.4.23.0
+            type: File
+        - name: host-libhailort-link
+          hostPath:
+            path: /lib/libhailort.so
+            type: File
       
       # Pod disruption budget (keep at least 1 running on edge)
       affinity:

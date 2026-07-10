@@ -16,12 +16,18 @@ data:
   
   # Hailo-8 Configuration
   HAILO8_ENABLED: "true"
-  HAILO8_MODEL_PATH: "/models/hailo/timeseries_transformer.onnx"
+  HAILO8_MARKETDATA_MODE: "grpc"
+  HAILO8_MODEL_PATH: "/app/model/hailo_prefilter/timeseries_transformer.onnx"
+  HAILO8_MODEL_CONFIG_PATH: "/app/model/hailo_prefilter/model_config.json"
   HAILO8_BATCH_SIZE: "32"
   HAILO8_INFERENCE_INTERVAL_MS: "100"
   HAILO8_ANOMALY_THRESHOLD: "85"
   HAILO8_WINDOW_SIZE: "100"
   HAILO8_METRICS_PORT: "9201"
+  HAILO8_GRPC_PORT: "50051"
+  HAILO8_EDGE_GRPC_TARGET: "trading-hailo-worker:50051"
+  HAILO8_RELAY_FLUSH_TICKS: "10"
+  HAILO8_RELAY_METRICS_PORT: "9203"
   HAILO8_LOCAL_TICK_PATH: "/mnt/nvme/trading_ticks"
   HAILO8_LOCAL_TICK_RETENTION_DAYS: "7"
   
@@ -40,13 +46,17 @@ data:
   GPT5_MAX_SPEND_PER_MONTH_USD: "500"
   GPT5_REQUEST_TIMEOUT_SEC: "30"
   GPT5_RETRY_COUNT: "3"
-  GPT5_SHADOW_MODE: "false"
+  GPT5_SHADOW_MODE: "true"
+  GPT5_GRPC_ENABLED: "true"
+  GPT5_GRPC_PORT: "50052"
+  GPT5_API_ENDPOINT: "https://api.mammouth.ai/v1/chat/completions"
   
   # Hybrid Decision Gate
   HYBRID_GATE_ENABLED: "true"
   HYBRID_GATE_USE_HISTORICAL_DATA: "true"
   HYBRID_GATE_EMIT_METRICS: "true"
   HYBRID_GATE_MIN_CONFIDENCE_FOR_EXECUTION: "0.6"
+  CLOUD_STRATEGIST_GRPC_TARGET: "cloud-strategist:50052"
   
   # K3S Configuration
   K3S_NAMESPACE: "trading-bot"

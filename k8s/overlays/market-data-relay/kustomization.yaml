@@ -1,19 +1,17 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Base resources
 resources:
   - ../../base
-  - pvc-nvme.yaml
-  - daemonset-hailo.yaml
-  - service-hailo.yaml
+  - deployment-relay.yaml
+  - service-relay.yaml
 
 namespace: trading-bot
 
 commonLabels:
   app: trading-bot
-  component: hailo-worker
-  tier: edge
+  component: market-data-relay
+  tier: relay
 
 commonAnnotations:
-  node-affinity: hailo-only
+  node-affinity: master-preferred

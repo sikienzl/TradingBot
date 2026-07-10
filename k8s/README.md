@@ -47,6 +47,9 @@ kubectl apply -k k8s/base/
 # Deploy Hailo-Worker Daemonset (Node 2 only)
 kubectl apply -f k8s/overlays/hailo-worker/
 
+# Deploy market-data relay on the master node (Pi 1 -> Pi 2 gRPC stream)
+kubectl apply -k k8s/overlays/market-data-relay/
+
 # Deploy Cloud-Strategist Deployment (Node 1+)
 kubectl apply -f k8s/overlays/cloud-strategist/
 
@@ -125,6 +128,10 @@ k8s/
 │   │   ├── deployment-cloud.yaml     # GPT-5 calls on Node 1
 │   │   └── service.yaml
 │   │
+│   ├── market-data-relay/
+│   │   ├── kustomization.yaml
+│   │   └── deployment-relay.yaml     # Streams Kraken windows from Pi 1 to Pi 2 over gRPC
+│   │
 │   ├── analytics-writer/
 │   │   ├── kustomization.yaml
 │   │   └── deployment-analytics-writer.yaml # Dry-run bot writing trades/snapshots into Postgres
@@ -147,6 +154,8 @@ Siehe `.env.hailo8.example` für vollständige Liste:
 
 - `HAILO8_ANOMALY_THRESHOLD`: Trigger-Punkt für GPT-5 Calls (default: 85/100)
 - `HAILO8_INFERENCE_INTERVAL_MS`: Wie oft Hailo-8 updated (default: 100ms)
+- `HAILO8_EDGE_GRPC_TARGET`: Cluster endpoint used by the master-node relay
+- `CLOUD_STRATEGIST_GRPC_TARGET`: Cluster endpoint used by the Hailo worker for strategist decisions
 - `GPT5_MAX_CALLS_PER_DAY`: Rate-Limit für Cloud-Calls (default: 100)
 - `KRAKEN_WEBSOCKET_V2_ENABLED`: Aktiviere WebSocket statt CCXT polling
 - `ANALYTICS_DB_HOST`: K3s service name for the master-node Postgres sink

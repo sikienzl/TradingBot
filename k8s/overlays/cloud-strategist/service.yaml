@@ -16,6 +16,10 @@ spec:
       port: 9202
       targetPort: 9202
       protocol: TCP
+    - name: grpc
+      port: 50052
+      targetPort: 50052
+      protocol: TCP
     - name: api
       port: 8002
       targetPort: 8002

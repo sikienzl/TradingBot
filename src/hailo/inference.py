@@ -7,6 +7,8 @@ Handles ONNX model loading, batch inference, and anomaly score calculation.
 
 import os
 import logging
+import json
+import time
 from typing import List, Tuple, Optional, Dict, Any
 from pathlib import Path
 import numpy as np
@@ -28,6 +30,14 @@ try:
 except ImportError:
     HAILO_AVAILABLE = False
     logger.warning("hailort not installed. Using ONNX CPU fallback.")
+
+if not HAILO_AVAILABLE:
+    try:
+        from hailo_platform import pyhailort as hailort  # type: ignore
+        HAILO_AVAILABLE = True
+        logger.info("Using hailo_platform.pyhailort compatibility shim.")
+    except ImportError:
+        pass
 
 
 class TimeSeriesTransformerONNX:
@@ -57,10 +67,24 @@ class TimeSeriesTransformerONNX:
             device: Fallback device: "cpu" or "gpu"
         """
         self.model_path = Path(model_path)
-        self.seq_length = seq_length
+        self.model_dir = self.model_path.parent
+        self.model_config_path = Path(
+            os.getenv(
+                "HAILO8_MODEL_CONFIG_PATH",
+                str(self.model_dir / "model_config.json"),
+            )
+        )
+        self.model_config = self._load_model_config()
+        self.seq_length = int(self.model_config.get("seq_length", seq_length))
         self.device = device
         self.session = None
         self.use_hailo = use_hailo and HAILO_AVAILABLE
+        self.last_inference_seconds = 0.0
+        self.last_provider = "unknown"
+        self.n_features = int(self.model_config.get("n_features", 9))
+        self.hailo_runtime_available = HAILO_AVAILABLE
+        self.available_providers = []
+        self.hailo_execution_provider_available = False
 
         if not ONNX_AVAILABLE:
             raise ImportError(
@@ -72,10 +96,25 @@ class TimeSeriesTransformerONNX:
             f"seq_length={seq_length}, device={self.device}"
         )
 
+    def _load_model_config(self) -> Dict[str, Any]:
+        if not self.model_config_path.exists():
+            return {}
+        try:
+            return json.loads(self.model_config_path.read_text())
+        except Exception as exc:
+            logger.warning("Failed to read model config %s: %s",
+                           self.model_config_path, exc)
+            return {}
+
     def _load_model(self):
         """Load ONNX model with appropriate backend"""
         if not self.model_path.exists():
             raise FileNotFoundError(f"Model not found: {self.model_path}")
+
+        self.available_providers = ort.get_available_providers()
+        self.hailo_execution_provider_available = (
+            "HailoExecutionProvider" in self.available_providers
+        )
 
         # Choose execution provider based on available hardware
         providers = []
@@ -83,10 +122,15 @@ class TimeSeriesTransformerONNX:
         # Allow forcing CPU mode in cluster-only environments.
         force_cpu = os.getenv("HAILO8_FORCE_CPU", "false").lower() == "true"
 
-        if self.use_hailo and not force_cpu:
+        if self.use_hailo and not force_cpu and self.hailo_execution_provider_available:
             # Hailo-8 provider (if hailort available)
             providers.append("HailoExecutionProvider")
             logger.info("Using Hailo-8 as execution provider")
+        elif self.use_hailo and not self.hailo_execution_provider_available:
+            providers.append("CPUExecutionProvider")
+            logger.warning(
+                "Hailo runtime detected but HailoExecutionProvider is unavailable in onnxruntime. Falling back to CPU."
+            )
         elif force_cpu:
             providers.append("CPUExecutionProvider")
             logger.info("HAILO8_FORCE_CPU=true -> using CPUExecutionProvider")
@@ -103,13 +147,18 @@ class TimeSeriesTransformerONNX:
             str(self.model_path),
             providers=providers,
         )
+        try:
+            active_provider = self.session.get_providers()[0]
+        except Exception:
+            active_provider = providers[0] if providers else "unknown"
+        self.last_provider = active_provider
 
     def get_input_shape(self) -> Tuple[int, ...]:
         """Get expected input shape from ONNX model"""
         inputs = self.session.get_inputs()
         if inputs:
             return tuple(inputs[0].shape)
-        return (1, self.seq_length, 9)  # Default: (batch, seq_len, features)
+        return (1, self.seq_length, self.n_features)
 
     def get_output_names(self) -> List[str]:
         """Get output tensor names"""
@@ -148,7 +197,7 @@ class TimeSeriesTransformerONNX:
             features.append(feature_vec)
 
         # Stack and normalize
-        X = np.array(features, dtype=np.float32)  # Shape: (seq_len, 9)
+        X = np.array(features, dtype=np.float32)
 
         # Simple z-score normalization per feature
         X = (X - X.mean(axis=0)) / (X.std(axis=0) + 1e-8)
@@ -177,11 +226,15 @@ class TimeSeriesTransformerONNX:
         # Run inference
         try:
             input_name = self.session.get_inputs()[0].name
+            started = time.perf_counter()
             outputs = self.session.run(None, {input_name: X})
+            self.last_inference_seconds = time.perf_counter() - started
 
-            # Outputs: [anomaly_score (1,), confidence (1,)]
-            anomaly_score = float(outputs[0][0]) * 100  # Scale to 0-100
-            confidence = float(outputs[1][0])  # Already 0-1
+            anomaly_raw = outputs[0]
+            confidence_raw = outputs[1] if len(outputs) > 1 else outputs[0]
+
+            anomaly_score = float(np.ravel(anomaly_raw)[0]) * 100
+            confidence = float(np.ravel(confidence_raw)[0])
 
             # Clamp to valid ranges
             anomaly_score = max(0, min(100, anomaly_score))
@@ -191,7 +244,19 @@ class TimeSeriesTransformerONNX:
 
         except Exception as e:
             logger.error(f"Inference failed: {e}")
+            self.last_inference_seconds = 0.0
             return 0.0, 0.0
+
+    def get_runtime_stats(self) -> Dict[str, Any]:
+        return {
+            "seq_length": self.seq_length,
+            "n_features": self.n_features,
+            "provider": self.last_provider,
+            "last_inference_seconds": self.last_inference_seconds,
+            "model_path": str(self.model_path),
+            "hailo_runtime_available": self.hailo_runtime_available,
+            "hailo_execution_provider_available": self.hailo_execution_provider_available,
+        }
 
     def infer_batch(
         self, tick_batches: List[List[Dict[str, float]]]
@@ -281,6 +346,8 @@ class AnomalyDetector:
                 "window_size": len(self.tick_buffer),
                 "tick_count": len(self.tick_buffer),
                 "signal_type": self._classify_anomaly(tick),
+                "inference_latency_ms": self.model.last_inference_seconds * 1000.0,
+                "model_provider": self.model.last_provider,
             }
             self.alerts.append(alert)
             logger.warning(f"🚨 ANOMALY DETECTED: {alert}")

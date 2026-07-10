@@ -10,11 +10,15 @@ import os
 import asyncio
 import logging
 import json
+import time
 from typing import Optional, Dict, Any
 from datetime import datetime
 import aiohttp
 
 from src.hybrid.decision_gate import AnomalyAlert, HybridDecisionGate
+from src.hybrid.grpc_bridge import StrategistRpcServer, grpc_available
+from src.hybrid.monitoring import ServiceMetrics
+from src.hybrid.transport import EdgeAlertPayload, StrategistDecisionPayload
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +47,13 @@ class GPT5StrategistService:
         )
         self.shadow_mode = os.getenv(
             "GPT5_SHADOW_MODE", "false").lower() == "true"
+        self.grpc_enabled = os.getenv(
+            "GPT5_GRPC_ENABLED", "true").lower() == "true"
+        self.grpc_host = os.getenv("GPT5_GRPC_HOST", "0.0.0.0")
+        self.grpc_port = int(os.getenv("GPT5_GRPC_PORT", "50052"))
+        self.metrics_port = int(os.getenv("GPT5_METRICS_PORT", "9202"))
+        self.grpc_server = None
+        self.service_metrics = ServiceMetrics("strategist", self.metrics_port)
 
         # Hybrid gate
         self.hybrid_gate = HybridDecisionGate()
@@ -81,10 +92,13 @@ class GPT5StrategistService:
             Decision dict: {"decision": "GO"|"VETO", "reason": "...", "risk_level": 0-1}
         """
 
+        started = time.perf_counter()
         # Check hybrid gate
         gate_result = await self.hybrid_gate.evaluate(alert)
         if gate_result is None:
             logger.debug(f"Alert filtered by hybrid gate")
+            self.service_metrics.observe_event(
+                "alert_filtered", time.perf_counter() - started)
             return {
                 "decision": "FILTERED",
                 "reason": "Filtered by hybrid gate (score below threshold)",
@@ -108,10 +122,39 @@ class GPT5StrategistService:
 
         # Track metrics
         self._update_metrics(gpt5_response)
+        self.service_metrics.observe_event(
+            "gpt5_decision", time.perf_counter() - started)
+        self.service_metrics.publish_mapping(
+            {
+                "calls_total": self.metrics["calls_total"],
+                "calls_today": self.metrics["calls_today"],
+                "tokens_used": self.metrics["tokens_used"],
+                "spend_usd": self.metrics["spend_usd"],
+                "decisions_go": self.metrics["decisions_go"],
+                "decisions_veto": self.metrics["decisions_veto"],
+            }
+        )
 
         logger.info(
             f"✅ Decision: {decision['decision']} - {decision['reason']}")
         return decision
+
+    async def process_anomaly_payload(
+        self,
+        payload: EdgeAlertPayload,
+    ) -> StrategistDecisionPayload:
+        decision = await self.process_anomaly_alert(payload.to_anomaly_alert())
+        return StrategistDecisionPayload(
+            decision=decision.get("decision", "VETO"),
+            reason=decision.get("reason", "Unknown"),
+            risk_level=float(decision.get("risk_level", 0.0)),
+            confidence=float(decision.get("confidence", 0.0)),
+            position_size_pct=float(decision.get("position_size_pct", 0.0)),
+            metadata={
+                "coin": payload.coin,
+                "source_node": payload.source_node,
+            },
+        )
 
     async def _get_macro_context(self, alert: AnomalyAlert) -> Dict[str, Any]:
         """
@@ -193,6 +236,7 @@ class GPT5StrategistService:
         """
         if not self.api_key or self.shadow_mode:
             logger.info("📋 Shadow mode: simulating GPT-5 response")
+            self.service_metrics.observe_event("shadow_call")
             return {
                 "decision": "GO",
                 "confidence": 0.85,
@@ -224,13 +268,16 @@ class GPT5StrategistService:
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
+                        self.service_metrics.observe_event("api_call_success")
                         return self._extract_gpt5_response(data)
                     else:
                         logger.error(f"GPT-5 API error: {resp.status}")
+                        self.service_metrics.observe_event("api_call_error")
                         return {"decision": "ERROR", "reason": f"API error: {resp.status}"}
 
         except Exception as e:
             logger.error(f"GPT-5 call failed: {e}")
+            self.service_metrics.observe_event("api_call_exception")
             return {"decision": "ERROR", "reason": f"Exception: {str(e)}"}
 
     def _extract_gpt5_response(self, api_response: Dict) -> Dict:
@@ -294,6 +341,24 @@ async def main():
     )
 
     service = GPT5StrategistService()
+    service.service_metrics.start_http_server()
+    service.service_metrics.set_up(True)
+
+    if service.grpc_enabled:
+        if not grpc_available():
+            raise RuntimeError(
+                "GPT5_GRPC_ENABLED=true but grpcio is not installed")
+        service.grpc_server = StrategistRpcServer(
+            processor=service.process_anomaly_payload,
+            host=service.grpc_host,
+            port=service.grpc_port,
+        )
+        await service.grpc_server.start()
+        logger.info(
+            "Strategist gRPC server listening on %s:%s",
+            service.grpc_host,
+            service.grpc_port,
+        )
 
     # Optional startup self-check in shadow mode.
     if os.getenv("GPT5_STARTUP_SELFTEST", "false").lower() == "true":
@@ -313,6 +378,13 @@ async def main():
     while True:
         await asyncio.sleep(30)
         logger.info("Cloud strategist heartbeat")
+        service.service_metrics.publish_mapping(
+            {
+                "calls_total": service.metrics["calls_total"],
+                "spend_usd": service.metrics["spend_usd"],
+                "shadow_mode": service.shadow_mode,
+            }
+        )
 
 
 if __name__ == "__main__":

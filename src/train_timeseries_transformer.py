@@ -448,6 +448,33 @@ def export_to_onnx(
         logger.error(f"❌ ONNX export failed: {e}")
 
 
+def export_hailo_assets(output_model_dir: str) -> Dict[str, str]:
+    output_dir = Path(output_model_dir)
+    onnx_path = output_dir / "timeseries_transformer.onnx"
+    config_path = output_dir / "model_config.json"
+    hef_placeholder_path = output_dir / "hailo_compile_instructions.json"
+
+    instructions = {
+        "onnx_model_path": str(onnx_path),
+        "model_config_path": str(config_path),
+        "recommended_hailo_parser": "hailomz parse",
+        "recommended_hailo_compile": "hailomz compile",
+        "target_artifact": str(output_dir / "timeseries_transformer.hef"),
+        "notes": [
+            "Run quantization/calibration on the RTX 3090 host before compiling for Hailo-8.",
+            "Use representative market windows matching the exported seq_length and feature order.",
+        ],
+    }
+    with open(hef_placeholder_path, "w") as file_obj:
+        json.dump(instructions, file_obj, indent=2)
+    logger.info("✅ Hailo compile instructions saved: %s", hef_placeholder_path)
+    return {
+        "onnx_model_path": str(onnx_path),
+        "model_config_path": str(config_path),
+        "hailo_compile_instructions_path": str(hef_placeholder_path),
+    }
+
+
 def train_transformer(
     training_data_path: str,
     output_model_dir: str = "/models/hailo",
@@ -512,6 +539,7 @@ def train_transformer(
     # Export to ONNX
     onnx_path = Path(output_model_dir) / "timeseries_transformer.onnx"
     export_to_onnx(model, str(onnx_path), seq_length=config.seq_length)
+    export_hailo_assets(output_model_dir)
 
     logger.info(f"🎉 Training complete! Ready for Hailo-8 deployment.")
     return model, history

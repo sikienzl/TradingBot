@@ -66,12 +66,15 @@ hybrid = [
     "onnx>=1.16",                # ONNX model export
     "onnxruntime>=1.17",         # ONNX runtime inference
     "hailort>=3.23",             # Hailo Runtime for Hailo-8 acceleration
+    "grpcio>=1.66",              # Pi1 -> Pi2 edge transport
+    "prometheus-client>=0.20",   # Runtime metrics for Grafana/Prometheus
 ]
 # pip install crypto-trading-bot[k3s]  – Kubernetes integration for K3s deployment
 k3s = [
     "kubernetes>=29.0",          # K3s / Kubernetes client
     "prometheus-client>=0.20",   # Prometheus metrics export
     "pyyaml>=6.0",               # YAML manifest handling
+    "grpcio>=1.66",              # Inter-pod transport for market data and alerts
 ]
 # pip install crypto-trading-bot[hailo8]  – All Hailo-8 + Time-Series-Transformer
 hailo8 = [
@@ -79,6 +82,8 @@ hailo8 = [
     "onnx>=1.16",
     "onnxruntime>=1.17",
     "hailort>=3.23",
+    "grpcio>=1.66",
+    "prometheus-client>=0.20",
     "torch>=2.2",
     "transformers>=4.40",
     "peft>=0.10",
@@ -108,6 +113,7 @@ all = [
     "kubernetes>=29.0",
     "prometheus-client>=0.20",
     "pyyaml>=6.0",
+    "grpcio>=1.66",
     "einops>=0.8",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

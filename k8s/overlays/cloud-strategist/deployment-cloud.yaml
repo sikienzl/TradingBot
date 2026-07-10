@@ -68,6 +68,9 @@ spec:
           - name: metrics
             containerPort: 9202
             protocol: TCP
+          - name: grpc
+            containerPort: 50052
+            protocol: TCP
           - name: api
             containerPort: 8002
             protocol: TCP

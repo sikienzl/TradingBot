@@ -9,7 +9,10 @@ COPY . .
 
 # Keep the cloud image light enough for Raspberry Pi builds.
 RUN pip install --no-cache-dir \
-    aiohttp==3.13.2
+    aiohttp==3.13.2 \
+    grpcio==1.74.0 \
+    prometheus-client==0.22.1 \
+    websockets==15.0.1
 
 RUN useradd -m -u 1000 trading && chown -R trading:trading /app
 USER trading

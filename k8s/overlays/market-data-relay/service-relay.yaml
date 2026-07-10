@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: trading-market-data-relay
+  namespace: trading-bot
+  labels:
+    app: trading-bot
+    component: market-data-relay
+spec:
+  type: ClusterIP
+  selector:
+    app: trading-bot
+    component: market-data-relay
+  ports:
+    - name: metrics
+      port: 9203
+      targetPort: 9203
+      protocol: TCP
