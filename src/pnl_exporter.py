@@ -703,6 +703,21 @@ class MetricsHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
+        # Ensure the primary exported portfolio value reflects cash + MTM holdings
+        # so simulated buys/sells immediately show in dashboards. Compute again
+        # here to avoid earlier overrides masking the live snapshot.
+        try:
+            cash_final = float(snapshot.get('portfolio_cash_eur', 0.0) or 0.0)
+        except Exception:
+            cash_final = 0.0
+        try:
+            hv = snapshot.get('holdings_value_eur') or {}
+            holdings_sum = float(sum(float(v or 0.0) for v in (hv.values() if isinstance(hv, dict) else [])))
+        except Exception:
+            holdings_sum = 0.0
+        metrics_dict['portfolio_value_eur'] = cash_final + holdings_sum
+        metrics_dict['portfolio_cash_eur'] = cash_final
+
         metrics_dict['portfolio_target_eur'] = self._safe_float_env(
             'PORTFOLIO_TARGET_EUR', 25.0)
         metrics_dict.update(self.read_ai_copilot_usage())
