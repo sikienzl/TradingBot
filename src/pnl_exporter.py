@@ -656,6 +656,8 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     snapshot['holdings_value_eur'] = holdings_value
                     snapshot['holdings_unrealized_pnl_eur'] = holdings_unrealized
                     snapshot['open_positions_count'] = int(len(derived))
+                    # mark that this snapshot was derived from the trade journal
+                    snapshot['_derived_from_journal'] = True
         except Exception:
             pass
         # Recompute portfolio value from cash + mark-to-market holdings so
@@ -691,7 +693,12 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 and float(start_val) > 0.0
                 and self._env_bool('DRY_RUN', False)
                 and not self._env_bool('SIMULATE_DATA', False)
+                and not snapshot.get('_derived_from_journal', False)
             ):
+                # Only override with Kraken-derived start value when we are
+                # running DRY_RUN + using the live Kraken API *and* the
+                # current snapshot was not derived from the local trade
+                # journal (i.e. prefer locally-derived simulated holdings).
                 metrics_dict['portfolio_value_eur'] = float(start_val)
         except Exception:
             pass
