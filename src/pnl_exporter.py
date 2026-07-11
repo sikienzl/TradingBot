@@ -658,8 +658,20 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     snapshot['open_positions_count'] = int(len(derived))
         except Exception:
             pass
+        # Recompute portfolio value from cash + mark-to-market holdings so
+        # Grafana reflects current buys/sells immediately.
+        try:
+            cash = float(snapshot.get('portfolio_cash_eur', 0.0) or 0.0)
+        except Exception:
+            cash = 0.0
+        try:
+            holdings_values = snapshot.get('holdings_value_eur') or {}
+            total_holdings = float(sum(float(v or 0.0) for v in (holdings_values.values() if isinstance(holdings_values, dict) else [])))
+        except Exception:
+            total_holdings = 0.0
+        snapshot['portfolio_value_eur'] = cash + total_holdings
         metrics_dict['portfolio_value_eur'] = snapshot['portfolio_value_eur']
-        metrics_dict['portfolio_cash_eur'] = snapshot['portfolio_cash_eur']
+        metrics_dict['portfolio_cash_eur'] = cash
         metrics_dict['holdings_value_eur'] = snapshot['holdings_value_eur']
         metrics_dict['holdings_amount_coin'] = snapshot['holdings_amount_coin']
         metrics_dict['holdings_cost_basis_eur'] = snapshot['holdings_cost_basis_eur']
