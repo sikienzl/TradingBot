@@ -1569,8 +1569,18 @@ class MetricsHandler(BaseHTTPRequestHandler):
         output.append(
             '# HELP trading_portfolio_value_eur Latest portfolio total value from bot log (EUR)')
         output.append('# TYPE trading_portfolio_value_eur gauge')
-        output.append(
-            f'trading_portfolio_value_eur {metrics.get("portfolio_value_eur", 0.0)}')
+        # Ensure exported portfolio value reflects cash + holdings value at
+        # format time (defensive), so dashboards always see the live sum.
+        try:
+            _cash = float(metrics.get('portfolio_cash_eur', 0.0) or 0.0)
+        except Exception:
+            _cash = 0.0
+        try:
+            _hv = metrics.get('holdings_value_eur') or {}
+            _holdings_sum = float(sum(float(v or 0.0) for v in (_hv.values() if isinstance(_hv, dict) else [])))
+        except Exception:
+            _holdings_sum = 0.0
+        output.append(f'trading_portfolio_value_eur {_cash + _holdings_sum}')
 
         # Portfolio return (absolute and percent) relative to start value
         try:
