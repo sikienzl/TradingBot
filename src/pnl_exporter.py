@@ -63,13 +63,15 @@ SHADOW_SUGGESTION_META_RE = re.compile(
 
 class MetricsHandler(BaseHTTPRequestHandler):
     def _env_bool(self, env_key, default=False):
-        value = self._read_env_value(env_key)
+        # Prefer process environment variables, fall back to .env file
+        value = os.getenv(env_key, '').strip() or self._read_env_value(env_key)
         if value == '':
             return bool(default)
         return value.strip().lower() in {'1', 'true', 'yes', 'on'}
 
     def _safe_int_env(self, env_key, default):
-        value = self._read_env_value(env_key)
+        # Prefer process environment variables, fall back to .env file
+        value = os.getenv(env_key, '').strip() or self._read_env_value(env_key)
         if value == '':
             return int(default)
         try:
@@ -78,7 +80,8 @@ class MetricsHandler(BaseHTTPRequestHandler):
             return int(default)
 
     def _safe_float_env(self, env_key, default):
-        value = self._read_env_value(env_key)
+        # Prefer process environment variables, fall back to .env file
+        value = os.getenv(env_key, '').strip() or self._read_env_value(env_key)
         if value == '':
             return float(default)
         try:
@@ -568,6 +571,93 @@ class MetricsHandler(BaseHTTPRequestHandler):
         trades = self.read_trades()
         metrics_dict = self.calculate_pnl_metrics(trades)
         snapshot = self.read_latest_portfolio_snapshot()
+        # If snapshot reports no open positions but the trade journal contains
+        # unmatched BUYs (dry-run / monitoring entries), derive open positions
+        # from the journal as a best-effort fallback so the exporter reports
+        # simulated opens immediately.
+        try:
+            if (snapshot.get('open_positions_count', 0) == 0) and trades:
+                derived = self._derive_open_positions_from_trades(trades)
+                if derived:
+                    # populate holdings and counts
+                    holdings_amount = {c: v['net_coin']
+                                       for c, v in derived.items()}
+                    holdings_cost = {c: v['cost_eur']
+                                     for c, v in derived.items()}
+                    snapshot['holdings_amount_coin'] = holdings_amount
+                    snapshot['holdings_cost_basis_eur'] = holdings_cost
+
+                    # Try to mark-to-market derived holdings using ccxt if available.
+                    holdings_value = {}
+                    holdings_unrealized = {}
+                    try:
+                        if ccxt is not None and holdings_amount:
+                            exchange_name = self._read_first_env_value(
+                                'EXCHANGE_NAME') or 'kraken'
+                            try:
+                                exchange_cls = getattr(
+                                    ccxt, exchange_name.lower(), None)
+                                if exchange_cls is None:
+                                    exchange = ccxt.__dict__.get(
+                                        exchange_name, None)
+                                    if exchange is not None:
+                                        exchange = exchange(
+                                            {'enableRateLimit': True})
+                                else:
+                                    exchange = exchange_cls(
+                                        {'enableRateLimit': True})
+                            except Exception:
+                                exchange = None
+
+                            symbol_map = {}
+                            if exchange is not None:
+                                try:
+                                    markets = exchange.load_markets()
+                                except Exception:
+                                    markets = {}
+                                symbol_map = self._build_base_symbol_map(
+                                    markets, self._read_env_value('BASE_CURRENCY') or 'EUR')
+
+                            for coin, amt in holdings_amount.items():
+                                valued = None
+                                symbol = symbol_map.get(coin)
+                                if symbol and exchange is not None:
+                                    try:
+                                        ticker = exchange.fetch_ticker(symbol)
+                                        last_price = ticker.get('last') if isinstance(
+                                            ticker, dict) else None
+                                        if last_price is None:
+                                            last_price = ticker.get('close') if isinstance(
+                                                ticker, dict) else None
+                                        if last_price is not None:
+                                            valued = float(
+                                                amt) * float(last_price)
+                                    except Exception:
+                                        valued = None
+                                if valued is None:
+                                    # fallback to cost-basis if price unavailable
+                                    valued = float(
+                                        holdings_cost.get(coin, 0.0))
+                                holdings_value[coin] = float(valued)
+                                holdings_unrealized[coin] = float(
+                                    valued) - float(holdings_cost.get(coin, 0.0) or 0.0)
+                        else:
+                            # ccxt not available: use cost-basis as value
+                            for coin in holdings_amount.keys():
+                                holdings_value[coin] = float(
+                                    holdings_cost.get(coin, 0.0))
+                                holdings_unrealized[coin] = 0.0
+                    except Exception:
+                        for coin in holdings_amount.keys():
+                            holdings_value[coin] = float(
+                                holdings_cost.get(coin, 0.0))
+                            holdings_unrealized[coin] = 0.0
+
+                    snapshot['holdings_value_eur'] = holdings_value
+                    snapshot['holdings_unrealized_pnl_eur'] = holdings_unrealized
+                    snapshot['open_positions_count'] = int(len(derived))
+        except Exception:
+            pass
         metrics_dict['portfolio_value_eur'] = snapshot['portfolio_value_eur']
         metrics_dict['portfolio_cash_eur'] = snapshot['portfolio_cash_eur']
         metrics_dict['holdings_value_eur'] = snapshot['holdings_value_eur']
@@ -613,6 +703,76 @@ class MetricsHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
         return trades
+
+    def _derive_open_positions_from_trades(self, trades):
+        """Derive open (net) positions per coin from the trade journal.
+
+        Returns a dict coin -> { 'net_coin': float, 'cost_eur': float }
+        Only returns coins with positive net amount (open long positions).
+        """
+        per = {}
+        if not trades:
+            return {}
+
+        for t in trades:
+            action = (t.get('action') or t.get('side') or '').strip().lower()
+            if not action or action not in {'buy', 'sell'}:
+                continue
+            coin = (t.get('coin') or t.get('symbol') or '').upper().strip()
+            if not coin:
+                continue
+
+            # try several common amount keys
+            amt_coin = None
+            for k in ('amount_coin', 'amount', 'qty', 'coin_amount'):
+                raw = t.get(k)
+                if raw in (None, ''):
+                    continue
+                try:
+                    amt_coin = float(raw)
+                    break
+                except Exception:
+                    continue
+            if amt_coin is None:
+                continue
+
+            # determine euros spent/received for this trade if present
+            amount_base = None
+            for k in ('amount_base', 'amount_eur', 'trade_amount', 'cost_eur'):
+                raw = t.get(k)
+                if raw in (None, ''):
+                    continue
+                try:
+                    amount_base = float(raw)
+                    break
+                except Exception:
+                    continue
+
+            price = None
+            for k in ('price', 'price_eur', 'entry_price'):
+                raw = t.get(k)
+                if raw in (None, ''):
+                    continue
+                try:
+                    price = float(raw)
+                    break
+                except Exception:
+                    continue
+
+            rec = per.setdefault(coin, {'net_coin': 0.0, 'cost_eur': 0.0})
+            if action == 'buy':
+                rec['net_coin'] += amt_coin
+                rec['cost_eur'] += (amount_base if amount_base is not None else (
+                    price * amt_coin if price is not None else 0.0))
+            else:
+                rec['net_coin'] -= amt_coin
+                rec['cost_eur'] -= (amount_base if amount_base is not None else (
+                    price * amt_coin if price is not None else 0.0))
+
+        # keep only positive net positions
+        result = {c: v for c, v in per.items() if v.get(
+            'net_coin', 0.0) > 1e-12}
+        return result
 
     def _parse_timestamp(self, timestamp_str):
         """Parse ISO timestamps with or without microseconds, treating naive timestamps as UTC."""
