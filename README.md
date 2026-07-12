@@ -66,6 +66,10 @@ The worker now supports two inference modes:
 
 Deployment and compile details are documented in [docs/hailo_hybrid_cluster.md](docs/hailo_hybrid_cluster.md).
 
+For a clear, practical walkthrough of running the Hailo Dataflow Compiler
+using Docker (Windows-focused), see this guide — it explains the process
+well: https://medium.com/@mgreiner79/how-to-run-hailo-dataflow-compiler-using-docker-on-windows-8442a0215c53
+
 ## Quickstart (60 seconds)
 
 ```sh
