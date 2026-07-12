@@ -1,0 +1,11 @@
+{
+  "onnx_model_path": "model/hailo_prefilter/timeseries_transformer.onnx",
+  "model_config_path": "model/hailo_prefilter/model_config.json",
+  "recommended_hailo_parser": "hailomz parse",
+  "recommended_hailo_compile": "hailomz compile",
+  "target_artifact": "model/hailo_prefilter/timeseries_transformer.hef",
+  "notes": [
+    "Run quantization/calibration on the RTX 3090 host before compiling for Hailo-8.",
+    "Use representative market windows matching the exported seq_length and feature order."
+  ]
+}

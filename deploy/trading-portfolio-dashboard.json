@@ -1,0 +1,44 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": null,
+    "title": "Trading Portfolio Summary",
+    "timezone": "browser",
+    "schemaVersion": 36,
+    "version": 1,
+    "refresh": "5s",
+    "panels": [
+      {
+        "type": "stat",
+        "id": 1,
+        "title": "Portfolio Cash (EUR)",
+        "gridPos": {"x": 0, "y": 0, "w": 8, "h": 5},
+        "targets": [
+          { "expr": "trading_portfolio_cash_eur", "refId": "A" }
+        ],
+        "datasource": "Prometheus"
+      },
+      {
+        "type": "stat",
+        "id": 2,
+        "title": "Holdings (MTM, EUR)",
+        "gridPos": {"x": 8, "y": 0, "w": 8, "h": 5},
+        "targets": [
+          { "expr": "sum(trading_current_holding_value_eur)", "refId": "A" }
+        ],
+        "datasource": "Prometheus"
+      },
+      {
+        "type": "stat",
+        "id": 3,
+        "title": "Portfolio Total (EUR)",
+        "gridPos": {"x": 0, "y": 5, "w": 16, "h": 5},
+        "targets": [
+          { "expr": "trading_portfolio_value_eur", "refId": "A" }
+        ],
+        "datasource": "Prometheus"
+      }
+    ]
+  },
+  "overwrite": true
+}

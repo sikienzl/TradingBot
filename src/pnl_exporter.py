@@ -571,12 +571,15 @@ class MetricsHandler(BaseHTTPRequestHandler):
         trades = self.read_trades()
         metrics_dict = self.calculate_pnl_metrics(trades)
         snapshot = self.read_latest_portfolio_snapshot()
+        # Honor explicit override: force portfolio to cash-only (ignore derived holdings)
+        force_cash_only = self._env_bool('FORCE_CASH_ONLY', False)
         # If snapshot reports no open positions but the trade journal contains
         # unmatched BUYs (dry-run / monitoring entries), derive open positions
         # from the journal as a best-effort fallback so the exporter reports
         # simulated opens immediately.
         try:
-            if (snapshot.get('open_positions_count', 0) == 0) and trades:
+            # Only derive open positions from the trade journal when not forcing cash-only.
+            if not force_cash_only and (snapshot.get('open_positions_count', 0) == 0) and trades:
                 derived = self._derive_open_positions_from_trades(trades)
                 if derived:
                     # populate holdings and counts
@@ -671,7 +674,16 @@ class MetricsHandler(BaseHTTPRequestHandler):
             total_holdings = float(sum(float(v or 0.0) for v in (holdings_values.values() if isinstance(holdings_values, dict) else [])))
         except Exception:
             total_holdings = 0.0
-        snapshot['portfolio_value_eur'] = cash + total_holdings
+        # If configured to force cash-only, ignore holdings and make portfolio value == cash.
+        if force_cash_only:
+            snapshot['holdings_value_eur'] = {}
+            snapshot['holdings_amount_coin'] = {}
+            snapshot['holdings_cost_basis_eur'] = {}
+            snapshot['holdings_unrealized_pnl_eur'] = {}
+            snapshot['open_positions_count'] = 0
+            snapshot['portfolio_value_eur'] = cash
+        else:
+            snapshot['portfolio_value_eur'] = cash + total_holdings
         metrics_dict['portfolio_value_eur'] = snapshot['portfolio_value_eur']
         metrics_dict['portfolio_cash_eur'] = cash
         metrics_dict['holdings_value_eur'] = snapshot['holdings_value_eur']
