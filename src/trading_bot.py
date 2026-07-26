@@ -25,6 +25,17 @@ logger = logging.getLogger(__name__)
 _SAFE_IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
 
+def _parse_persisted_datetime(value: Any) -> Any:
+    """Converts persisted ISO timestamps back to datetime objects when possible."""
+    if not isinstance(value, str):
+        return value
+
+    try:
+        return datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        return value
+
+
 def _compute_dynamic_lossmaker_entry_pairs(
     df: pd.DataFrame,
     window: int,
@@ -383,12 +394,12 @@ class Portfolio:
             self.initial_portfolio_value = float(
                 initial_value) if initial_value not in (None, '') else None
             for trade in self.open_trades.values():
-                ts = trade.get('timestamp')
-                if isinstance(ts, str):
-                    try:
-                        trade['timestamp'] = datetime.fromisoformat(ts)
-                    except ValueError:
-                        trade['timestamp'] = datetime.now()
+                trade['timestamp'] = _parse_persisted_datetime(
+                    trade.get('timestamp'))
+                if isinstance(trade['timestamp'], str):
+                    trade['timestamp'] = datetime.now()
+                trade['partial_tp_timestamp'] = _parse_persisted_datetime(
+                    trade.get('partial_tp_timestamp'))
             logger.info(f"Portfolio state loaded from {state_file}")
             logger.info(f"  Cash: {self.cash:.2f} {self.base_currency}")
             logger.info(f"  Holdings: {self.holdings}")

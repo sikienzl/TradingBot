@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -227,6 +228,43 @@ def test_effective_stop_loss_raises_with_trailing_peak(monkeypatch):
 
     assert stop == 104.0
     assert trade_info["peak_price"] == 106.0
+
+
+def test_portfolio_load_state_parses_partial_take_profit_timestamp(monkeypatch, tmp_path):
+    state_file = tmp_path / "portfolio_state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "cash": 48.39,
+                "holdings": {"ETH": 0.001},
+                "open_trades": {
+                    "ETH": {
+                        "buy_price": 2307.3257,
+                        "amount_coin": 0.001,
+                        "amount_base": 2.3073,
+                        "timestamp": "2026-07-26T19:58:48+00:00",
+                        "peak_price": 2537.4996,
+                        "partial_tp_taken": True,
+                        "partial_tp_timestamp": "2026-07-26T19:57:48+00:00",
+                        "signal_source": "rules",
+                        "signal_confidence": None,
+                        "recommendation": "BUY"
+                    }
+                },
+                "base_currency": "EUR",
+                "initial_portfolio_value": 51.14,
+                "timestamp": "2026-07-26T19:58:48+00:00"
+            }
+        )
+    )
+
+    portfolio = _make_test_bot(monkeypatch).portfolio
+
+    assert portfolio.load_state(str(state_file)) is True
+    assert isinstance(portfolio.open_trades["ETH"]["timestamp"], datetime)
+    assert isinstance(
+        portfolio.open_trades["ETH"]["partial_tp_timestamp"], datetime
+    )
 
 
 def test_effective_stop_loss_break_even_protection(monkeypatch):
