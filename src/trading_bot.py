@@ -1440,15 +1440,8 @@ class CryptoTradingBot:
         if not self.config.dynamic_lossmaker_exclusion_enabled:
             return set()
 
-        path = self.config.performance_log_file
-        if not self.config.performance_log_enabled or not os.path.exists(path):
-            return set()
-
-        try:
-            df = pd.read_csv(path)
-        except Exception as e:
-            logger.warning(
-                f"Journal could not be read for dynamic exclusions: {e}")
+        df = self._load_journal()
+        if df is None:
             return set()
 
         required_columns = {'action', 'coin', 'pnl_base', 'reason'}
@@ -1501,15 +1494,8 @@ class CryptoTradingBot:
         if not self.config.dynamic_lossmaker_exclusion_enabled:
             return set()
 
-        path = self.config.performance_log_file
-        if not self.config.performance_log_enabled or not os.path.exists(path):
-            return set()
-
-        try:
-            df = pd.read_csv(path)
-        except Exception as e:
-            logger.warning(
-                f"Journal could not be read for dynamic entry pair exclusions: {e}")
+        df = self._load_journal()
+        if df is None:
             return set()
 
         blocked_pairs = _compute_dynamic_lossmaker_entry_pairs(
@@ -1531,15 +1517,8 @@ class CryptoTradingBot:
         if not self.config.dynamic_lossmaker_exclusion_enabled:
             return set()
 
-        path = self.config.performance_log_file
-        if not self.config.performance_log_enabled or not os.path.exists(path):
-            return set()
-
-        try:
-            df = pd.read_csv(path)
-        except Exception as e:
-            logger.warning(
-                f"Journal could not be read for dynamic source exclusions: {e}")
+        df = self._load_journal()
+        if df is None:
             return set()
 
         return _compute_degraded_entry_sources(
@@ -1556,37 +1535,19 @@ class CryptoTradingBot:
 
     def _recent_pnl_guard_state(self) -> Dict[str, Any]:
         """Builds a recent realized-PnL guard state to tighten entries in weak phases."""
+        disabled_state = {
+            "active": False,
+            "recent_trades": 0,
+            "recent_realized_pnl": 0.0,
+            "recent_profit_factor": 999.0,
+            "reason": "disabled",
+        }
         if not self.config.recent_pnl_guard_enabled:
-            return {
-                "active": False,
-                "recent_trades": 0,
-                "recent_realized_pnl": 0.0,
-                "recent_profit_factor": 999.0,
-                "reason": "disabled",
-            }
+            return disabled_state
 
-        path = self.config.performance_log_file
-        if not self.config.performance_log_enabled or not os.path.exists(path):
-            return {
-                "active": False,
-                "recent_trades": 0,
-                "recent_realized_pnl": 0.0,
-                "recent_profit_factor": 999.0,
-                "reason": "journal_missing",
-            }
-
-        try:
-            df = pd.read_csv(path)
-        except Exception as e:
-            logger.warning(
-                f"Journal could not be read for recent PnL guard: {e}")
-            return {
-                "active": False,
-                "recent_trades": 0,
-                "recent_realized_pnl": 0.0,
-                "recent_profit_factor": 999.0,
-                "reason": "journal_read_error",
-            }
+        df = self._load_journal()
+        if df is None:
+            return {**disabled_state, "reason": "journal_unavailable"}
 
         return _compute_recent_pnl_guard_state(
             df,
@@ -1595,6 +1556,23 @@ class CryptoTradingBot:
             min_realized_pnl=self.config.recent_pnl_guard_min_realized_pnl,
             max_profit_factor=self.config.recent_pnl_guard_max_profit_factor,
         )
+
+    def _load_journal(self) -> Optional[pd.DataFrame]:
+        """Load the performance journal CSV once, returning None if unavailable.
+
+        Centralises the repeated guard-check + CSV-read pattern that was
+        duplicated across _dynamic_excluded_coins, _dynamic_excluded_entry_pairs,
+        _degraded_entry_sources, and _recent_pnl_guard_state.
+        """
+        path = self.config.performance_log_file
+        if not self.config.performance_log_enabled or not os.path.exists(path):
+            return None
+        try:
+            return pd.read_csv(path)
+        except Exception as e:
+            logger.warning(
+                f"Journal could not be read: {e}")
+            return None
 
     def _read_auto_tune_state(self) -> Dict:
         path = self.config.auto_tune_state_file
@@ -4254,6 +4232,18 @@ class CryptoTradingBot:
             amount_coin = trade_info['amount_coin']
             partial_tp_taken = bool(trade_info.get('partial_tp_taken', False))
             partial_tp_timestamp = trade_info.get('partial_tp_timestamp')
+            # Convert string timestamp to datetime if needed
+            if isinstance(partial_tp_timestamp, str):
+                try:
+                    partial_tp_timestamp = datetime.fromisoformat(partial_tp_timestamp.replace('Z', '+00:00'))
+                except Exception:
+                    partial_tp_timestamp = None
+            # Convert string timestamp to datetime if needed
+            if isinstance(partial_tp_timestamp, str):
+                try:
+                    partial_tp_timestamp = datetime.fromisoformat(partial_tp_timestamp.replace('Z', '+00:00'))
+                except Exception:
+                    partial_tp_timestamp = None
             current_price_data = current_market_data.get(coin)
             if current_price_data is None:
                 logger.warning(

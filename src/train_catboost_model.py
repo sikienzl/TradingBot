@@ -7,12 +7,6 @@ import pandas as pd
 from catboost import CatBoostClassifier
 from sklearn.metrics import accuracy_score, classification_report, f1_score
 
-from src.research_signal import (
-    RESEARCH_FEATURE_COLUMNS,
-    apply_research_features,
-    load_latest_research_signal,
-)
-
 
 BASE_FEATURE_COLUMNS: List[str] = [
     "rsi",
@@ -39,65 +33,6 @@ LABEL_MAP = {"verkaufen": 0, "halten": 1, "kaufen": 2}
 INV_LABEL_MAP = {v: k for k, v in LABEL_MAP.items()}
 
 
-def compute_class_weights(y: np.ndarray, n_classes: int = 3) -> List[float]:
-    """Computes inverse-frequency class weights with mean normalized to 1.0."""
-    counts = np.bincount(y.astype(int), minlength=n_classes).astype(float)
-    total = float(np.sum(counts))
-    if total <= 0:
-        return [1.0] * n_classes
-
-    weights: List[float] = []
-    for c in counts:
-        if c <= 0:
-            weights.append(1.0)
-        else:
-            weights.append(total / (n_classes * c))
-
-    mean_weight = float(np.mean(weights)) if weights else 1.0
-    if mean_weight <= 0:
-        return [1.0] * n_classes
-    return [float(w / mean_weight) for w in weights]
-
-
-def tune_confidence_threshold(
-    y_true: np.ndarray,
-    proba: np.ndarray,
-    hold_label: int = LABEL_MAP["halten"],
-    threshold_min: float = 0.40,
-    threshold_max: float = 0.80,
-    threshold_step: float = 0.01,
-) -> Tuple[float, dict]:
-    """Finds the best confidence threshold by maximizing macro-F1 after abstaining to HOLD."""
-    if len(y_true) == 0 or proba.size == 0:
-        return 0.45, {"macro_f1": 0.0, "coverage": 0.0}
-
-    conf = np.max(proba, axis=1)
-    pred = np.argmax(proba, axis=1).astype(int)
-
-    best_th = 0.45
-    best_macro = -1.0
-    best_cov = 0.0
-
-    thresholds = np.arange(
-        threshold_min,
-        threshold_max + threshold_step * 0.5,
-        threshold_step,
-    )
-    for th in thresholds:
-        adjusted = pred.copy()
-        adjusted[conf < th] = hold_label
-        macro = float(f1_score(y_true, adjusted,
-                      average="macro", zero_division=0))
-        coverage = float(np.mean(conf >= th))
-
-        if macro > best_macro or (np.isclose(macro, best_macro) and coverage > best_cov):
-            best_macro = macro
-            best_cov = coverage
-            best_th = float(th)
-
-    return best_th, {"macro_f1": best_macro, "coverage": best_cov}
-
-
 def load_data(path: str = "training_data.csv") -> pd.DataFrame:
     df = pd.read_csv(path)
     if "timestamp" in df.columns:
@@ -113,7 +48,7 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     elif "timestamp" in out.columns:
         out = out.sort_values(["timestamp"]).reset_index(drop=True)
 
-    # Additional robust features
+    # Zusätzliche, robuste Features
     if "close" in out.columns:
         out["ret_1"] = out.groupby("coin")["close"].pct_change(
             1) if "coin" in out.columns else out["close"].pct_change(1)
@@ -199,7 +134,7 @@ def run_walk_forward_evaluation(
     min_train_size: int = 300,
     min_val_size: int = 100,
 ) -> pd.DataFrame:
-    """Runs walk-forward evaluation and returns metrics per fold."""
+    """Führt eine Walk-Forward Evaluation durch und gibt Metriken pro Fold zurück."""
     splits = generate_walk_forward_splits(
         n_rows=len(df),
         n_splits=n_splits,
@@ -216,7 +151,6 @@ def run_walk_forward_evaluation(
 
         x_train, y_train, _ = prepare_xy(train_df)
         x_val, y_val, _ = prepare_xy(val_df)
-        class_weights = compute_class_weights(y_train)
 
         model = CatBoostClassifier(
             iterations=400,
@@ -224,12 +158,10 @@ def run_walk_forward_evaluation(
             depth=6,
             loss_function="MultiClass",
             eval_metric="TotalF1",
-            class_weights=class_weights,
             random_seed=42,
             verbose=False,
         )
-        model.fit(x_train, y_train, eval_set=(
-            x_val, y_val), use_best_model=True)
+        model.fit(x_train, y_train, eval_set=(x_val, y_val), use_best_model=True)
 
         y_pred = model.predict(x_val).reshape(-1).astype(int)
         rows.append({
@@ -245,8 +177,7 @@ def run_walk_forward_evaluation(
 
 
 def prepare_xy(df: pd.DataFrame) -> Tuple[pd.DataFrame, np.ndarray, List[str]]:
-    all_features = BASE_FEATURE_COLUMNS + [
-        "ret_1", "ret_3", "ret_6", "vol_6"] + RESEARCH_FEATURE_COLUMNS
+    all_features = BASE_FEATURE_COLUMNS + ["ret_1", "ret_3", "ret_6", "vol_6"]
     available_features = [c for c in all_features if c in df.columns]
     x = df[available_features].copy()
     y = df["label"].map(LABEL_MAP).values
@@ -258,13 +189,9 @@ def train_model(
     data_path: str = "training_data.csv",
     output_dir: str = "./model/catboost_trading_model",
     walk_forward_splits: int = 3,
-    research_signal_path: str = "",
 ) -> None:
     df = load_data(data_path)
     df = add_features(df)
-    research_features = load_latest_research_signal(
-        research_signal_path or os.getenv("RESEARCH_SIGNAL_PATH", ""))
-    df = apply_research_features(df, research_features)
     df = create_profit_labels(df)
 
     required = ["close", "label"]
@@ -280,7 +207,6 @@ def train_model(
     train_df, val_df = train_val_split_time(df, train_ratio=0.8)
     x_train, y_train, features = prepare_xy(train_df)
     x_val, y_val, _ = prepare_xy(val_df)
-    class_weights = compute_class_weights(y_train)
 
     model = CatBoostClassifier(
         iterations=600,
@@ -288,7 +214,6 @@ def train_model(
         depth=6,
         loss_function="MultiClass",
         eval_metric="TotalF1",
-        class_weights=class_weights,
         random_seed=42,
         verbose=100,
     )
@@ -301,23 +226,9 @@ def train_model(
 
     model.save_model(model_path)
 
-    val_proba = model.predict_proba(x_val)
-    recommended_conf_threshold, threshold_stats = tune_confidence_threshold(
-        y_true=y_val,
-        proba=val_proba,
-        hold_label=LABEL_MAP["halten"],
-        threshold_min=0.40,
-        threshold_max=0.80,
-        threshold_step=0.01,
-    )
-
     metadata = {
         "features": features,
         "label_map": LABEL_MAP,
-        "class_weights": class_weights,
-        "recommended_confidence_threshold": recommended_conf_threshold,
-        "recommended_confidence_threshold_stats": threshold_stats,
-        "margin_threshold": 0.03,
     }
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, ensure_ascii=True, indent=2)
@@ -328,11 +239,6 @@ def train_model(
 
     print("\n=== Validierungsreport (CatBoost) ===")
     print(classification_report(y_true_labels, y_pred_labels, digits=3))
-    print(
-        "Empfohlene Confidence-Schwelle: "
-        f"{recommended_conf_threshold:.2f} "
-        f"(macro_f1={threshold_stats['macro_f1']:.4f}, coverage={threshold_stats['coverage']:.2%})"
-    )
 
     walk_forward_df = run_walk_forward_evaluation(
         df,
@@ -342,11 +248,10 @@ def train_model(
     )
     if walk_forward_df.empty:
         print("\n=== Walk-Forward Evaluation ===")
-        print("Insufficient data for walk-forward splits.")
+        print("Nicht genügend Daten für Walk-Forward-Splits.")
     else:
         print("\n=== Walk-Forward Evaluation ===")
-        print(walk_forward_df.to_string(
-            index=False, float_format=lambda v: f"{v:.4f}"))
+        print(walk_forward_df.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
         print(
             "Mittelwerte: "
             f"accuracy={walk_forward_df['accuracy'].mean():.4f}, "
@@ -361,28 +266,7 @@ def train_model(
 
 
 def main() -> None:
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Train CatBoost trading model with optional AutoResearch features."
-    )
-    parser.add_argument("--data-path", default="training_data.csv")
-    parser.add_argument(
-        "--output-dir", default="./model/catboost_trading_model")
-    parser.add_argument("--walk-forward-splits", type=int, default=3)
-    parser.add_argument(
-        "--research-signal-path",
-        default="",
-        help="Path to latest AutoResearch JSON signal. Can also be set via RESEARCH_SIGNAL_PATH.",
-    )
-    args = parser.parse_args()
-
-    train_model(
-        data_path=args.data_path,
-        output_dir=args.output_dir,
-        walk_forward_splits=args.walk_forward_splits,
-        research_signal_path=args.research_signal_path,
-    )
+    train_model()
 
 
 if __name__ == "__main__":

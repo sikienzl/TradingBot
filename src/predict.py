@@ -1,17 +1,18 @@
 import pandas as pd
+import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
 import torch
 import warnings
 
-# Configuration for clean output
+# Konfiguration für saubere Ausgabe
 warnings.filterwarnings("ignore", category=UserWarning)
 pd.set_option('display.max_colwidth', None)
 
 
 class TradingModelPredictor:
     def __init__(self, model_path="./model/fine_tuned_trading_model"):
-        """Initializes the model and tokenizer"""
+        """Initialisiert das Modell und Tokenizer"""
         self.model_path = model_path
         self.model = None
         self.tokenizer = None
@@ -19,8 +20,8 @@ class TradingModelPredictor:
         self._load_model()
 
     def _load_model(self):
-        """Loads the model with optimal settings"""
-        # Quantization configuration
+        """Lädt das Modell mit optimalen Einstellungen"""
+        # Quantisierungskonfiguration
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
@@ -28,22 +29,19 @@ class TradingModelPredictor:
             bnb_4bit_use_double_quant=False,
         )
 
-        # Load model
+        # Modell laden
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_path,
             quantization_config=bnb_config,
             device_map="auto",
-            # trust_remote_code is intentionally NOT set here. The fine-tuned
-            # model at model_path uses standard architectures only and does not
-            # require executing custom remote code. Enabling it would allow
-            # arbitrary code execution from the model repository.
+            trust_remote_code=True
         )
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.padding_side = "left"
 
-        # Configure pipeline
+        # Pipeline konfigurieren
         self.pipe = pipeline(
             "text-generation",
             model=self.model,
@@ -54,7 +52,7 @@ class TradingModelPredictor:
         )
 
     def prepare_data(self, data):
-        """Prepares the input data"""
+        """Bereitet die Eingabedaten vor"""
         scaler = MinMaxScaler()
         data = data.copy()
         data[["rsi", "macd", "volume"]] = scaler.fit_transform(
@@ -63,7 +61,7 @@ class TradingModelPredictor:
         return data
 
     def create_prompt(self, data):
-        """Creates the optimized prompt"""
+        """Erstellt den Optimierten Prompt"""
         template = """Aktuelle Marktdaten für {coin} am {date}:
 Preis: Open={open:.2f}, High={high:.2f}, Low={low:.2f}, Close={close:.2f}
 Volumen: {volume:.2f}
@@ -96,11 +94,11 @@ Antwort nur mit einem Wort (kaufen/verkaufen/halten):"""
         return 'halten'
 
     def predict(self, data, n_votes=5, confidence_threshold=0.6):
-        """Returns the trade decision and confidence (ensemble of LLM and rule-based)."""
+        """Gibt die Handelsentscheidung und Confidence zurück (Ensemble aus LLM und Regel)."""
         try:
             processed_data = self.prepare_data(data)
             prompt = self.create_prompt(processed_data)
-            # LLM predictions (multiple, for confidence)
+            # LLM-Vorhersagen (Mehrfach, für Confidence)
             responses = self.pipe(
                 prompt,
                 max_new_tokens=50,
@@ -111,21 +109,21 @@ Antwort nur mit einem Wort (kaufen/verkaufen/halten):"""
                 num_return_sequences=n_votes,
                 eos_token_id=self.tokenizer.eos_token_id
             )
-            # Extract decisions - evaluate only the newly generated part,
-            # ignore case and punctuation
+            # Entscheidungen extrahieren – nur den neu generierten Teil auswerten,
+            # Groß-/Kleinschreibung und Satzzeichen ignorieren
             valid_decisions = {"kaufen", "verkaufen", "halten"}
             votes = []
             for r in responses:
-                # Only look at the newly generated part (after the prompt)
+                # Nur den neu generierten Teil betrachten (nach dem Prompt)
                 full_text = r['generated_text']
                 generated = full_text[len(prompt):].strip().lower()
-                # 1st attempt: first word (strip punctuation)
+                # 1. Versuch: erstes Wort (Satzzeichen entfernen)
                 first_word = generated.split()[0].strip(
                     '.,!?:;"\'-') if generated.split() else ''
                 if first_word in valid_decisions:
                     votes.append(first_word)
                     continue
-                # 2nd attempt: search anywhere in the text (priority: more specific first)
+                # 2. Versuch: irgendwo im Text suchen (Priorität: spezifischeres zuerst)
                 found = None
                 for keyword in ("verkaufen", "kaufen", "halten"):
                     if keyword in generated:
@@ -135,14 +133,14 @@ Antwort nur mit einem Wort (kaufen/verkaufen/halten):"""
                     votes.append(found)
             if not votes:
                 return {'decision': 'halten', 'confidence': 0.0, 'llm_votes': {}, 'rule': self.rule_based_decision(data)}
-            # Majority decision and confidence
+            # Mehrheitsentscheidung und Confidence
             from collections import Counter
             vote_counts = Counter(votes)
             decision, count = vote_counts.most_common(1)[0]
             confidence = count / n_votes
-            # Rule-based decision
+            # Regelbasierte Entscheidung
             rule_decision = self.rule_based_decision(data)
-            # Ensemble logic: only trade when LLM and rule agree and confidence is high
+            # Ensemble-Logik: Nur handeln, wenn LLM und Regel übereinstimmen und Confidence hoch
             if decision == rule_decision and confidence >= confidence_threshold:
                 final_decision = decision
             else:
@@ -154,7 +152,7 @@ Antwort nur mit einem Wort (kaufen/verkaufen/halten):"""
                 'rule': rule_decision
             }
         except Exception as e:
-            print(f"Prediction error: {str(e)}")
+            print(f"Vorhersagefehler: {str(e)}")
             return {'decision': 'halten', 'confidence': 0.0, 'llm_votes': {}, 'rule': 'halten'}
 
 
@@ -176,10 +174,10 @@ if __name__ == "__main__":
         'macd': 12.3
     }])
 
-    # Run prediction
-    print("\n=== Trading Decision Assistant (Ensemble) ===")
+    # Vorhersage durchführen
+    print("\n=== Handelsentscheidungs-Assistent (Ensemble) ===")
     result = predictor.predict(example_data)
     print(
-        f"\nRecommended action: {result['decision'].upper()} (Confidence: {result['confidence']*100:.0f}%)")
+        f"\nEmpfohlene Aktion: {result['decision'].upper()} (Confidence: {result['confidence']*100:.0f}%)")
     print(f"LLM-Votes: {result['llm_votes']}")
-    print(f"Rule-based recommendation: {result['rule']}")
+    print(f"Regelbasierte Empfehlung: {result['rule']}")

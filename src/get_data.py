@@ -1,12 +1,15 @@
 import ccxt
 import talib
+import numpy as np
 import pandas as pd
+from datetime import datetime
 import time
 import sqlite3
+from pathlib import Path
 
 
 class CryptoDataFetcher:
-    """Class for fetching and processing cryptocurrency data"""
+    """Klasse zum Abrufen und Verarbeiten von Kryptowährungsdaten"""
 
     def __init__(self, exchange='kraken', quote='EUR', days=1000, timeframe='1d'):
         self.exchange = exchange
@@ -18,7 +21,7 @@ class CryptoDataFetcher:
         self.db_conn = None
 
     def initialize_exchange(self):
-        """Initialises the exchange connection"""
+        """Initialisiert die Exchange-Verbindung"""
         try:
             exchange_class = getattr(ccxt, self.exchange)
             exchange = exchange_class({
@@ -28,11 +31,11 @@ class CryptoDataFetcher:
             exchange.load_markets()
             return exchange
         except Exception as e:
-            print(f"❌ Exchange initialisation failed: {str(e)}")
+            print(f"❌ Exchange Initialisierung fehlgeschlagen: {str(e)}")
             return None
 
     def get_available_pairs(self, exchange):
-        """Returns all available trading pairs for the desired quote currency"""
+        """Holt alle verfügbaren Trading-Paare mit der gewünschten Quote-Währung"""
         pairs = []
         for symbol in exchange.symbols:
             if symbol.endswith(f'/{self.quote}') and exchange.markets[symbol]['active']:
@@ -40,24 +43,22 @@ class CryptoDataFetcher:
         return sorted(pairs)
 
     def fetch_ohlcv_with_retry(self, exchange, symbol, max_retries=3):
-        """Attempts to fetch OHLCV data with retries"""
-        last_error = None
+        """Versucht mehrfach, OHLCV-Daten abzurufen"""
         for attempt in range(max_retries):
             try:
                 ohlcv = exchange.fetch_ohlcv(
                     symbol, self.timeframe, limit=self.days)
                 return ohlcv
-            except Exception as err:
-                last_error = err
+            except Exception as e:
                 wait_time = (attempt + 1) * 5
                 print(
-                    f"Attempt {attempt + 1}/{max_retries} for {symbol} failed. Waiting {wait_time}s...", end="\r")
+                    f"Versuch {attempt + 1}/{max_retries} für {symbol} fehlgeschlagen. Warte {wait_time}s...", end="\r")
                 time.sleep(wait_time)
-        self.error_log.append((symbol, str(last_error) if last_error else "Unknown error"))
+        self.error_log.append((symbol, str(e)))
         return None
 
     def calculate_indicators(self, df):
-        """Calculates technical indicators for the DataFrame"""
+        """Berechnet technische Indikatoren für den DataFrame"""
         try:
             df['rsi'] = talib.RSI(df['close'], timeperiod=14)
             df['macd'], df['macd_signal'], df['macd_hist'] = talib.MACD(
@@ -80,12 +81,12 @@ class CryptoDataFetcher:
                 df['close'])
             return True
         except Exception as e:
-            print(f"Indicator calculation failed: {str(e)}")
+            print(f"Indikator-Berechnung fehlgeschlagen: {str(e)}")
             return False
 
     def process_symbol(self, exchange, symbol):
-        """Processes a single currency pair"""
-        print(f"Processing {symbol}...", end="\r")
+        """Verarbeitet ein einzelnes Währungspaar"""
+        print(f"Verarbeite {symbol}...", end="\r")
 
         ohlcv = self.fetch_ohlcv_with_retry(exchange, symbol)
         if ohlcv is None:
@@ -104,37 +105,37 @@ class CryptoDataFetcher:
         return False
 
     def fetch_all_data(self):
-        """Main method to fetch all data"""
+        """Hauptmethode zum Abrufen aller Daten"""
         exchange = self.initialize_exchange()
         if not exchange:
             return False
 
         pairs = self.get_available_pairs(exchange)
-        print(f"Trading pairs found: {len(pairs)}")
+        print(f"Gefundene Währungspaare: {len(pairs)}")
 
         for i, pair in enumerate(pairs, 1):
             success = self.process_symbol(exchange, pair)
             if success:
-                print(f"Success: {i}/{len(pairs)} - {pair}", end="\r")
-            time.sleep(0.1)  # Respect API rate limits
+                print(f"Erfolgreich: {i}/{len(pairs)} - {pair}", end="\r")
+            time.sleep(0.1)  # Respektiere API-Limits
 
         print(
-            f"\n\nProcessing complete. Successful: {len(self.data)}/{len(pairs)}")
+            f"\n\nVerarbeitung abgeschlossen. Erfolgreich: {len(self.data)}/{len(pairs)}")
         if self.error_log:
-            print(f"Errors for {len(self.error_log)} currencies:")
+            print(f"Fehler bei {len(self.error_log)} Währungen:")
             for symbol, error in self.error_log[:5]:
                 print(f"- {symbol}: {error}")
         return True
 
     def save_to_csv(self, filename="crypto_data.csv"):
-        """Saves all data to a CSV file"""
+        """Speichert alle Daten in einer CSV-Datei"""
         try:
             all_dfs = []
             for df in self.data.values():
                 all_dfs.append(df)
 
             if not all_dfs:
-                print("No data available to save")
+                print("Keine Daten zum Speichern verfügbar")
                 return False
 
             combined = pd.concat(all_dfs)
@@ -142,11 +143,11 @@ class CryptoDataFetcher:
             print(f"Daten erfolgreich in {filename} gespeichert")
             return True
         except Exception as e:
-            print(f"Error saving file: {str(e)}")
+            print(f"Fehler beim Speichern: {str(e)}")
             return False
 
     def save_to_sqlite(self, filename="crypto_data.db"):
-        """Saves data to a SQLite database"""
+        """Speichert Daten in einer SQLite-Datenbank"""
         try:
             conn = sqlite3.connect(filename)
             combined = pd.concat([df for df in self.data.values()])
@@ -160,7 +161,7 @@ class CryptoDataFetcher:
             return False
 
     def get_sample_data(self, symbol=None):
-        """Returns sample data for a currency"""
+        """Gibt Beispieldaten für eine Währung zurück"""
         if not symbol:
             symbol = next(iter(self.data)) if self.data else None
             if not symbol:
@@ -172,33 +173,33 @@ class CryptoDataFetcher:
 
 
 if __name__ == "__main__":
-    print("🚀 Crypto Data Analysis Tool")
+    print("🚀 Krypto-Datenanalyse-Tool")
     print("="*50)
 
     # Initialisiere den Fetcher
-    # 1h candles: 720 candles = 30 days; fits bot inference (OHLCV_TIMEFRAME=1h)
+    # 1h-Candles: 720 Kerzen = 30 Tage; passt zur Bot-Inference (OHLCV_TIMEFRAME=1h)
     fetcher = CryptoDataFetcher(
         exchange='kraken', quote='EUR', days=720, timeframe='1h')
 
     # Daten abrufen
-    print("📊 Starting data fetch...")
+    print("📊 Starte Datenabruf...")
     success = fetcher.fetch_all_data()
 
     if success and fetcher.data:
         # Daten speichern
-        print("\n💾 Saving data...")
+        print("\n💾 Speichere Daten...")
         fetcher.save_to_csv("full_crypto_data.csv")
         fetcher.save_to_sqlite("crypto_data.db")
 
         # Beispielausgabe
         sample = fetcher.get_sample_data()
         if sample is not None:
-            print("\n📈 Sample data (last 5 entries):")
+            print("\n📈 Beispieldaten (letzte 5 Tage):")
             print(sample.to_string(index=False))
 
         print("\n✅ Prozess erfolgreich abgeschlossen!")
-        print(f"Processed currencies: {len(fetcher.data)}")
+        print(f"Verarbeitete Währungen: {len(fetcher.data)}")
         print(
-            f"Saved records: {sum(len(df) for df in fetcher.data.values())}")
+            f"Gespeicherte Datensätze: {sum(len(df) for df in fetcher.data.values())}")
     else:
-        print("❌ No data could be fetched")
+        print("❌ Keine Daten konnten abgerufen werden")

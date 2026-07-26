@@ -1,14 +1,17 @@
 """
-Hybrid Trading Architecture: Hailo-8 Edge + GPT-5 Cloud
+Hybrid Package Initialization
 
-This package implements the hybrid filtering strategy:
-1. Hailo-8 (Node 2): High-frequency anomaly detection (26 TOPS, 100ms loops)
-2. GPT-5 (Cloud): Called ONLY when anomaly detected (95% cost reduction)
-
-Components:
-  - hailo/: Hailo-8 edge inference & WebSocket listener
-  - cloud/: GPT-5 chief strategist & decision gating
-  - hybrid/: Orchestration & hybrid decision logic
+This package contains hybrid components for edge and cloud computing.
 """
 
-__version__ = "1.0.0-hybrid"
+from .decision_gate import DecisionGate
+from .market_data_relay import MarketDataRelay
+from .monitoring import HybridMonitor
+from .transport import TransportLayer
+
+__all__ = [
+    'DecisionGate',
+    'MarketDataRelay',
+    'HybridMonitor',
+    'TransportLayer'
+]

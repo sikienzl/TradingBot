@@ -1,8 +1,11 @@
 """
-Cloud Integration Components
+Cloud Package Initialization
 
-GPT-5 Chief Strategist - called ONLY when Hailo-8 detects anomalies.
-Responsible for macro scenario validation & risk management.
+This package contains cloud-based components for the trading bot.
 """
 
-__version__ = "1.0.0"
+from .strategist_service import StrategistService
+
+__all__ = [
+    'StrategistService'
+]
