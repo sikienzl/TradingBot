@@ -6,7 +6,7 @@ of the cryptocurrency trading system.
 """
 
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any
 from .config import BotConfig
 from .exchange import ExchangeManager
 from .portfolio import PortfolioManager
@@ -17,7 +17,7 @@ from ..data.fetcher import AdvancedDataFetcher
 class TradingBot:
     """Main trading bot class that coordinates all components."""
     
-    def __init__(self, config: Optional[BotConfig] = None):
+    def __init__(self, config: Optional[BotConfig] = None) -> None:
         """
         Initialize the trading bot.
         
@@ -36,30 +36,33 @@ class TradingBot:
         
         self.logger.info("Trading bot initialized successfully")
     
-    def start(self):
+    def start(self) -> None:
         """Start the trading bot."""
         self.logger.info("Starting trading bot...")
         # Implementation would go here
         pass
     
-    def stop(self):
+    def stop(self) -> None:
         """Stop the trading bot."""
         self.logger.info("Stopping trading bot...")
         # Implementation would go here
         pass
     
-    def run_cycle(self):
+    def run_cycle(self) -> None:
         """Run a complete trading cycle."""
         self.logger.info("Running trading cycle...")
         # Implementation would go here
         pass
     
-    def process_market_data(self, symbol: str):
+    def process_market_data(self, symbol: str) -> Dict[str, Any]:
         """
         Process market data for a symbol.
         
         Args:
             symbol: Trading pair symbol
+            
+        Returns:
+            Dictionary containing all processed market data
         """
         self.logger.info(f"Processing market data for {symbol}")
         # Fetch data

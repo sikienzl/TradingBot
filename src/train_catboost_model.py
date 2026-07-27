@@ -41,6 +41,7 @@ def load_data(path: str = "training_data.csv") -> pd.DataFrame:
 
 
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add additional robust features to the dataframe"""
     out = df.copy()
 
     if "coin" in out.columns and "timestamp" in out.columns:
@@ -48,7 +49,7 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     elif "timestamp" in out.columns:
         out = out.sort_values(["timestamp"]).reset_index(drop=True)
 
-    # Zusätzliche, robuste Features
+    # Additional, robust features
     if "close" in out.columns:
         out["ret_1"] = out.groupby("coin")["close"].pct_change(
             1) if "coin" in out.columns else out["close"].pct_change(1)

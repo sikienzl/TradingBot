@@ -46,4 +46,4 @@ def test_create_profit_labels_applies_roundtrip_costs():
     expected_net = gross_return - 0.006
 
     assert np.isclose(out.loc[0, "future_net_return"], expected_net)
-    assert out.loc[0, "label"] == "halten"
+    assert out.loc[0, "label"] == "hold"

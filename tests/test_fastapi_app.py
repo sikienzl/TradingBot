@@ -85,9 +85,9 @@ def test_catboost_predict_endpoint_returns_typed_prediction(monkeypatch):
             assert features["rsi"] == 48.0
             assert confidence_threshold == 0.55
             return {
-                "decision": "kaufen",
+                "decision": "buy",
                 "confidence": 0.72,
-                "proba": {"verkaufen": 0.08, "halten": 0.20, "kaufen": 0.72},
+                "proba": {"sell": 0.08, "hold": 0.20, "buy": 0.72},
                 "threshold_used": 0.55,
                 "margin": 0.52,
             }
@@ -111,8 +111,8 @@ def test_catboost_predict_endpoint_returns_typed_prediction(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["model_dir"] == "./model/catboost_trading_model"
-    assert body["decision"] == "kaufen"
-    assert body["proba"]["kaufen"] == 0.72
+    assert body["decision"] == "buy"
+    assert body["proba"]["buy"] == 0.72
 
 
 def test_catboost_predict_endpoint_validates_non_empty_features():

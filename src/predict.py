@@ -4,24 +4,25 @@ from sklearn.preprocessing import MinMaxScaler
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
 import torch
 import warnings
+from typing import Dict, Any, List, Tuple
 
-# Konfiguration für saubere Ausgabe
+# Configuration for clean output
 warnings.filterwarnings("ignore", category=UserWarning)
 pd.set_option('display.max_colwidth', None)
 
 
 class TradingModelPredictor:
-    def __init__(self, model_path="./model/fine_tuned_trading_model"):
-        """Initialisiert das Modell und Tokenizer"""
+    def __init__(self, model_path: str = "./model/fine_tuned_trading_model") -> None:
+        """Initialize the model and tokenizer"""
         self.model_path = model_path
         self.model = None
         self.tokenizer = None
         self.pipe = None
         self._load_model()
 
-    def _load_model(self):
-        """Lädt das Modell mit optimalen Einstellungen"""
-        # Quantisierungskonfiguration
+    def _load_model(self) -> None:
+        """Load the model with optimal settings"""
+        # Quantization configuration
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
@@ -29,7 +30,7 @@ class TradingModelPredictor:
             bnb_4bit_use_double_quant=False,
         )
 
-        # Modell laden
+        # Load model
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_path,
             quantization_config=bnb_config,
@@ -41,7 +42,7 @@ class TradingModelPredictor:
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.padding_side = "left"
 
-        # Pipeline konfigurieren
+        # Configure pipeline
         self.pipe = pipeline(
             "text-generation",
             model=self.model,
@@ -51,8 +52,8 @@ class TradingModelPredictor:
             clean_up_tokenization_spaces=True
         )
 
-    def prepare_data(self, data):
-        """Bereitet die Eingabedaten vor"""
+    def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Prepare the input data"""
         scaler = MinMaxScaler()
         data = data.copy()
         data[["rsi", "macd", "volume"]] = scaler.fit_transform(
@@ -60,15 +61,15 @@ class TradingModelPredictor:
         )
         return data
 
-    def create_prompt(self, data):
-        """Erstellt den Optimierten Prompt"""
-        template = """Aktuelle Marktdaten für {coin} am {date}:
-Preis: Open={open:.2f}, High={high:.2f}, Low={low:.2f}, Close={close:.2f}
-Volumen: {volume:.2f}
-Technische Indikatoren: RSI={rsi:.2f}, MACD={macd:.2f}
+    def create_prompt(self, data: pd.DataFrame) -> str:
+        """Create the optimized prompt"""
+        template = """Current market data for {coin} on {date}:
+Price: Open={open:.2f}, High={high:.2f}, Low={low:.2f}, Close={close:.2f}
+Volume: {volume:.2f}
+Technical Indicators: RSI={rsi:.2f}, MACD={macd:.2f}
 
-Frage: Sollte ich kaufen, verkaufen oder halten?
-Antwort nur mit einem Wort (kaufen/verkaufen/halten):"""
+Question: Should I buy, sell or hold?
+Answer only with one word (buy/sell/hold):"""
 
         row = data.iloc[0] if isinstance(data, pd.DataFrame) else data
         return template.format(
@@ -84,17 +85,17 @@ Antwort nur mit einem Wort (kaufen/verkaufen/halten):"""
             macd=row['macd']
         )
 
-    def rule_based_decision(self, data, rsi_buy=30, rsi_sell=70):
+    def rule_based_decision(self, data: pd.DataFrame, rsi_buy: int = 30, rsi_sell: int = 70) -> str:
         row = data.iloc[0] if isinstance(data, pd.DataFrame) else data
         if 'rsi' in row:
             if row['rsi'] < rsi_buy:
-                return 'kaufen'
+                return 'buy'
             elif row['rsi'] > rsi_sell:
-                return 'verkaufen'
-        return 'halten'
+                return 'sell'
+        return 'hold'
 
-    def predict(self, data, n_votes=5, confidence_threshold=0.6):
-        """Gibt die Handelsentscheidung und Confidence zurück (Ensemble aus LLM und Regel)."""
+    def predict(self, data: pd.DataFrame, n_votes: int = 5, confidence_threshold: float = 0.6) -> Dict[str, Any]:
+        """Return the trading decision and confidence (ensemble of LLM and rule)."""
         try:
             processed_data = self.prepare_data(data)
             prompt = self.create_prompt(processed_data)

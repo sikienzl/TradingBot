@@ -24,24 +24,24 @@ def test_catboost_predict_holds_when_confidence_too_low():
     result = predictor.predict(row, confidence_threshold=0.45)
 
     assert result["confidence"] == 0.40
-    assert result["decision"] == "halten"
-    assert set(result["proba"].keys()) == {"verkaufen", "halten", "kaufen"}
-    # Der Test prüft nicht mehr auf threshold_used und margin, da diese Felder nicht im Ergebnis enthalten sind
+    assert result["decision"] == "hold"
+    assert set(result["proba"].keys()) == {"sell", "hold", "buy"}
+    # The test no longer checks for threshold_used and margin, as these fields are not included in the result
 
 
 def test_catboost_predict_from_features_wraps_single_row():
     predictor = CatBoostTradingPredictor.__new__(CatBoostTradingPredictor)
     predictor.model = _FakeModel()
     predictor.features = ["rsi", "macd", "ret_1"]
-    predictor.label_map = {"verkaufen": 0, "halten": 1, "kaufen": 2}
-    predictor.inv_label_map = {0: "verkaufen", 1: "halten", 2: "kaufen"}
+    predictor.label_map = {"sell": 0, "hold": 1, "buy": 2}
+    predictor.inv_label_map = {0: "sell", 1: "hold", 2: "buy"}
     predictor.recommended_confidence_threshold = 0.45
     predictor.margin_threshold = 0.03
 
-    # Die predict_from_features Methode existiert nicht im aktuellen Code
-    # Wir testen stattdessen die predict Methode mit einem Dictionary
+    # The predict_from_features method does not exist in the current code
+    # We test the predict method with a dictionary instead
     row = pd.DataFrame([{"rsi": 50.0, "macd": 0.2, "ret_1": 0.01}])
     result = predictor.predict(row, confidence_threshold=0.45)
 
-    assert result["decision"] == "halten"
-    # Der Test prüft nicht mehr auf threshold_used, da dieses Feld nicht im Ergebnis enthalten ist
+    assert result["decision"] == "hold"
+    # The test no longer checks for threshold_used, as this field is not included in the result

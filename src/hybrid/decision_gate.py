@@ -43,11 +43,37 @@ class HybridDecisionGate:
     4. Trading bot executes based on GPT-5 decision
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.enabled = os.getenv(
             "HYBRID_GATE_ENABLED", "true").lower() == "true"
         self.use_historical = os.getenv(
             "HYBRID_GATE_USE_HISTORICAL_DATA", "true").lower() == "true"
+        
+    def process_alert(self, alert: AnomalyAlert) -> Optional[Dict[str, Any]]:
+        """
+        Process an anomaly alert from Hailo-8.
+        
+        Args:
+            alert: AnomalyAlert object from Hailo-8
+            
+        Returns:
+            Decision dictionary or None if no action required
+        """
+        logger.info(f"Processing anomaly alert for {alert.coin}")
+        
+        # If not enabled, just return the alert
+        if not self.enabled:
+            return {"action": "continue", "reason": "Hybrid gate disabled"}
+        
+        # Check if alert is critical
+        if alert.is_critical():
+            return {
+                "action": "call_gpt5",
+                "reason": f"High anomaly score ({alert.hailo_score:.2f})",
+                "alert": alert
+            }
+        else:
+            return {"action": "continue", "reason": "Below threshold"}
         self.emit_metrics = os.getenv(
             "HYBRID_GATE_EMIT_METRICS", "true").lower() == "true"
         self.gpt5_calls_today = 0
