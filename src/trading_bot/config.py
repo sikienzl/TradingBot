@@ -43,6 +43,11 @@ class BotConfig:
     enable_online_learning: bool = False
     enable_strategy_optimization: bool = True
     
+    # Performance settings
+    cache_ttl_seconds: int = 300  # 5 minutes default cache TTL
+    max_concurrent_requests: int = 10
+    request_timeout_seconds: int = 30
+    
     def __post_init__(self):
         """Initialize configuration after dataclass fields are set."""
         # Load from environment variables if not explicitly set
@@ -74,8 +79,46 @@ class BotConfig:
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             model_path=os.getenv("MODEL_PATH"),
             enable_online_learning=os.getenv("ENABLE_ONLINE_LEARNING", "false").lower() == "true",
-            enable_strategy_optimization=os.getenv("ENABLE_STRATEGY_OPTIMIZATION", "true").lower() == "true"
+            enable_strategy_optimization=os.getenv("ENABLE_STRATEGY_OPTIMIZATION", "true").lower() == "true",
+            cache_ttl_seconds=int(os.getenv("CACHE_TTL_SECONDS", "300")),
+            max_concurrent_requests=int(os.getenv("MAX_CONCURRENT_REQUESTS", "10")),
+            request_timeout_seconds=int(os.getenv("REQUEST_TIMEOUT_SECONDS", "30"))
         )
+    
+    def validate(self):
+        """
+        Validate configuration values.
+        
+        Raises:
+            ValueError: If any configuration value is invalid
+        """
+        if self.max_position_size <= 0:
+            raise ValueError("max_position_size must be positive")
+            
+        if self.risk_per_trade < 0 or self.risk_per_trade > 1:
+            raise ValueError("risk_per_trade must be between 0 and 1")
+            
+        if self.stop_loss_percentage < 0:
+            raise ValueError("stop_loss_percentage cannot be negative")
+            
+        if self.take_profit_percentage < 0:
+            raise ValueError("take_profit_percentage cannot be negative")
+            
+        if self.max_portfolio_risk < 0 or self.max_portfolio_risk > 1:
+            raise ValueError("max_portfolio_risk must be between 0 and 1")
+            
+        if self.lookback_period <= 0:
+            raise ValueError("lookback_period must be positive")
+            
+        if self.cache_ttl_seconds < 0:
+            raise ValueError("cache_ttl_seconds cannot be negative")
+            
+        if self.max_concurrent_requests <= 0:
+            raise ValueError("max_concurrent_requests must be positive")
+            
+        if self.request_timeout_seconds <= 0:
+            raise ValueError("request_timeout_seconds must be positive")
 
 # Global configuration instance
+config = BotConfig()
 config = BotConfig()

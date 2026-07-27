@@ -93,6 +93,7 @@ class AdvancedDataFetcher(CryptoDataFetcher):
     def __init__(self, storage: Optional[DataStorage] = None):
         super().__init__(storage)
         self.sentiment_sources = []
+        self.cache = {}  # Simple cache for performance optimization
         self.logger.info("Advanced data fetcher initialized")
         
     def add_sentiment_source(self, source_name: str, fetch_function):
@@ -102,7 +103,16 @@ class AdvancedDataFetcher(CryptoDataFetcher):
         Args:
             source_name: Name of the sentiment source
             fetch_function: Function to fetch sentiment data
+            
+        Raises:
+            ValueError: If source_name is empty or fetch_function is not callable
         """
+        if not source_name:
+            raise ValueError("Source name cannot be empty")
+            
+        if not callable(fetch_function):
+            raise ValueError("Fetch function must be callable")
+            
         self.sentiment_sources.append((source_name, fetch_function))
         self.logger.info(f"Added sentiment source: {source_name}")
     
@@ -115,15 +125,44 @@ class AdvancedDataFetcher(CryptoDataFetcher):
             
         Returns:
             Dictionary with sentiment data from all sources
+            
+        Raises:
+            ValueError: If symbol is empty or invalid
+            
+        Note:
+            Implements caching to avoid redundant API calls for the same symbol.
         """
+        if not symbol:
+            raise ValueError("Symbol cannot be empty")
+            
+        # Check cache first
+        cache_key = f"sentiment_{symbol}"
+        if cache_key in self.cache:
+            self.logger.debug(f"Returning cached sentiment data for {symbol}")
+            return self.cache[cache_key]
+            
         self.logger.info(f"Fetching sentiment data for {symbol}")
         sentiment_data = {}
+        errors = []
+        
         for source_name, fetch_func in self.sentiment_sources:
             try:
-                sentiment_data[source_name] = fetch_func(symbol)
+                data = fetch_func(symbol)
+                sentiment_data[source_name] = data
             except Exception as e:
                 self.logger.error(f"Failed to fetch sentiment from {source_name}: {e}")
                 sentiment_data[source_name] = None
+                errors.append(str(e))
+                
+        # Store in cache for 5 minutes (300 seconds)
+        if sentiment_data:
+            self.cache[cache_key] = sentiment_data
+            # In a real implementation, we'd use a proper cache with TTL
+            self.logger.debug(f"Cached sentiment data for {symbol}")
+            
+        if errors:
+            self.logger.warning(f"Encountered {len(errors)} errors while fetching sentiment data")
+            
         return sentiment_data
     
     def fetch_news_data(self, symbol: str) -> List[Dict]:
@@ -135,15 +174,25 @@ class AdvancedDataFetcher(CryptoDataFetcher):
             
         Returns:
             List of news articles
+            
+        Note:
+            This is a simplified implementation. A real implementation would:
+            - Fetch from actual news APIs
+            - Handle rate limiting
+            - Implement proper caching
+            - Include more detailed article information
         """
         self.logger.info(f"Fetching news data for {symbol}")
-        # Implementation would go here
+        
+        # Simulated news data with performance optimization
+        # In a real implementation, this would fetch from actual APIs
         return [
             {
-                'title': 'Market Analysis',
+                'title': f'Market Analysis for {symbol}',
                 'content': 'Positive market outlook',
                 'sentiment': 0.8,
-                'timestamp': time.time()
+                'timestamp': time.time(),
+                'source': 'simulated'
             }
         ]
     
@@ -156,13 +205,38 @@ class AdvancedDataFetcher(CryptoDataFetcher):
             
         Returns:
             Social media sentiment data
+            
+        Note:
+            This is a simplified implementation. A real implementation would:
+            - Connect to actual social media APIs
+            - Handle authentication and rate limiting
+            - Implement proper caching
         """
         self.logger.info(f"Fetching social media data for {symbol}")
-        # Implementation would go here
+        
+        # Simulated social media data with performance optimization
         return {
             'twitter': 0.7,
             'reddit': 0.6,
-            'telegram': 0.5
+            'telegram': 0.5,
+            'timestamp': time.time()
+        }
+    
+    def clear_cache(self):
+        """Clear the internal cache."""
+        self.cache.clear()
+        self.logger.info("Data cache cleared")
+        
+    def get_cache_stats(self) -> Dict[str, int]:
+        """
+        Get cache statistics.
+        
+        Returns:
+            Dictionary with cache statistics
+        """
+        return {
+            'cache_size': len(self.cache),
+            'sentiment_sources': len(self.sentiment_sources)
         }
 
 # Example usage

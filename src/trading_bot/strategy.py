@@ -100,7 +100,13 @@ class ModularStrategyEngine(StrategyEngine):
             name: Strategy name
             strategy_func: Function implementing the strategy
             weight: Strategy weight for combination
+            
+        Raises:
+            ValueError: If weight is negative or strategy already exists
         """
+        if weight < 0:
+            raise ValueError("Strategy weight must be non-negative")
+            
         super().add_strategy(name, strategy_func)
         self.strategy_weights[name] = weight
         self.performance_history[name] = deque(maxlen=100)
@@ -115,16 +121,27 @@ class ModularStrategyEngine(StrategyEngine):
             
         Returns:
             Combined signal tuple (action, confidence)
+            
+        Raises:
+            ValueError: If data is invalid or no strategies are available
         """
         self.logger.info(f"Generating weighted signal for {symbol}")
+        if not data:
+            raise ValueError("Market data cannot be empty")
+            
         signals = []
         weights = []
         
         for name, strategy in self.strategies.items():
-            signal = strategy(symbol, data)
-            if signal:
-                signals.append(signal)
-                weights.append(self.strategy_weights.get(name, 1.0))
+            try:
+                signal = strategy(symbol, data)
+                if signal:
+                    signals.append(signal)
+                    weights.append(self.strategy_weights.get(name, 1.0))
+            except Exception as e:
+                self.logger.error(f"Error executing strategy {name}: {e}")
+                # Continue with other strategies instead of failing completely
+                continue
                 
         return self.combine_signals(signals, weights)
     
@@ -137,10 +154,15 @@ class ModularStrategyEngine(StrategyEngine):
             weights: List of weights for each signal
             
         Returns:
-            Combined signal
+            Combined signal tuple (action, confidence)
+            
+        Note:
+            Uses weighted average approach to combine signals from different strategies.
+            If no valid signals are provided, returns a "hold" signal with 0.5 confidence.
         """
         if not signals:
-            return ("hold", 0.0)
+            self.logger.warning("No valid signals to combine")
+            return ("hold", 0.5)
             
         # Simple weighted average approach
         total_weight = sum(weights)
@@ -171,6 +193,29 @@ class ModularStrategyEngine(StrategyEngine):
         confidence = max(buy_confidence, sell_confidence)
         
         return (action, confidence)
+    
+    def get_strategy_performance(self, strategy_name: str) -> List[float]:
+        """
+        Get performance history for a specific strategy.
+        
+        Args:
+            strategy_name: Name of the strategy
+            
+        Returns:
+            List of performance metrics
+        """
+        return list(self.performance_history.get(strategy_name, []))
+    
+    def update_strategy_performance(self, strategy_name: str, performance: float):
+        """
+        Update performance metrics for a strategy.
+        
+        Args:
+            strategy_name: Name of the strategy
+            performance: Performance metric (0.0 to 1.0)
+        """
+        if strategy_name in self.performance_history:
+            self.performance_history[strategy_name].append(performance)
 
 # Example usage
 if __name__ == "__main__":

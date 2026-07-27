@@ -12,7 +12,7 @@ from .exchange import ExchangeManager
 from .portfolio import PortfolioManager
 from .strategy import StrategyEngine, ModularStrategyEngine
 from .risk_management import RiskManager, AdvancedRiskManager
-from data.fetcher import AdvancedDataFetcher
+from ..data.fetcher import AdvancedDataFetcher
 
 class TradingBot:
     """Main trading bot class that coordinates all components."""
