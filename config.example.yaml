@@ -1,0 +1,99 @@
+# Centralized Configuration Example
+#
+# This file demonstrates the structure of the trading bot's configuration.
+# Copy this file to config.yaml and adjust values as needed.
+
+# Core settings
+environment: "development"
+simulate_data: false
+
+# Exchange configuration
+exchange:
+  name: "kraken"
+  api_key: ""
+  api_secret: ""
+  sandbox_mode: false
+  base_currency: "EUR"
+  excluded_coins:
+    - "USDC"
+    - "USDT"
+    - "EURT"
+    - "DAI"
+    - "TUSD"
+    - "USDP"
+    - "FDUSD"
+    - "USDE"
+  max_concurrent_requests: 10
+  request_timeout_seconds: 30
+  retry_attempts: 3
+  retry_delay_seconds: 1.0
+
+# Trading configuration
+trading:
+  trade_amount: 10.0
+  min_trade_amount: 3.0
+  max_open_trades: 4
+  allow_partial_trades: true
+  cash_reserve_pct: 0.02
+  risk_per_trade: 0.01
+  max_portfolio_risk: 0.10
+  stop_loss_percentage: 0.05
+  take_profit_percentage: 0.10
+  check_interval_seconds: 8
+  enable_dry_run: true
+  min_entry_score: 50
+  enable_fallback_entry: true
+  enable_signal_exits: true
+  exit_on_downtrend: true
+  entry_require_price_above_ema20: false
+  fallback_min_score: 40
+  fallback_max_rsi: 80
+  force_fill_slots: true
+  force_fill_min_score: 30
+  downtrend_reversal_entry_enabled: true
+  downtrend_reversal_allowed_coins:
+    - "ETH"
+  downtrend_reversal_max_rsi: 30
+  downtrend_reversal_min_buy_proba: 0.20
+  downtrend_reversal_max_sell_proba: 0.35
+
+# Data configuration
+data:
+  data_frequency: "1h"
+  lookback_period: 100
+  enable_sentiment_data: true
+  min_volume_base: 100000.0
+  top_n_for_analysis: 12
+  ticker_batch_size: 80
+  ticker_fetch_retries: 2
+  ticker_retry_delay_seconds: 1.0
+  cache_ttl_seconds: 300
+  enable_data_caching: true
+
+# Model configuration
+model:
+  use_ml_model: true
+  model_path: null
+  model_type: "catboost"
+  enable_online_learning: false
+  enable_strategy_optimization: true
+  recommended_confidence_threshold: 0.45
+  margin_threshold: 0.03
+
+# Logging configuration
+logging:
+  log_level: "INFO"
+  log_file: null
+  enable_console_logging: true
+  enable_file_logging: false
+  log_format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# Advanced configuration
+advanced:
+  max_concurrent_tasks: 10
+  task_timeout_seconds: 300
+  enable_hailo_integration: true
+  enable_edge_computing: false
+  enable_hybrid_decision_making: true
+  debug_mode: false
+  verbose_logging: false

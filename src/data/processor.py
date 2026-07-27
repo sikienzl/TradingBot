@@ -10,11 +10,15 @@ import talib
 import logging
 from typing import Dict, List, Optional, Tuple
 
+from src.config.loader import load_config
+
+
 class DataProcessor:
     """Class for processing and transforming cryptocurrency data"""
     
     def __init__(self) -> None:
         """Initialize the data processor."""
+        self.config = load_config()
         self.logger = logging.getLogger(__name__)
         self.logger.info("Data processor initialized")
     

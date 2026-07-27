@@ -8,11 +8,12 @@ of the cryptocurrency trading system.
 import logging
 from typing import Optional, Dict, Any
 from .config import BotConfig
-from .exchange import ExchangeManager
-from .portfolio import PortfolioManager
-from .strategy import StrategyEngine, ModularStrategyEngine
-from .risk_management import RiskManager, AdvancedRiskManager
+from ..exchange import ExchangeManager
+from ..portfolio import PortfolioManager
+from ..strategy import StrategyEngine, ModularStrategyEngine
+from ..risk_management import RiskManager, AdvancedRiskManager
 from ..data.fetcher import AdvancedDataFetcher
+from src.config.loader import load_config
 
 class TradingBot:
     """Main trading bot class that coordinates all components."""
@@ -24,7 +25,8 @@ class TradingBot:
         Args:
             config: Bot configuration. If None, default config will be used.
         """
-        self.config = config or BotConfig()
+        # Load configuration using centralized system
+        self.config = config or load_config()
         self.logger = logging.getLogger(__name__)
         
         # Initialize components

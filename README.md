@@ -30,6 +30,37 @@ pip install -r requirements.txt
 
 The current low-RAM Raspberry Pi runtime profile in this repository has been tested on a Raspberry Pi 3B+ with 1 GB RAM.
 
+## Configuration
+
+This trading bot uses a centralized configuration system that supports multiple sources:
+
+### Configuration Sources
+1. **Environment Variables** - Loaded automatically (highest priority)
+2. **Configuration Files** - YAML or JSON format (lower priority)
+3. **Default Values** - Built-in fallbacks
+
+### Configuration Structure
+The configuration is organized into logical sections:
+- `environment`: Runtime environment ("development", "testing", "production")
+- `simulate_data`: Whether to simulate data instead of using live feeds
+- `exchange`: Exchange settings and API credentials
+- `trading`: Trading parameters and risk controls
+- `data`: Data collection and processing settings
+- `model`: Machine learning model configurations
+- `logging`: Logging preferences
+
+### Using Configuration Files
+Create a configuration file (either YAML or JSON) based on the example:
+```sh
+cp config.example.yaml config.yaml
+# Edit config.yaml with your settings
+```
+
+Then run the bot with:
+```sh
+python src/main.py config.yaml
+```
+
 Copy and edit the example config:
 ```sh
 cp .env.example .env        # default / dry-run profile

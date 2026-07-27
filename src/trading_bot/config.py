@@ -1,7 +1,7 @@
 """
 Bot Configuration
 
-This module handles the configuration of the trading bot.
+This module handles the configuration of the trading bot using a centralized system.
 """
 
 import os
@@ -9,44 +9,28 @@ from typing import Optional, Dict, Any
 from dataclasses import dataclass, field
 from pathlib import Path
 
-@dataclass
-class BotConfig:
-    """Configuration class for the trading bot."""
+# Import our new centralized configuration
+from src.config.schema import BotConfig as CentralizedBotConfig
+
+
+def get_config() -> CentralizedBotConfig:
+    """
+    Get the centralized configuration for the trading bot.
     
-    # Exchange settings
-    exchange_name: str = "kraken"
-    api_key: Optional[str] = None
-    api_secret: Optional[str] = None
-    sandbox_mode: bool = False
+    Returns:
+        Configuration object with all settings
+    """
+    return CentralizedBotConfig()
+
+
+# For backward compatibility, we'll keep the old class but make it use the new system
+class BotConfig(CentralizedBotConfig):
+    """Configuration class for the trading bot (using centralized system)."""
     
-    # Trading settings
-    max_position_size: float = 1.0
-    risk_per_trade: float = 0.01
-    stop_loss_percentage: float = 0.05
-    take_profit_percentage: float = 0.10
-    max_portfolio_risk: float = 0.10  # 10% maximum portfolio risk
-    
-    # Data settings
-    data_frequency: str = "1h"
-    lookback_period: int = 100
-    enable_sentiment_data: bool = True
-    
-    # Logging settings
-    log_level: str = "INFO"
-    log_file: Optional[str] = None
-    
-    # Model settings
-    use_ml_model: bool = True
-    model_path: Optional[str] = None
-    
-    # Advanced features
-    enable_online_learning: bool = False
-    enable_strategy_optimization: bool = True
-    
-    # Performance settings
-    cache_ttl_seconds: int = 300  # 5 minutes default cache TTL
-    max_concurrent_requests: int = 10
-    request_timeout_seconds: int = 30
+    def __init__(self):
+        """Initialize configuration using centralized system."""
+        # Call parent constructor which will load from environment
+        super().__init__()
     
     def __post_init__(self):
         """Initialize configuration after dataclass fields are set."""
@@ -119,6 +103,5 @@ class BotConfig:
         if self.request_timeout_seconds <= 0:
             raise ValueError("request_timeout_seconds must be positive")
 
-# Global configuration instance
-config = BotConfig()
-config = BotConfig()
+# Global configuration instance - removed to prevent circular imports
+# config = BotConfig()
