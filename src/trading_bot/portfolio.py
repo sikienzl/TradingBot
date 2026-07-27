@@ -21,6 +21,7 @@ class PortfolioManager:
         self.config = config
         self.logger = logging.getLogger(__name__)
         self.positions = {}
+        self.processed_symbols = set()  # Set for deduplication
         self.logger.info("Portfolio manager initialized")
     
     def get_portfolio_value(self) -> float:
@@ -42,7 +43,7 @@ class PortfolioManager:
         self.logger.info(f"Retrieving position for {symbol}")
         return self.positions.get(symbol)
     
-    def update_position(self, symbol: str, amount: float, price: float):
+    def update_position(self, symbol: str, amount: float, price: float) -> bool:
         """
         Update position information.
         
@@ -50,13 +51,55 @@ class PortfolioManager:
             symbol: Trading pair symbol
             amount: Amount of asset held
             price: Average entry price
+            
+        Returns:
+            True if position was updated, False if already processed
         """
         self.logger.info(f"Updating position for {symbol}: {amount} at {price}")
+        
+        # Deduplication check using set
+        if symbol in self.processed_symbols:
+            self.logger.warning(f"Position for {symbol} already processed (deduplication)")
+            return False
+        
+        # Add to processed symbols set
+        self.processed_symbols.add(symbol)
+        
         self.positions[symbol] = {
             'amount': amount,
             'average_price': price,
             'timestamp': '2026-07-25'
         }
+        return True
+    
+    def add_position(self, symbol: str, amount: float, price: float) -> bool:
+        """
+        Add a new position.
+        
+        Args:
+            symbol: Trading pair symbol
+            amount: Amount of asset held
+            price: Average entry price
+            
+        Returns:
+            True if position was added, False if already exists or processed
+        """
+        self.logger.info(f"Adding position for {symbol}: {amount} at {price}")
+        
+        # Deduplication check using set
+        if symbol in self.processed_symbols:
+            self.logger.warning(f"Position for {symbol} already processed (deduplication)")
+            return False
+        
+        # Add to processed symbols set
+        self.processed_symbols.add(symbol)
+        
+        self.positions[symbol] = {
+            'amount': amount,
+            'average_price': price,
+            'timestamp': '2026-07-25'
+        }
+        return True
     
     def get_open_positions(self) -> List[Dict[str, Any]]:
         """Get list of all open positions."""
@@ -77,6 +120,10 @@ class PortfolioManager:
             'max_drawdown': 0.0,
             'volatility': 0.0
         }
+    
+    def clear_processed_symbols(self):
+        """Clear the set of processed symbols (for testing or reset purposes)."""
+        self.processed_symbols.clear()
 
 # Example usage
 if __name__ == "__main__":
