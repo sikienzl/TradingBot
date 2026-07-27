@@ -7,6 +7,7 @@ This module handles trading strategies and decision making.
 import logging
 from typing import Dict, List, Optional, Tuple
 from .config import BotConfig
+from collections import deque
 
 class StrategyEngine:
     """Manages trading strategies and decision making."""
@@ -82,6 +83,94 @@ class StrategyEngine:
         self.logger.info(f"Optimizing parameters for {strategy_name}")
         # Implementation would go here
         return {'optimized_param': 0.5}
+
+class ModularStrategyEngine(StrategyEngine):
+    """Modular strategy engine with weighted strategies."""
+    
+    def __init__(self, config: BotConfig):
+        super().__init__(config)
+        self.strategy_weights = {}
+        self.performance_history = {}
+        
+    def add_strategy(self, name: str, strategy_func, weight: float = 1.0):
+        """
+        Add a trading strategy with weight.
+        
+        Args:
+            name: Strategy name
+            strategy_func: Function implementing the strategy
+            weight: Strategy weight for combination
+        """
+        super().add_strategy(name, strategy_func)
+        self.strategy_weights[name] = weight
+        self.performance_history[name] = deque(maxlen=100)
+    
+    def generate_weighted_signal(self, symbol: str, data: Dict) -> Tuple[str, float]:
+        """
+        Generate signal combining multiple strategies with weights.
+        
+        Args:
+            symbol: Trading pair symbol
+            data: Market data
+            
+        Returns:
+            Combined signal tuple (action, confidence)
+        """
+        self.logger.info(f"Generating weighted signal for {symbol}")
+        signals = []
+        weights = []
+        
+        for name, strategy in self.strategies.items():
+            signal = strategy(symbol, data)
+            if signal:
+                signals.append(signal)
+                weights.append(self.strategy_weights.get(name, 1.0))
+                
+        return self.combine_signals(signals, weights)
+    
+    def combine_signals(self, signals: List[Tuple[str, float]], weights: List[float]) -> Tuple[str, float]:
+        """
+        Combine multiple signals with given weights.
+        
+        Args:
+            signals: List of (action, confidence) tuples
+            weights: List of weights for each signal
+            
+        Returns:
+            Combined signal
+        """
+        if not signals:
+            return ("hold", 0.0)
+            
+        # Simple weighted average approach
+        total_weight = sum(weights)
+        if total_weight == 0:
+            total_weight = 1
+            
+        buy_confidence = 0.0
+        sell_confidence = 0.0
+        
+        for signal, weight in zip(signals, weights):
+            action, confidence = signal
+            if action == "buy":
+                buy_confidence += confidence * weight
+            elif action == "sell":
+                sell_confidence += confidence * weight
+                
+        # Normalize
+        total_confidence = buy_confidence + sell_confidence
+        if total_confidence > 0:
+            buy_confidence /= total_confidence
+            sell_confidence /= total_confidence
+        else:
+            buy_confidence = 0.5
+            sell_confidence = 0.5
+            
+        # Determine action based on higher confidence
+        action = "buy" if buy_confidence > sell_confidence else "sell"
+        confidence = max(buy_confidence, sell_confidence)
+        
+        return (action, confidence)
 
 # Example usage
 if __name__ == "__main__":

@@ -87,6 +87,84 @@ class CryptoDataFetcher:
             'timestamp': time.time()
         }
 
+class AdvancedDataFetcher(CryptoDataFetcher):
+    """Advanced data fetcher with sentiment and additional data sources."""
+    
+    def __init__(self, storage: Optional[DataStorage] = None):
+        super().__init__(storage)
+        self.sentiment_sources = []
+        self.logger.info("Advanced data fetcher initialized")
+        
+    def add_sentiment_source(self, source_name: str, fetch_function):
+        """
+        Add a sentiment data source.
+        
+        Args:
+            source_name: Name of the sentiment source
+            fetch_function: Function to fetch sentiment data
+        """
+        self.sentiment_sources.append((source_name, fetch_function))
+        self.logger.info(f"Added sentiment source: {source_name}")
+    
+    def fetch_sentiment_data(self, symbol: str) -> Dict:
+        """
+        Fetch sentiment data from all sources.
+        
+        Args:
+            symbol: Trading pair symbol
+            
+        Returns:
+            Dictionary with sentiment data from all sources
+        """
+        self.logger.info(f"Fetching sentiment data for {symbol}")
+        sentiment_data = {}
+        for source_name, fetch_func in self.sentiment_sources:
+            try:
+                sentiment_data[source_name] = fetch_func(symbol)
+            except Exception as e:
+                self.logger.error(f"Failed to fetch sentiment from {source_name}: {e}")
+                sentiment_data[source_name] = None
+        return sentiment_data
+    
+    def fetch_news_data(self, symbol: str) -> List[Dict]:
+        """
+        Fetch news data for a symbol.
+        
+        Args:
+            symbol: Trading pair symbol
+            
+        Returns:
+            List of news articles
+        """
+        self.logger.info(f"Fetching news data for {symbol}")
+        # Implementation would go here
+        return [
+            {
+                'title': 'Market Analysis',
+                'content': 'Positive market outlook',
+                'sentiment': 0.8,
+                'timestamp': time.time()
+            }
+        ]
+    
+    def fetch_social_media_data(self, symbol: str) -> Dict:
+        """
+        Fetch social media data for a symbol.
+        
+        Args:
+            symbol: Trading pair symbol
+            
+        Returns:
+            Social media sentiment data
+        """
+        self.logger.info(f"Fetching social media data for {symbol}")
+        # Implementation would go here
+        return {
+            'twitter': 0.7,
+            'reddit': 0.6,
+            'telegram': 0.5
+        }
+
 # Example usage
 if __name__ == "__main__":
     fetcher = CryptoDataFetcher()
