@@ -149,7 +149,11 @@ jobs:
         run: |
           run_if_rtk() { if command -v rtk >/dev/null 2>&1; then rtk "$@"; else "$@"; fi }
           python -m pip install --upgrade pip
-          run_if_rtk python -m pip install pytest numpy pandas scikit-learn catboost ccxt python-dotenv pydantic fastapi uvicorn httpx
+          if [[ -f requirements.txt ]]; then
+            run_if_rtk python -m pip install -r requirements.txt
+          else
+            run_if_rtk python -m pip install pytest numpy pandas scikit-learn catboost ccxt python-dotenv pydantic fastapi uvicorn httpx
+          fi
 
       - name: Verify module imports
         env:
