@@ -275,7 +275,7 @@ def _read_kraken_start_value(base_currency='EUR'):
         })
         balance = exchange.fetch_balance()
         return float(_extract_portfolio_value_from_balance(exchange, balance, base_currency))
-    except Exception:
+    except (OSError, AttributeError, TypeError, ValueError):
         return None
 
     return 0.0
@@ -287,8 +287,7 @@ def read_trades(journal_path):
     try:
         with open(journal_path, 'r') as f:
             reader = csv.DictReader(f)
-            for row in reader:
-                trades.append(row)
+            trades = list(reader)
     except (OSError, csv.Error) as e:
         print(f"Error reading trades: {e}", file=sys.stderr)
         return []
@@ -720,11 +719,13 @@ def read_ai_shadow_suggestions(log_path=BOT_LOG_PATH):
 
                 try:
                     ts = datetime.strptime(
-                        timestamp_raw.strip(), '%Y-%m-%d %H:%M:%S,%f')
-                    ts = ts.replace(tzinfo=UTC)
+                        timestamp_raw.strip(), '%Y-%m-%d %H:%M:%S,%f').replace(tzinfo=UTC)
                     age_minutes = max(0.0, (now - ts).total_seconds() / 60.0)
                 except (ValueError, IndexError):
                     continue
+
+            except (ValueError, SyntaxError, IndexError, AttributeError):
+                continue
 
             if not isinstance(changes, dict):
                 continue
@@ -770,7 +771,7 @@ def _read_env_value(env_key, env_path=ENV_PATH):
                     if key.strip() != env_key:
                         continue
                     return value.strip().strip('"').strip("'")
-    except Exception:
+    except OSError:
         pass
     return ''
 
