@@ -51,17 +51,17 @@ def load_and_preprocess_data(filepath="training_data.csv"):
         # Simple label creation based on available data
         if 'sma_50' in df.columns and 'rsi' in df.columns:
             df["label"] = np.where(
-                (df["close"] > df["sma_50"]) & (df["rsi"] < 30), "kaufen",
+                (df["close"] > df["sma_50"]) & (df["rsi"] < 30), "buy",
                 np.where(
                     (df["close"] < df["sma_50"]) & (
-                        df["rsi"] > 70), "verkaufen",
-                    "halten"
+                        df["rsi"] > 70), "sell",
+                    "hold"
                 )
             )
         else:
             # Fallback: simple price change
-            df["label"] = np.where(df["close"].pct_change() > 0.02, "kaufen",
-                                   np.where(df["close"].pct_change() < -0.02, "verkaufen", "halten"))
+            df["label"] = np.where(df["close"].pct_change() > 0.02, "buy",
+                                   np.where(df["close"].pct_change() < -0.02, "sell", "hold"))
 
         df = df.dropna()
 
@@ -91,17 +91,17 @@ def create_prompt(row):
                 indicators.append(f"{col}: {row[col]:.2f}")
 
     prompt = f"""[INST] <<SYS>>
-Du bist ein Krypto-Handelsassistent. Analysiere die folgenden Marktdaten und gib eine klare Handelsempfehlung.
-Verwende nur diese Antworten: kaufen, verkaufen oder halten.
+You are a crypto trading assistant. Analyze the following market data and give a clear trading recommendation.
+Use only these answers: buy, sell, or hold.
 <</SYS>>
 
-Aktuelle Marktdaten für {row['coin']}:
-- Datum: {pd.to_datetime(row['timestamp'], unit='ms').strftime('%Y-%m-%d %H:%M')}
-- Preis: Close={row['close']:.2f}
-- Technische Indikatoren:
+Current market data for {row['coin']}:
+- Date: {pd.to_datetime(row['timestamp'], unit='ms').strftime('%Y-%m-%d %H:%M')}
+- Price: Close={row['close']:.2f}
+- Technical indicators:
   {'  '.join(f'- {ind}' for ind in indicators)}
 
-Handelsempfehlung: [/INST]
+Trading recommendation: [/INST]
 {row['label']}"""
 
     return prompt

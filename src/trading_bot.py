@@ -1275,7 +1275,7 @@ class CryptoTradingBot:
         if not self.config.simulate_data and self.exchange:
             self._load_market_info()
 
-        # Sicherstellen, dass im Simulationsmodus immer Coins/Symbole gesetzt sind
+        # Ensure coins/symbols are always set in simulation mode
         if self.config.simulate_data:
             if not self.all_coins:
                 self.all_coins = ['BTC', 'ETH']

@@ -99,7 +99,7 @@ Answer only with one word (buy/sell/hold):"""
         try:
             processed_data = self.prepare_data(data)
             prompt = self.create_prompt(processed_data)
-            # LLM-Vorhersagen (Mehrfach, für Confidence)
+            # LLM predictions (multiple, for confidence)
             responses = self.pipe(
                 prompt,
                 max_new_tokens=50,
@@ -110,21 +110,21 @@ Answer only with one word (buy/sell/hold):"""
                 num_return_sequences=n_votes,
                 eos_token_id=self.tokenizer.eos_token_id
             )
-            # Entscheidungen extrahieren – nur den neu generierten Teil auswerten,
-            # Groß-/Kleinschreibung und Satzzeichen ignorieren
+            # Extract decisions – only evaluate the newly generated part,
+            # ignoring case and punctuation
             valid_decisions = {"kaufen", "verkaufen", "halten"}
             votes = []
             for r in responses:
-                # Nur den neu generierten Teil betrachten (nach dem Prompt)
+                # Only look at the newly generated part (after the prompt)
                 full_text = r['generated_text']
                 generated = full_text[len(prompt):].strip().lower()
-                # 1. Versuch: erstes Wort (Satzzeichen entfernen)
+                # 1st attempt: first word (strip punctuation)
                 first_word = generated.split()[0].strip(
                     '.,!?:;"\'-') if generated.split() else ''
                 if first_word in valid_decisions:
                     votes.append(first_word)
                     continue
-                # 2. Versuch: irgendwo im Text suchen (Priorität: spezifischeres zuerst)
+                # 2nd attempt: search anywhere in the text (priority: more specific first)
                 found = None
                 for keyword in ("verkaufen", "kaufen", "halten"):
                     if keyword in generated:
@@ -134,14 +134,14 @@ Answer only with one word (buy/sell/hold):"""
                     votes.append(found)
             if not votes:
                 return {'decision': 'halten', 'confidence': 0.0, 'llm_votes': {}, 'rule': self.rule_based_decision(data)}
-            # Mehrheitsentscheidung und Confidence
+            # Majority vote and confidence
             from collections import Counter
             vote_counts = Counter(votes)
             decision, count = vote_counts.most_common(1)[0]
             confidence = count / n_votes
-            # Regelbasierte Entscheidung
+            # Rule-based decision
             rule_decision = self.rule_based_decision(data)
-            # Ensemble-Logik: Nur handeln, wenn LLM und Regel übereinstimmen und Confidence hoch
+            # Ensemble logic: only act when LLM and rule agree and confidence is high
             if decision == rule_decision and confidence >= confidence_threshold:
                 final_decision = decision
             else:
@@ -153,16 +153,16 @@ Answer only with one word (buy/sell/hold):"""
                 'rule': rule_decision
             }
         except Exception as e:
-            print(f"Vorhersagefehler: {str(e)}")
+            print(f"Prediction error: {str(e)}")
             return {'decision': 'halten', 'confidence': 0.0, 'llm_votes': {}, 'rule': 'halten'}
 
 
-# Beispielanwendung
+# Example usage
 if __name__ == "__main__":
-    # Modell initialisieren
+    # Initialize the model
     predictor = TradingModelPredictor()
 
-    # Beispiel-Daten
+    # Example data
     example_data = pd.DataFrame([{
         'coin': 'BTC/EUR',
         'timestamp': 1672531200000,
@@ -175,8 +175,8 @@ if __name__ == "__main__":
         'macd': 12.3
     }])
 
-    # Vorhersage durchführen
-    print("\n=== Handelsentscheidungs-Assistent (Ensemble) ===")
+    # Run prediction
+    print("\n=== Trading Decision Assistant (Ensemble) ===")
     result = predictor.predict(example_data)
     print(
         f"\nEmpfohlene Aktion: {result['decision'].upper()} (Confidence: {result['confidence']*100:.0f}%)")

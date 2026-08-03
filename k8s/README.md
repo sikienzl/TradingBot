@@ -1,6 +1,6 @@
-# K3s Deployment für Hailo-8 + Hybrid Trading Bot
+# K3s Deployment for Hailo-8 + Hybrid Trading Bot
 
-## Architektur-Übersicht
+## Architecture Overview
 
 ```text
 ┌─────────────────────────────────────────────────────┐
@@ -148,16 +148,16 @@ k8s/
     └── docker-compose.yaml           # For testing locally
 ```
 
-## Wichtige Umgebungsvariablen
+## Important Environment Variables
 
-Siehe `.env.hailo8.example` für vollständige Liste:
+See `.env.hailo8.example` for the full list:
 
-- `HAILO8_ANOMALY_THRESHOLD`: Trigger-Punkt für GPT-5 Calls (default: 85/100)
-- `HAILO8_INFERENCE_INTERVAL_MS`: Wie oft Hailo-8 updated (default: 100ms)
+- `HAILO8_ANOMALY_THRESHOLD`: Trigger point for GPT-5 calls (default: 85/100)
+- `HAILO8_INFERENCE_INTERVAL_MS`: How often Hailo-8 updates (default: 100ms)
 - `HAILO8_EDGE_GRPC_TARGET`: Cluster endpoint used by the master-node relay
 - `CLOUD_STRATEGIST_GRPC_TARGET`: Cluster endpoint used by the Hailo worker for strategist decisions
-- `GPT5_MAX_CALLS_PER_DAY`: Rate-Limit für Cloud-Calls (default: 100)
-- `KRAKEN_WEBSOCKET_V2_ENABLED`: Aktiviere WebSocket statt CCXT polling
+- `GPT5_MAX_CALLS_PER_DAY`: Rate limit for cloud calls (default: 100)
+- `KRAKEN_WEBSOCKET_V2_ENABLED`: Enable WebSocket instead of CCXT polling
 - `ANALYTICS_DB_HOST`: K3s service name for the master-node Postgres sink
 
 ## Analytics Storage Layout
@@ -227,13 +227,13 @@ cp k8s/secret-credentials.example.yaml k8s/secret-credentials.yaml
 kubectl apply -f k8s/secret-credentials.yaml
 ```
 
-## Nächste Schritte
+## Next Steps
 
 1. **Kraken WebSocket V2 Integration** (`src/kraken_websocket_v2.py`)
-2. **Time-Series-Transformer Training** (`src/train_timeseries_transformer.py`)
+2. **Time-Series Transformer Training** (`src/train_timeseries_transformer.py`)
 3. **Hailo-8 ONNX Wrapper** (`src/hailo/inference.py`)
-4. **Docker-Images bauen**
-5. **K3s Manifests erweitern**
+4. **Build Docker images**
+5. **Extend K3s manifests**
 
 ## Debugging
 
@@ -251,19 +251,19 @@ kubectl logs -f <hailo-pod> -n trading-bot | grep "anomaly_score"
 kubectl logs -f <cloud-pod> -n trading-bot | grep "gpt5_api"
 ```
 
-## Ressourcen für K3s Nano Cluster
+## Resources for K3s Nano Cluster
 
 **Node 1 (Master, 1TB SSD):**
 
-- CPU: 4 cores (reserviert: 1 core für K3s)
-- RAM: ~2GB (reserviert: 512MB für K3s)
-- Available für Pods: 3 cores, ~1.5GB RAM
+- CPU: 4 cores (reserved: 1 core for K3s)
+- RAM: ~2GB (reserved: 512MB for K3s)
+- Available for pods: 3 cores, ~1.5GB RAM
 
 **Node 2 (Worker, Hailo-8):**
 
-- CPU: 4 cores (reserviert: 1 core)
+- CPU: 4 cores (reserved: 1 core)
 - RAM: ~2GB
 - Hailo-8: 26 TOPS
-- Available für Pods: 3 cores, ~1.5GB RAM
+- Available for pods: 3 cores, ~1.5GB RAM
 
-Deployment sollte in diesem Budget bleiben!
+Deployment should stay within this budget!

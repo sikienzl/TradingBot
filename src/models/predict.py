@@ -64,13 +64,13 @@ class TradingModelPredictor:
 
     def create_prompt(self, data):
         """Creates the optimized prompt"""
-        template = """Aktuelle Marktdaten für {coin} am {date}:
-Preis: Open={open:.2f}, High={high:.2f}, Low={low:.2f}, Close={close:.2f}
-Volumen: {volume:.2f}
-Technische Indikatoren: RSI={rsi:.2f}, MACD={macd:.2f}
+        template = """Current market data for {coin} on {date}:
+Price: Open={open:.2f}, High={high:.2f}, Low={low:.2f}, Close={close:.2f}
+Volume: {volume:.2f}
+Technical indicators: RSI={rsi:.2f}, MACD={macd:.2f}
 
-Frage: Sollte ich kaufen, verkaufen oder halten?
-Antwort nur mit einem Wort (kaufen/verkaufen/halten):"""
+Question: Should I buy, sell, or hold?
+Answer with a single word only (buy/sell/hold):"""
 
         row = data.iloc[0] if isinstance(data, pd.DataFrame) else data
         return template.format(
@@ -90,10 +90,10 @@ Antwort nur mit einem Wort (kaufen/verkaufen/halten):"""
         row = data.iloc[0] if isinstance(data, pd.DataFrame) else data
         if 'rsi' in row:
             if row['rsi'] < rsi_buy:
-                return 'kaufen'
+                return 'buy'
             elif row['rsi'] > rsi_sell:
-                return 'verkaufen'
-        return 'halten'
+                return 'sell'
+        return 'hold'
 
     def predict(self, data, n_votes=5, confidence_threshold=0.6):
         """Returns the trade decision and confidence (ensemble of LLM and rule-based)."""
@@ -113,7 +113,7 @@ Antwort nur mit einem Wort (kaufen/verkaufen/halten):"""
             )
             # Extract decisions - evaluate only the newly generated part,
             # ignore case and punctuation
-            valid_decisions = {"kaufen", "verkaufen", "halten"}
+            valid_decisions = {"buy", "sell", "hold"}
             votes = []
             for r in responses:
                 # Only look at the newly generated part (after the prompt)
@@ -127,14 +127,14 @@ Antwort nur mit einem Wort (kaufen/verkaufen/halten):"""
                     continue
                 # 2nd attempt: search anywhere in the text (priority: more specific first)
                 found = None
-                for keyword in ("verkaufen", "kaufen", "halten"):
+                for keyword in ("sell", "buy", "hold"):
                     if keyword in generated:
                         found = keyword
                         break
                 if found:
                     votes.append(found)
             if not votes:
-                return {'decision': 'halten', 'confidence': 0.0, 'llm_votes': {}, 'rule': self.rule_based_decision(data)}
+                return {'decision': 'hold', 'confidence': 0.0, 'llm_votes': {}, 'rule': self.rule_based_decision(data)}
             # Majority decision and confidence
             from collections import Counter
             vote_counts = Counter(votes)
@@ -146,7 +146,7 @@ Antwort nur mit einem Wort (kaufen/verkaufen/halten):"""
             if decision == rule_decision and confidence >= confidence_threshold:
                 final_decision = decision
             else:
-                final_decision = 'halten'
+                final_decision = 'hold'
             return {
                 'decision': final_decision,
                 'confidence': confidence,
@@ -155,7 +155,7 @@ Antwort nur mit einem Wort (kaufen/verkaufen/halten):"""
             }
         except Exception as e:
             print(f"Prediction error: {str(e)}")
-            return {'decision': 'halten', 'confidence': 0.0, 'llm_votes': {}, 'rule': 'halten'}
+            return {'decision': 'hold', 'confidence': 0.0, 'llm_votes': {}, 'rule': 'hold'}
 
 
 # Beispielanwendung

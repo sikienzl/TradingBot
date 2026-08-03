@@ -135,7 +135,7 @@ def run_walk_forward_evaluation(
     min_train_size: int = 300,
     min_val_size: int = 100,
 ) -> pd.DataFrame:
-    """Führt eine Walk-Forward Evaluation durch und gibt Metriken pro Fold zurück."""
+    """Runs a walk-forward evaluation and returns metrics per fold."""
     splits = generate_walk_forward_splits(
         n_rows=len(df),
         n_splits=n_splits,
@@ -198,7 +198,7 @@ def train_model(
     required = ["close", "label"]
     missing = [c for c in required if c not in df.columns]
     if missing:
-        raise ValueError(f"Fehlende Spalten: {missing}")
+        raise ValueError(f"Missing columns: {missing}")
 
     df = df.dropna(subset=["close", "future_net_return", "label"])
 
@@ -238,7 +238,7 @@ def train_model(
     y_pred_labels = [INV_LABEL_MAP[v] for v in y_pred]
     y_true_labels = [INV_LABEL_MAP[v] for v in y_val]
 
-    print("\n=== Validierungsreport (CatBoost) ===")
+    print("\n=== Validation Report (CatBoost) ===")
     print(classification_report(y_true_labels, y_pred_labels, digits=3))
 
     walk_forward_df = run_walk_forward_evaluation(
@@ -249,12 +249,12 @@ def train_model(
     )
     if walk_forward_df.empty:
         print("\n=== Walk-Forward Evaluation ===")
-        print("Nicht genügend Daten für Walk-Forward-Splits.")
+        print("Not enough data for walk-forward splits.")
     else:
         print("\n=== Walk-Forward Evaluation ===")
         print(walk_forward_df.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
         print(
-            "Mittelwerte: "
+            "Averages: "
             f"accuracy={walk_forward_df['accuracy'].mean():.4f}, "
             f"macro_f1={walk_forward_df['macro_f1'].mean():.4f}, "
             f"weighted_f1={walk_forward_df['weighted_f1'].mean():.4f}"

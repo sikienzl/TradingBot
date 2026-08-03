@@ -18,14 +18,14 @@ def compute_max_drawdown_base(equity_curve: pd.Series) -> float:
 def report_daily(sells: pd.DataFrame, base_currency: str) -> None:
     if sells.empty or "timestamp" not in sells.columns:
         print("\n--- Daily Report ---")
-        print("Keine täglichen Daten verfügbar.")
+        print("No daily data available.")
         return
 
     daily = sells.copy()
     daily = daily[daily["timestamp"].notna()].copy()
     if daily.empty:
         print("\n--- Daily Report ---")
-        print("Keine gültigen Zeitstempel für Tagesreport.")
+        print("No valid timestamps for daily report.")
         return
 
     daily["date"] = daily["timestamp"].dt.date
@@ -65,7 +65,7 @@ def optimize_confidence_threshold(
 ) -> None:
     print("\n--- Confidence Threshold Sweep ---")
     if sells.empty or "signal_confidence" not in sells.columns:
-        print("Keine Confidence-Daten vorhanden.")
+        print("No confidence data available.")
         return
 
     work = sells.copy()
@@ -73,7 +73,7 @@ def optimize_confidence_threshold(
         work["signal_confidence"], errors="coerce")
     work = work[work["signal_confidence"].notna()].copy()
     if work.empty:
-        print("Keine numerischen signal_confidence-Werte vorhanden.")
+        print("No numeric signal_confidence values available.")
         return
 
     thresholds = np.arange(
@@ -100,7 +100,7 @@ def optimize_confidence_threshold(
         })
 
     if not rows:
-        print("Kein Ergebnis im gewählten Schwellenbereich.")
+        print("No result in the selected threshold range.")
         return
 
     res = pd.DataFrame(rows).sort_values("threshold").reset_index(drop=True)
@@ -109,23 +109,23 @@ def optimize_confidence_threshold(
     eligible = res[res["trades"] >= min_trades].copy()
     if eligible.empty:
         print(
-            f"Kein Threshold mit mindestens {min_trades} Trades. Nutze alle verfügbaren Trades als Referenz.")
+            f"No threshold with at least {min_trades} trades. Using all available trades as reference.")
         return
 
     best = eligible.sort_values(["pnl", "avg_pnl"], ascending=False).iloc[0]
     print(
-        f"\nEmpfohlener Threshold: {best['threshold']:.2f} | "
+        f"\nRecommended threshold: {best['threshold']:.2f} | "
         f"trades={int(best['trades'])} | win_rate={best['win_rate']:.2f}% | "
         f"pnl={best['pnl']:.6f} {base_currency} | avg_pnl={best['avg_pnl']:.6f} {base_currency}")
 
 
 def summarize(df: pd.DataFrame, base_currency: str) -> None:
     if df.empty:
-        print("Keine Trades gefunden.")
+        print("No trades found.")
         return
 
     if "action" not in df.columns:
-        print("Fehlende Spalte: action")
+        print("Missing column: action")
         return
 
     if "timestamp" in df.columns:
@@ -153,7 +153,7 @@ def summarize(df: pd.DataFrame, base_currency: str) -> None:
     gross_loss = float(-sells.loc[sells["pnl_base"] < 0, "pnl_base"].sum())
     profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else np.inf
 
-    # Equity curve auf Basis realisierter PnL
+    # Equity curve based on realized PnL
     equity = pd.Series(dtype=float)
     if closed > 0:
         equity = sells["pnl_base"].cumsum()
@@ -175,7 +175,7 @@ def summarize(df: pd.DataFrame, base_currency: str) -> None:
         print(f"Profit factor:       {profit_factor:.4f}")
     print(f"Max drawdown (realized equity): {max_dd_base:.6f} {base_currency}")
 
-    # Aufschlüsselung nach Signalquelle
+    # Breakdown by signal source
     if "signal_source" in sells.columns and not sells.empty:
         print("\n--- By Signal Source ---")
         source_grp = sells.groupby("signal_source", dropna=False)
@@ -190,7 +190,7 @@ def summarize(df: pd.DataFrame, base_currency: str) -> None:
                 f"{src:12s} closed={src_closed:4d} win_rate={src_win_rate:6.2f}% pnl={src_pnl:.6f} {base_currency}"
             )
 
-    # Aufschlüsselung nach Coin
+    # Breakdown by coin
     if "coin" in sells.columns and not sells.empty:
         print("\n--- By Coin ---")
         coin_grp = sells.groupby("coin", dropna=False)
@@ -202,14 +202,14 @@ def summarize(df: pd.DataFrame, base_currency: str) -> None:
             print(
                 f"{c:8s} closed={c_closed:4d} win_rate={c_wr:6.2f}% pnl={c_pnl:.6f} {base_currency}")
 
-    # Exit Gründe
+    # Exit reasons
     if "reason" in sells.columns and not sells.empty:
         print("\n--- Exit Reasons ---")
         reason_counts = sells["reason"].fillna("unknown").value_counts()
         for reason, cnt in reason_counts.items():
             print(f"{cnt:4d}  {reason}")
 
-    # Letzte Trades
+    # Last trades
     print("\n--- Last 10 Rows ---")
     cols = [c for c in ["timestamp", "coin", "action", "price", "pnl_base",
                         "pnl_pct", "signal_source", "signal_confidence", "reason"] if c in df.columns]
@@ -240,28 +240,28 @@ def run_full_report(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Auswertung für trade_journal.csv")
+        description="Analysis for trade_journal.csv")
     parser.add_argument("--file", default="trade_journal.csv",
-                        help="Pfad zur Journal-Datei")
+                        help="Path to the journal file")
     parser.add_argument("--base-currency", default="EUR",
-                        help="Anzeige-Basiswährung")
+                        help="Display base currency")
     parser.add_argument("--threshold-min", type=float,
-                        default=0.45, help="Minimale Confidence für Sweep")
+                        default=0.45, help="Minimum confidence for sweep")
     parser.add_argument("--threshold-max", type=float,
-                        default=0.90, help="Maximale Confidence für Sweep")
+                        default=0.90, help="Maximum confidence for sweep")
     parser.add_argument("--threshold-step", type=float,
-                        default=0.02, help="Schrittweite für Sweep")
+                        default=0.02, help="Step size for sweep")
     parser.add_argument("--min-trades", type=int, default=5,
-                        help="Mindestanzahl Trades für Threshold-Empfehlung")
+                        help="Minimum number of trades for threshold recommendation")
     args = parser.parse_args()
 
     try:
         df = pd.read_csv(args.file)
     except FileNotFoundError:
-        print(f"Datei nicht gefunden: {args.file}")
+        print(f"File not found: {args.file}")
         return
     except Exception as exc:
-        print(f"Fehler beim Lesen: {exc}")
+        print(f"Error while reading: {exc}")
         return
 
     run_full_report(
