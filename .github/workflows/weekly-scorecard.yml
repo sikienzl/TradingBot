@@ -71,8 +71,10 @@ jobs:
 
       - name: Install dependencies
         run: |
+          run_if_rtk() { if command -v rtk >/dev/null 2>&1; then rtk "$@"; else "$@"; fi }
           python -m pip install --upgrade pip
-          pip install numpy pandas
+          # Install minimal set required by the scorecard (avoid heavy packages like catboost)
+          run_if_rtk python -m pip install numpy pandas pydantic python-dotenv
 
       - name: Resolve scorecard parameters
         id: params
