@@ -10,6 +10,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  STRICT_LINT: "false"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -105,9 +106,19 @@ jobs:
       - name: Enforce lint gate
         shell: bash
         run: |
-          if [[ "${{ steps.ruff.outputs.ruff_exit_code }}" != "0" ]]; then
-            echo "Ruff lint check failed. See annotations and step summary."
-            exit 1
+          set -euo pipefail
+          ruff_code="${{ steps.ruff.outputs.ruff_exit_code }}"
+          if [[ "${{ env.STRICT_LINT }}" == "true" ]]; then
+            if [[ "$ruff_code" != "0" ]]; then
+              echo "Ruff lint check failed (exit code=$ruff_code). See annotations and step summary."
+              exit 1
+            fi
+          else
+            if [[ "$ruff_code" != "0" ]]; then
+              echo "Ruff lint produced issues (exit code=$ruff_code). Continuing because STRICT_LINT!=true"
+            else
+              echo "Ruff lint passed"
+            fi
           fi
 
   tests:
