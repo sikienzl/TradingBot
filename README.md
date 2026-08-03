@@ -1,97 +1,23 @@
-# Cryptocurrency Trading Bot
+<p align="center">
+  <img src="assets/logo-transparent.png" alt="Crypto Trading Bot logo" width="353">
+</p>
 
-A modular cryptocurrency trading bot built with Python that supports multiple exchanges, strategies, and risk management.
+<h1 align="center">Crypto Trading Bot</h1>
 
-## Project Structure
+<p align="center">
+  <a href="https://github.com/sikienzl/TradingBot/actions/workflows/ci.yml">
+    <img src="https://github.com/sikienzl/TradingBot/actions/workflows/ci.yml/badge.svg" alt="CI status">
+  </a>
+</p>
 
-```
-trading_bot/
-├── src/
-│   ├── __init__.py
-│   ├── main.py                 # Entry point
-│   ├── trading_bot/
-│   │   ├── __init__.py
-│   │   ├── bot.py              # Main trading bot class
-│   │   └── config/
-│   │       ├── __init__.py
-│   │       ├── schema.py       # Configuration schema
-│   │       └── loader.py       # Configuration loader
-│   ├── exchange/
-│   │   ├── __init__.py
-│   │   └── exchange_manager.py # Exchange manager
-│   ├── portfolio/
-│   │   ├── __init__.py
-│   │   └── portfolio_manager.py # Portfolio manager
-│   ├── strategy/
-│   │   ├── __init__.py
-│   │   └── strategy_engine.py  # Strategy engine
-│   ├── risk_management/
-│   │   ├── __init__.py
-│   │   └── risk_manager.py     # Risk management
-│   └── data/
-│       ├── __init__.py
-│       └── fetcher.py          # Data fetcher
-├── config.yaml                 # Default configuration
-├── requirements.txt            # Dependencies
-├── pyproject.toml              # Project configuration for binary generation
-├── setup.py                    # Setup configuration for binary generation
-└── README.md                   # This file
-```
+<p align="center">
+  A modular pipeline for crypto trading: data collection, feature engineering, CatBoost/LLM ensemble prediction, and live/simulated trading via Kraken. Built for research, simulation, and optional live trading.
+</p>
 
-## Features
+## Setup
 
-- Modular architecture for easy extension
-- Support for multiple exchanges
-- Configurable trading strategies
-- Risk management capabilities
-- Portfolio tracking and management
-- Data fetching from various sources
+**Requirements:** Python 3.12+ and a virtual environment.
 
-## Installation
-
-1. Clone the repository
-2. Install dependencies: `pip install -r requirements.txt`
-3. Configure your settings in `config.yaml`
-4. Run the bot: `python src/main.py`
-
-## Configuration
-
-The bot uses a centralized configuration system that supports:
-- Environment variables
-- Configuration files (YAML/JSON)
-- Default values
-
-See `config.yaml` for available options.
-
-## Usage
-
-```bash
-# Start the trading bot with default config
-python src/main.py
-
-# Start the trading bot with custom config file
-python src/main.py path/to/config.yaml
-```
-
-## Binary Generation
-
-To generate a binary executable, you can use tools like PyOxidizer or PyInstaller:
-
-### Using PyOxidizer:
-1. Install PyOxidizer: `pip install pyoxidizer`
-2. Build the binary: `pyoxidizer build`
-
-### Using PyInstaller:
-1. Install PyInstaller: `pip install pyinstaller`
-2. Build the binary: `pyinstaller --onefile src/main.py`
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a pull request
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
@@ -103,37 +29,6 @@ pip install -r requirements.txt
 > compile the TA-Lib C library from source and retry.
 
 The current low-RAM Raspberry Pi runtime profile in this repository has been tested on a Raspberry Pi 3B+ with 1 GB RAM.
-
-## Configuration
-
-This trading bot uses a centralized configuration system that supports multiple sources:
-
-### Configuration Sources
-1. **Environment Variables** - Loaded automatically (highest priority)
-2. **Configuration Files** - YAML or JSON format (lower priority)
-3. **Default Values** - Built-in fallbacks
-
-### Configuration Structure
-The configuration is organized into logical sections:
-- `environment`: Runtime environment ("development", "testing", "production")
-- `simulate_data`: Whether to simulate data instead of using live feeds
-- `exchange`: Exchange settings and API credentials
-- `trading`: Trading parameters and risk controls
-- `data`: Data collection and processing settings
-- `model`: Machine learning model configurations
-- `logging`: Logging preferences
-
-### Using Configuration Files
-Create a configuration file (either YAML or JSON) based on the example:
-```sh
-cp config.example.yaml config.yaml
-# Edit config.yaml with your settings
-```
-
-Then run the bot with:
-```sh
-python src/main.py config.yaml
-```
 
 Copy and edit the example config:
 ```sh
