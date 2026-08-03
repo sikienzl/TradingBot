@@ -161,7 +161,7 @@ jobs:
         run: |
           python -c "from src.predict_catboost import CatBoostTradingPredictor; print('import_ok')"
 
-      - name: Debug: Python environment
+      - name: "Debug: Python environment"
         if: always()
         env:
           PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/src
