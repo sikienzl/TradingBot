@@ -45,11 +45,9 @@ def _read_trade_rows(path: str) -> list[dict[str, Any]]:
 
     import csv
 
-    rows: list[dict[str, Any]] = []
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         reader = csv.DictReader(f)
-        for row in reader:
-            rows.append(row)
+        rows: list[dict[str, Any]] = list(reader)
     return rows
 
 
