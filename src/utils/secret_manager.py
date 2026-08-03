@@ -41,7 +41,7 @@ class VaultSecretManager(SecretManager):
             self._client.token = self.token
             # Verify connection
             self._client.sys.read_healthy_status()
-        except Exception as e:
+        except (ImportError, OSError, RuntimeError) as e:
             raise RuntimeError(f"Failed to initialize Vault client: {e}")
     
     def get_secret(self, key: str) -> str | None:
@@ -55,14 +55,14 @@ class VaultSecretManager(SecretManager):
                 mount_point="secret"
             )
             return secret_data['data']['data'].get('value')
-        except Exception as e:
+        except (KeyError, TypeError, OSError) as e:
             print(f"Failed to retrieve secret {key}: {e}")
             return None
 
 class MockSecretManager(SecretManager):
     """Development/testing implementation."""
     
-    def __init__(self, secrets: dict[str, str] = None):
+    def __init__(self, secrets: dict[str, str] | None = None):
         self.secrets = secrets or {}
         
     def initialize(self) -> None:
