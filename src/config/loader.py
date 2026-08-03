@@ -44,13 +44,17 @@ class ConfigLoader:
         if not os.path.exists(config_path):
             raise FileNotFoundError(f"Config file not found: {config_path}")
         
-        with open(config_path, 'r') as f:
-            if config_path.endswith('.json'):
-                config_data = json.load(f)
-            elif config_path.endswith(('.yaml', '.yml')):
-                config_data = yaml.safe_load(f)
-            else:
-                raise ValueError(f"Unsupported config file format: {config_path}")
+        try:
+            with open(config_path, 'r') as f:
+                if config_path.endswith('.json'):
+                    config_data = json.load(f)
+                elif config_path.endswith(('.yaml', '.yml')):
+                    config_data = yaml.safe_load(f)
+                else:
+                    raise ValueError(f"Unsupported config file format: {config_path}")
+        except Exception as e:
+            self.logger.error(f"Error loading config from file {config_path}: {e}")
+            raise
         
         # Apply loaded configuration
         self._apply_config_data(config_data)
@@ -92,14 +96,18 @@ class ConfigLoader:
         config_dict = self.config.to_dict()
         
         # Write to file (determine format from extension)
-        if config_path.endswith('.json'):
-            with open(config_path, 'w') as f:
-                json.dump(config_dict, f, indent=2)
-        elif config_path.endswith(('.yaml', '.yml')):
-            with open(config_path, 'w') as f:
-                yaml.safe_dump(config_dict, f, default_flow_style=False)
-        else:
-            raise ValueError(f"Unsupported config file format: {config_path}")
+        try:
+            if config_path.endswith('.json'):
+                with open(config_path, 'w') as f:
+                    json.dump(config_dict, f, indent=2)
+            elif config_path.endswith(('.yaml', '.yml')):
+                with open(config_path, 'w') as f:
+                    yaml.safe_dump(config_dict, f, default_flow_style=False)
+            else:
+                raise ValueError(f"Unsupported config file format: {config_path}")
+        except Exception as e:
+            self.logger.error(f"Error saving config to file {config_path}: {e}")
+            raise
     
     def get_config(self) -> BotConfig:
         """
@@ -145,7 +153,12 @@ def load_config(config_path: Optional[str] = None) -> BotConfig:
     loader = ConfigLoader(config_path)
     
     # Try to load from file first, then fallback to environment
-    if config_path and os.path.exists(config_path):
-        return loader.load_from_file(config_path)
-    else:
-        return loader.load_from_env()
+    try:
+        if config_path and os.path.exists(config_path):
+            return loader.load_from_file(config_path)
+        else:
+            return loader.load_from_env()
+    except Exception as e:
+        logging.warning(f"Failed to load configuration: {e}")
+        # Return default config if loading fails
+        return get_default_config()

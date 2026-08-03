@@ -1,28 +1,31 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
 # ---------------------------------------------------------------------------
 # Project metadata
 # ---------------------------------------------------------------------------
 [project]
-name = "crypto-trading-bot"
-dynamic = ["version"]
-description = "Modular crypto trading pipeline: CatBoost/LLM ensemble signals, Kraken integration, simulation and live trading."
+name = "trading-bot"
+version = "0.1.0"
+description = "A modular cryptocurrency trading bot"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.12"
+requires-python = ">=3.8"
 authors = [
-  { name = "Siegfried Kienzle" },
+  { name = "Trading Bot Developer" },
 ]
-keywords = ["trading", "crypto", "catboost", "kraken", "bot"]
+keywords = ["trading", "crypto", "bot"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Financial and Insurance Industry",
-    "License :: OSI Approved :: BSD License",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Topic :: Office/Business :: Financial :: Investment",
 ]
 
@@ -41,55 +44,15 @@ dependencies = [
     "fastapi>=0.110",
     "pydantic>=2.7",
     "uvicorn>=0.29",
+    "pyyaml>=6.0",
+    "requests>=2.28",
 ]
 
 # ---------------------------------------------------------------------------
 # Optional extras
 # ---------------------------------------------------------------------------
 [project.optional-dependencies]
-# pip install crypto-trading-bot[llm]  – LLM inference (predict.py)
-llm = [
-    "torch>=2.2",
-    "transformers>=4.40",
-    "peft>=0.10",
-]
-# pip install crypto-trading-bot[train]  – LLM fine-tuning (train_trading_model.py)
-train = [
-    "trl>=0.8",
-    "datasets>=2.18",
-    "accelerate>=0.30",
-    "bitsandbytes>=0.43",
-]
-# pip install crypto-trading-bot[hybrid]  – Hailo-8 + K3s Hybrid Setup
-hybrid = [
-    "websockets>=12.0",          # Kraken WebSocket V2 API
-    "onnx>=1.16",                # ONNX model export
-    "onnxruntime>=1.17",         # ONNX runtime inference
-    "hailort>=3.23",             # Hailo Runtime for Hailo-8 acceleration
-    "grpcio>=1.66",              # Pi1 -> Pi2 edge transport
-    "prometheus-client>=0.20",   # Runtime metrics for Grafana/Prometheus
-]
-# pip install crypto-trading-bot[k3s]  – Kubernetes integration for K3s deployment
-k3s = [
-    "kubernetes>=29.0",          # K3s / Kubernetes client
-    "prometheus-client>=0.20",   # Prometheus metrics export
-    "pyyaml>=6.0",               # YAML manifest handling
-    "grpcio>=1.66",              # Inter-pod transport for market data and alerts
-]
-# pip install crypto-trading-bot[hailo8]  – All Hailo-8 + Time-Series-Transformer
-hailo8 = [
-    "websockets>=12.0",
-    "onnx>=1.16",
-    "onnxruntime>=1.17",
-    "hailort>=3.23",
-    "grpcio>=1.66",
-    "prometheus-client>=0.20",
-    "torch>=2.2",
-    "transformers>=4.40",
-    "peft>=0.10",
-    "einops>=0.8",               # Efficient tensor operations for transformers
-]
-# pip install crypto-trading-bot[dev]  – Development & testing
+# pip install trading-bot[dev]  – Development & testing
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",      # Async test support for WebSocket
@@ -97,7 +60,7 @@ dev = [
     "black>=24.0",               # Code formatting
     "ruff>=0.4",                 # Linting
 ]
-# pip install crypto-trading-bot[all]  – Complete installation
+# pip install trading-bot[all]  – Complete installation
 all = [
     "torch>=2.2",
     "transformers>=4.40",
@@ -122,57 +85,39 @@ all = [
     "ruff>=0.4",
 ]
 
-[project.urls]
-Repository = "https://github.com/sikienzl/TradingBot"
-Issues     = "https://github.com/sikienzl/TradingBot/issues"
-
-# ---------------------------------------------------------------------------
-# Version – derived automatically from the git tag (e.g. v1.0.22 → 1.0.22)
-# ---------------------------------------------------------------------------
-[tool.hatch.version]
-source = "vcs"
-
-# hatch-vcs writes the resolved version to src/_version.py so it is
-# available at runtime without a git checkout.
-[tool.hatch.build.hooks.vcs]
-version-file = "src/_version.py"
+[project.scripts]
+trading-bot = "src.main:main"
 
 # ---------------------------------------------------------------------------
 # Wheel:  packages the src/ directory as the importable "src" namespace
 # ---------------------------------------------------------------------------
-[tool.hatch.build.targets.wheel]
-packages = ["src"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.setuptools.package-dir]
+src = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v"
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/tests/*", "*/venv/*"]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
 
 # ---------------------------------------------------------------------------
-# Source distribution: include everything a developer needs
+# For creating binaries with PyOxidizer
 # ---------------------------------------------------------------------------
-[tool.hatch.build.targets.sdist]
-include = [
-    "src/",
-    "scripts/",
-    "deploy/",
-    "tests/",
-    "README.md",
-    "LICENSE",
-    "requirements.txt",
-    "requirements-pi.txt",
-    ".env.example",
-    ".env.live.example",
-    ".env.simulation.example",
-]
-exclude = [
-    "*.csv",
-    "*.log",
-    "trade_journal.csv",
-    "training_data.csv",
-    "auto_tune_state*.json",
-    "tuning_policy.json",
-    ".env",
-    "results/",
-    "logs/",
-    "model/",
-    "catboost_info/",
-    ".venv/",
-    "build/",
-    "old_data/",
+[tool.pyoxidizer]
+build_targets = [
+    { name = "pyoxidizer", target = "x86_64-unknown-linux-gnu" },
 ]

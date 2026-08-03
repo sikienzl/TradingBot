@@ -1,23 +1,97 @@
-<p align="center">
-  <img src="assets/logo-transparent.png" alt="Crypto Trading Bot logo" width="353">
-</p>
+# Cryptocurrency Trading Bot
 
-<h1 align="center">Crypto Trading Bot</h1>
+A modular cryptocurrency trading bot built with Python that supports multiple exchanges, strategies, and risk management.
 
-<p align="center">
-  <a href="https://github.com/sikienzl/TradingBot/actions/workflows/ci.yml">
-    <img src="https://github.com/sikienzl/TradingBot/actions/workflows/ci.yml/badge.svg" alt="CI status">
-  </a>
-</p>
+## Project Structure
 
-<p align="center">
-  A modular pipeline for crypto trading: data collection, feature engineering, CatBoost/LLM ensemble prediction, and live/simulated trading via Kraken. Built for research, simulation, and optional live trading.
-</p>
+```
+trading_bot/
+├── src/
+│   ├── __init__.py
+│   ├── main.py                 # Entry point
+│   ├── trading_bot/
+│   │   ├── __init__.py
+│   │   ├── bot.py              # Main trading bot class
+│   │   └── config/
+│   │       ├── __init__.py
+│   │       ├── schema.py       # Configuration schema
+│   │       └── loader.py       # Configuration loader
+│   ├── exchange/
+│   │   ├── __init__.py
+│   │   └── exchange_manager.py # Exchange manager
+│   ├── portfolio/
+│   │   ├── __init__.py
+│   │   └── portfolio_manager.py # Portfolio manager
+│   ├── strategy/
+│   │   ├── __init__.py
+│   │   └── strategy_engine.py  # Strategy engine
+│   ├── risk_management/
+│   │   ├── __init__.py
+│   │   └── risk_manager.py     # Risk management
+│   └── data/
+│       ├── __init__.py
+│       └── fetcher.py          # Data fetcher
+├── config.yaml                 # Default configuration
+├── requirements.txt            # Dependencies
+├── pyproject.toml              # Project configuration for binary generation
+├── setup.py                    # Setup configuration for binary generation
+└── README.md                   # This file
+```
 
-## Setup
+## Features
 
-**Requirements:** Python 3.12+ and a virtual environment.
+- Modular architecture for easy extension
+- Support for multiple exchanges
+- Configurable trading strategies
+- Risk management capabilities
+- Portfolio tracking and management
+- Data fetching from various sources
 
+## Installation
+
+1. Clone the repository
+2. Install dependencies: `pip install -r requirements.txt`
+3. Configure your settings in `config.yaml`
+4. Run the bot: `python src/main.py`
+
+## Configuration
+
+The bot uses a centralized configuration system that supports:
+- Environment variables
+- Configuration files (YAML/JSON)
+- Default values
+
+See `config.yaml` for available options.
+
+## Usage
+
+```bash
+# Start the trading bot with default config
+python src/main.py
+
+# Start the trading bot with custom config file
+python src/main.py path/to/config.yaml
+```
+
+## Binary Generation
+
+To generate a binary executable, you can use tools like PyOxidizer or PyInstaller:
+
+### Using PyOxidizer:
+1. Install PyOxidizer: `pip install pyoxidizer`
+2. Build the binary: `pyoxidizer build`
+
+### Using PyInstaller:
+1. Install PyInstaller: `pip install pyinstaller`
+2. Build the binary: `pyinstaller --onefile src/main.py`
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a pull request
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate

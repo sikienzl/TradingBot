@@ -160,31 +160,34 @@ class BotConfig:
     
     def _load_from_env(self):
         """Load configuration from environment variables."""
-        # Exchange settings
-        self.exchange.name = os.getenv("EXCHANGE_NAME", self.exchange.name)
-        self.exchange.api_key = os.getenv("KRAKEN_API_KEY", self.exchange.api_key)
-        self.exchange.api_secret = os.getenv("KRAKEN_API_SECRET", self.exchange.api_secret)
-        self.exchange.sandbox_mode = os.getenv("SANDBOX_MODE", str(self.exchange.sandbox_mode)).lower() == "true"
-        self.exchange.base_currency = os.getenv("BASE_CURRENCY", self.exchange.base_currency)
-        
-        # Trading settings
-        self.trading.enable_dry_run = os.getenv("DRY_RUN", str(self.trading.enable_dry_run)).lower() == "true"
-        self.trading.simulate_data = os.getenv("SIMULATE_DATA", str(self.trading.simulate_data)).lower() == "true"
-        self.trading.check_interval_seconds = int(os.getenv("CHECK_INTERVAL", self.trading.check_interval_seconds))
-        self.trading.max_open_trades = int(os.getenv("MAX_OPEN_TRADES", self.trading.max_open_trades))
-        self.trading.trade_amount = float(os.getenv("TRADE_AMOUNT", self.trading.trade_amount))
-        
-        # Data settings
-        self.data.data_frequency = os.getenv("DATA_FREQUENCY", self.data.data_frequency)
-        self.data.lookback_period = int(os.getenv("LOOKBACK_PERIOD", self.data.lookback_period))
-        
-        # Model settings
-        self.model.use_ml_model = os.getenv("USE_ML_MODEL", str(self.model.use_ml_model)).lower() == "true"
-        self.model.model_path = os.getenv("MODEL_PATH", self.model.model_path)
-        
-        # Logging settings
-        self.logging.log_level = os.getenv("LOG_LEVEL", self.logging.log_level)
-        self.logging.log_file = os.getenv("LOG_FILE", self.logging.log_file)
+        try:
+            # Exchange settings
+            self.exchange.name = os.getenv("EXCHANGE_NAME", self.exchange.name)
+            self.exchange.api_key = os.getenv("KRAKEN_API_KEY", self.exchange.api_key)
+            self.exchange.api_secret = os.getenv("KRAKEN_API_SECRET", self.exchange.api_secret)
+            self.exchange.sandbox_mode = os.getenv("SANDBOX_MODE", str(self.exchange.sandbox_mode)).lower() == "true"
+            self.exchange.base_currency = os.getenv("BASE_CURRENCY", self.exchange.base_currency)
+            
+            # Trading settings
+            self.trading.enable_dry_run = os.getenv("DRY_RUN", str(self.trading.enable_dry_run)).lower() == "true"
+            self.trading.simulate_data = os.getenv("SIMULATE_DATA", str(self.trading.simulate_data)).lower() == "true"
+            self.trading.check_interval_seconds = int(os.getenv("CHECK_INTERVAL", str(self.trading.check_interval_seconds)))
+            self.trading.max_open_trades = int(os.getenv("MAX_OPEN_TRADES", str(self.trading.max_open_trades)))
+            self.trading.trade_amount = float(os.getenv("TRADE_AMOUNT", str(self.trading.trade_amount)))
+            
+            # Data settings
+            self.data.data_frequency = os.getenv("DATA_FREQUENCY", self.data.data_frequency)
+            self.data.lookback_period = int(os.getenv("LOOKBACK_PERIOD", str(self.data.lookback_period)))
+            
+            # Model settings
+            self.model.use_ml_model = os.getenv("USE_ML_MODEL", str(self.model.use_ml_model)).lower() == "true"
+            self.model.model_path = os.getenv("MODEL_PATH", self.model.model_path)
+            
+            # Logging settings
+            self.logging.log_level = os.getenv("LOG_LEVEL", self.logging.log_level)
+            self.logging.log_file = os.getenv("LOG_FILE", self.logging.log_file)
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Invalid configuration value: {e}")
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary for serialization."""
@@ -286,5 +289,12 @@ class BotConfig:
         # Validate model settings
         if self.model.recommended_confidence_threshold < 0 or self.model.recommended_confidence_threshold > 1:
             errors.append("Recommended confidence threshold must be between 0 and 1")
+            
+        # Validate exchange settings
+        if self.exchange.max_concurrent_requests <= 0:
+            errors.append("Max concurrent requests must be positive")
+            
+        if self.exchange.request_timeout_seconds <= 0:
+            errors.append("Request timeout seconds must be positive")
         
         return errors

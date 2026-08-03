@@ -1,0 +1,38 @@
+# Default configuration for the trading bot
+
+# Environment settings
+environment: "development"
+simulate_data: true
+
+# Trading settings
+trading:
+  enabled: true
+  max_positions: 5
+  position_size: 0.1
+  stop_loss: 0.05
+  take_profit: 0.1
+
+# Exchange settings
+exchanges:
+  - name: "binance"
+    api_key: ""
+    api_secret: ""
+    sandbox: false
+
+# Data settings
+data:
+  cache_duration: 3600
+  fetch_interval: 60
+
+# Logging settings
+logging:
+  level: "INFO"
+  file: "trading_bot.log"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# Strategy settings
+strategy:
+  name: "moving_average_crossover"
+  parameters:
+    fast_period: 10
+    slow_period: 30

@@ -6,7 +6,8 @@ of the cryptocurrency trading system.
 """
 
 import logging
-from typing import Optional, Dict, Any
+import time
+from typing import Optional, Dict, Any, List
 from .config import BotConfig
 from ..exchange import ExchangeManager
 from ..portfolio import PortfolioManager
@@ -41,55 +42,82 @@ class TradingBot:
     def start(self) -> None:
         """Start the trading bot."""
         self.logger.info("Starting trading bot...")
-        # Implementation would go here
-        pass
+        
+        # Validate configuration
+        errors = self.config.validate()
+        if errors:
+            self.logger.error(f"Configuration validation failed: {errors}")
+            raise ValueError(f"Invalid configuration: {errors}")
+        
+        # Main trading loop
+        try:
+            while True:
+                self.run_cycle()
+                time.sleep(self.config.trading.check_interval_seconds)
+        except KeyboardInterrupt:
+            self.logger.info("Trading bot stopped by user")
+            self.stop()
+        except Exception as e:
+            self.logger.error(f"Unexpected error in trading bot: {e}")
+            raise
     
     def stop(self) -> None:
         """Stop the trading bot."""
         self.logger.info("Stopping trading bot...")
-        # Implementation would go here
+        # Clean up resources if needed
         pass
     
     def run_cycle(self) -> None:
-        """Run a complete trading cycle."""
-        self.logger.info("Running trading cycle...")
+        """
+        Run a complete trading cycle.
+        
+        This method orchestrates all components for one trading iteration.
+        """
+        try:
+            self.logger.info("Starting trading cycle...")
+            
+            # Fetch market data
+            market_data = self.data_fetcher.fetch_all_data()
+            
+            # Update portfolio
+            self.portfolio_manager.update_positions(market_data)
+            
+            # Generate trading signals
+            signals = self.strategy_engine.generate_signals(market_data)
+            
+            # Execute trades based on signals
+            self.execute_trades(signals)
+            
+            self.logger.info("Trading cycle completed successfully")
+            
+        except Exception as e:
+            self.logger.error(f"Error in trading cycle: {e}")
+            raise
+    
+    def execute_trades(self, signals) -> None:
+        """
+        Execute trades based on generated signals.
+        
+        Args:
+            signals: Trading signals from strategy engine
+        """
         # Implementation would go here
         pass
     
-    def process_market_data(self, symbol: str) -> Dict[str, Any]:
+    def get_status(self) -> Dict[str, Any]:
         """
-        Process market data for a symbol.
+        Get current status of the trading bot.
         
-        Args:
-            symbol: Trading pair symbol
-            
         Returns:
-            Dictionary containing all processed market data
+            Dictionary with current status information
         """
-        self.logger.info(f"Processing market data for {symbol}")
-        # Fetch data
-        ohlcv_data = self.data_fetcher.fetch_ohlcv(symbol, self.config.data_frequency)
-        ticker_data = self.data_fetcher.fetch_ticker(symbol)
-        
-        # Add sentiment data if enabled
-        if self.config.enable_sentiment_data:
-            sentiment_data = self.data_fetcher.fetch_sentiment_data(symbol)
-            news_data = self.data_fetcher.fetch_news_data(symbol)
-            social_data = self.data_fetcher.fetch_social_media_data(symbol)
-            
-            # Process sentiment data
-            self.logger.info(f"Sentiment data for {symbol}: {sentiment_data}")
-        
-        # Combine all data for strategy processing
-        market_data = {
-            'ohlcv': ohlcv_data,
-            'ticker': ticker_data,
-            'sentiment': sentiment_data if self.config.enable_sentiment_data else None,
-            'news': news_data if self.config.enable_sentiment_data else None,
-            'social': social_data if self.config.enable_sentiment_data else None
+        return {
+            "is_running": True,
+            "config": self.config.to_dict(),
+            "portfolio_value": self.portfolio_manager.get_portfolio_value(),
+            "open_positions": len(self.portfolio_manager.get_open_positions()),
+            "last_update": time.time()
         }
-        
-        return market_data
 
 # Example usage
 if __name__ == "__main__":
