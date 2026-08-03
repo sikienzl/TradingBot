@@ -89,7 +89,7 @@ def prepare_training_data(input_file="full_crypto_data.csv", output_file="traini
         print(f"   - Coins included: {df['coin'].nunique()}")
         return True
 
-    except Exception as e:
+    except (OSError, pd.errors.EmptyDataError, ValueError, TypeError) as e:
         print(f"❌ Error during data preparation: {e!s}")
         return False
 
