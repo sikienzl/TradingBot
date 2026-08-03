@@ -161,6 +161,23 @@ jobs:
         run: |
           python -c "from src.predict_catboost import CatBoostTradingPredictor; print('import_ok')"
 
+      - name: Debug: Python environment
+        if: always()
+        env:
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/src
+        run: |
+          python -V || true
+          pip -V || true
+          pip freeze > pip-freeze.txt || true
+
+      - name: Upload pip-freeze
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-freeze-py${{ matrix.python-version }}-${{ github.run_number }}
+          path: pip-freeze.txt
+          if-no-files-found: warn
+
       - name: Run tests
         id: pytest
         shell: bash
