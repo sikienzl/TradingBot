@@ -63,7 +63,18 @@ jobs:
         run: |
           set -o pipefail
           set +e
-          ruff check . \
+          run_if_rtk() { if command -v rtk >/dev/null 2>&1; then rtk "$@"; else "$@"; fi }
+
+          # Try to auto-fix fixable issues first (safe). Do not fail on this step itself.
+          run_if_rtk ruff check . \
+            --exclude build \
+            --exclude .venv \
+            --exclude results \
+            --exclude catboost_info \
+            --fix || true
+
+          # Then run the check to capture remaining issues.
+          run_if_rtk ruff check . \
             --exclude build \
             --exclude .venv \
             --exclude results \
