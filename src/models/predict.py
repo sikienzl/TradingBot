@@ -1,8 +1,14 @@
-import pandas as pd
-from sklearn.preprocessing import MinMaxScaler
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
-import torch
 import warnings
+
+import pandas as pd
+import torch
+from sklearn.preprocessing import MinMaxScaler
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    pipeline,
+)
 
 # Configuration for clean output
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -154,7 +160,7 @@ Answer with a single word only (buy/sell/hold):"""
                 'rule': rule_decision
             }
         except Exception as e:
-            print(f"Prediction error: {str(e)}")
+            print(f"Prediction error: {e!s}")
             return {'decision': 'hold', 'confidence': 0.0, 'llm_votes': {}, 'rule': 'hold'}
 
 

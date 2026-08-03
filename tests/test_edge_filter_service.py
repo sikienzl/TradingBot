@@ -13,7 +13,6 @@ async def test_process_market_snapshot_returns_ack(monkeypatch: pytest.MonkeyPat
 
     async def fake_process_tick_dict(tick_dict: dict, symbol: str):
         calls.append((tick_dict, symbol))
-        return None
 
     # type: ignore[method-assign]
     service.process_tick_dict = fake_process_tick_dict

@@ -1,7 +1,6 @@
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODULE_PATH = REPO_ROOT / "trading_bot.py"
 SPEC = spec_from_file_location("trading_bot_root", MODULE_PATH)

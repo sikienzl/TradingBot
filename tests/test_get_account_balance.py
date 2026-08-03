@@ -1,14 +1,14 @@
-from unittest.mock import patch, MagicMock
 import base64
 import time
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.get_account_balance import (
     get_nonce,
-    sign,
     get_signature,
     request,
+    sign,
 )
 
 

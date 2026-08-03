@@ -1,10 +1,8 @@
 import json
-from typing import Dict
 
 import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier
-
 
 _DE_TO_EN_DECISION = {
     "verkaufen": "sell",
@@ -41,7 +39,7 @@ class CatBoostTradingPredictor:
         self.label_map = metadata.get("label_map", self.label_map)
         self.inv_label_map = {v: k for k, v in self.label_map.items()}
 
-    def predict(self, row_df: pd.DataFrame, confidence_threshold: float = 0.45) -> Dict:
+    def predict(self, row_df: pd.DataFrame, confidence_threshold: float = 0.45) -> dict:
         if row_df.empty:
             return {"decision": "hold", "confidence": 0.0, "proba": {}}
 
@@ -85,9 +83,9 @@ class CatBoostTradingPredictor:
 
     def predict_from_features(
         self,
-        features: Dict[str, float],
+        features: dict[str, float],
         confidence_threshold: float | None = None,
-    ) -> Dict:
+    ) -> dict:
         threshold = (
             confidence_threshold
             if confidence_threshold is not None

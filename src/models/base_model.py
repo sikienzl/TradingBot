@@ -6,8 +6,10 @@ This module defines the base class for all machine learning models.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Any
+
 import pandas as pd
+
 
 class BaseModel(ABC):
     """Abstract base class for all trading models."""
@@ -25,7 +27,7 @@ class BaseModel(ABC):
         self.logger.info(f"Base model {model_name} initialized")
     
     @abstractmethod
-    def train(self, data: pd.DataFrame, **kwargs) -> Dict[str, Any]:
+    def train(self, data: pd.DataFrame, **kwargs) -> dict[str, Any]:
         """
         Train the model.
         
@@ -36,7 +38,6 @@ class BaseModel(ABC):
         Returns:
             Training results
         """
-        pass
     
     @abstractmethod
     def predict(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -49,7 +50,6 @@ class BaseModel(ABC):
         Returns:
             Predictions DataFrame
         """
-        pass
     
     def save_model(self, path: str):
         """

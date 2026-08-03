@@ -1,10 +1,11 @@
 import os
 import tempfile
-import pytest
-import pandas as pd
-import numpy as np
 
-from src.data_preperation import prepare_training_data, diagnose_data
+import numpy as np
+import pandas as pd
+import pytest
+
+from src.data_preperation import diagnose_data, prepare_training_data
 
 
 @pytest.fixture

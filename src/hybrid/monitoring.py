@@ -6,7 +6,13 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 try:
-    from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, start_http_server
+    from prometheus_client import (
+        CollectorRegistry,
+        Counter,
+        Gauge,
+        Histogram,
+        start_http_server,
+    )
     PROMETHEUS_AVAILABLE = True
 except ImportError:  # pragma: no cover - optional at development time
     CollectorRegistry = Counter = Gauge = Histogram = None
@@ -23,7 +29,7 @@ class NullMetric:
     def observe(self, _value: float) -> None:
         return
 
-    def labels(self, **_labels: str) -> "NullMetric":
+    def labels(self, **_labels: str) -> NullMetric:
         return self
 
 

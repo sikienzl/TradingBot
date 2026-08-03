@@ -5,10 +5,12 @@ This module handles loading configuration files for the trading bot.
 """
 
 import json
-import yaml
-import os
-from typing import Dict, Any, Optional
 import logging
+import os
+from typing import Any
+
+import yaml
+
 
 class ConfigLoader:
     """Class for loading and managing configuration."""
@@ -19,7 +21,7 @@ class ConfigLoader:
         self.logger.info("Config loader initialized")
         self.config = {}
     
-    def load_config(self, config_path: str) -> Dict[str, Any]:
+    def load_config(self, config_path: str) -> dict[str, Any]:
         """
         Load configuration from file.
         

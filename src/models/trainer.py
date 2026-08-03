@@ -5,10 +5,12 @@ This module handles training machine learning models for trading.
 """
 
 import logging
+from typing import Any
+
 import pandas as pd
-import torch
-from typing import Dict, Any, Optional
+
 from .base_model import BaseModel
+
 
 class ModelTrainer:
     """Class for training machine learning models."""
@@ -18,7 +20,7 @@ class ModelTrainer:
         self.logger = logging.getLogger(__name__)
         self.logger.info("Model trainer initialized")
     
-    def train_catboost_model(self, data: pd.DataFrame, target_column: str) -> Dict[str, Any]:
+    def train_catboost_model(self, data: pd.DataFrame, target_column: str) -> dict[str, Any]:
         """
         Train a CatBoost model.
         
@@ -45,7 +47,7 @@ class ModelTrainer:
             }
         }
     
-    def train_transformer_model(self, data: pd.DataFrame) -> Dict[str, Any]:
+    def train_transformer_model(self, data: pd.DataFrame) -> dict[str, Any]:
         """
         Train a transformer model.
         
@@ -70,7 +72,7 @@ class ModelTrainer:
             }
         }
     
-    def evaluate_model(self, model: BaseModel, test_data: pd.DataFrame) -> Dict[str, Any]:
+    def evaluate_model(self, model: BaseModel, test_data: pd.DataFrame) -> dict[str, Any]:
         """
         Evaluate a trained model.
         

@@ -4,23 +4,23 @@ Simple Prometheus exporter for Trading Bot PnL metrics
 Listens on http://localhost:9200/metrics
 """
 import ast
-import csv
-import math
-import os
-import sys
-import json
-import re
-import time
 import base64
+import csv
 import hashlib
 import hmac
+import json
+import math
+import os
+import re
+import sys
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
-import urllib.error
-from contextlib import suppress
 from collections import deque
-from datetime import datetime, timedelta, timezone
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from contextlib import suppress
+from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 try:
     import ccxt
@@ -646,19 +646,19 @@ class MetricsHandler(BaseHTTPRequestHandler):
                                     valued) - float(holdings_cost.get(coin, 0.0) or 0.0)
                         else:
                             # ccxt not available: use cost-basis as value
-                            for coin in holdings_amount.keys():
+                            for coin in holdings_amount:
                                 holdings_value[coin] = float(
                                     holdings_cost.get(coin, 0.0))
                                 holdings_unrealized[coin] = 0.0
                     except Exception:
-                        for coin in holdings_amount.keys():
+                        for coin in holdings_amount:
                             holdings_value[coin] = float(
                                 holdings_cost.get(coin, 0.0))
                             holdings_unrealized[coin] = 0.0
 
                     snapshot['holdings_value_eur'] = holdings_value
                     snapshot['holdings_unrealized_pnl_eur'] = holdings_unrealized
-                    snapshot['open_positions_count'] = int(len(derived))
+                    snapshot['open_positions_count'] = len(derived)
                     # mark that this snapshot was derived from the trade journal
                     snapshot['_derived_from_journal'] = True
         except Exception:
@@ -833,7 +833,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             except Exception:
                 return None
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         return dt
 
     def _extract_log_line_timestamp(self, line):
@@ -897,7 +897,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             'portfolio_value_eur': float(max(portfolio_value, 0.0)),
             'portfolio_cash_eur': float(max(portfolio_cash, 0.0)),
             'open_positions_count': int(max(open_positions_count, 0)),
-            'portfolio_snapshot_timestamp_unixtime': datetime.now(timezone.utc).timestamp(),
+            'portfolio_snapshot_timestamp_unixtime': datetime.now(UTC).timestamp(),
             'portfolio_snapshot_age_seconds': 0.0,
         }
 
@@ -913,7 +913,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             'open_positions_count': 0,
             'portfolio_snapshot_timestamp_unixtime': 0.0,
             'portfolio_snapshot_age_seconds': 0.0,
-            'metrics_generated_unixtime': datetime.now(timezone.utc).timestamp(),
+            'metrics_generated_unixtime': datetime.now(UTC).timestamp(),
         }
 
         # Prefer a persisted portfolio snapshot file when available (written by the bot)
@@ -921,7 +921,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             if os.path.exists(PORTFOLIO_STATE_PATH):
                 with open(PORTFOLIO_STATE_PATH, 'r', encoding='utf-8', errors='ignore') as f:
                     state = json.load(f)
-                now_ts = datetime.now(timezone.utc).timestamp()
+                now_ts = datetime.now(UTC).timestamp()
                 cash = float(state.get('cash', 0.0) or 0.0)
                 holdings_raw = state.get('holdings', {}) or {}
                 holdings = {str(k).upper(): float(v) for k, v in holdings_raw.items() if (
@@ -1232,7 +1232,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     continue
                 with open(candidate, 'r', encoding='utf-8') as f:
                     state = json.load(f)
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 month_key = f"{now.year:04d}-{now.month:02d}"
                 if state.get('month_key') == month_key:
                     result['ai_copilot_budget_cap_usd'] = float(
@@ -1304,7 +1304,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             with open(BOT_LOG_PATH, 'r', encoding='utf-8', errors='ignore') as f:
                 tail_lines = list(deque(f, maxlen=4000))
 
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             suggestions = []
             rank = 1
 
@@ -1379,7 +1379,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
 
     def calculate_pnl_metrics(self, trades, time_window_hours=24):
         """Calculate PnL metrics from trades"""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         cutoff = now - timedelta(hours=time_window_hours)
 
         all_time_realized_pnl = 0.0
@@ -1458,17 +1458,14 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 per_trade_returns.append(ret)
 
                 equity += pnl
-                if equity > peak_equity:
-                    peak_equity = equity
+                peak_equity = max(peak_equity, equity)
                 drawdown_usd = peak_equity - equity
-                if drawdown_usd > max_drawdown_usd:
-                    max_drawdown_usd = drawdown_usd
+                max_drawdown_usd = max(max_drawdown_usd, drawdown_usd)
                 if peak_equity > 0:
                     # Prevent unrealistic percentages when peak equity is near zero.
                     drawdown_pct = drawdown_usd / \
                         max(peak_equity, MIN_DRAWDOWN_PCT_BASE_USD)
-                    if drawdown_pct > max_drawdown_pct:
-                        max_drawdown_pct = drawdown_pct
+                    max_drawdown_pct = max(max_drawdown_pct, drawdown_pct)
             except Exception:
                 continue
 

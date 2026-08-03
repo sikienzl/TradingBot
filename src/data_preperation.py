@@ -1,8 +1,7 @@
 # data_preparation.py
-import pandas as pd
-import numpy as np
-from pathlib import Path
 import os
+
+import pandas as pd
 
 
 def prepare_training_data(input_file="full_crypto_data.csv", output_file="training_data.csv"):
@@ -91,7 +90,7 @@ def prepare_training_data(input_file="full_crypto_data.csv", output_file="traini
         return True
 
     except Exception as e:
-        print(f"❌ Error during data preparation: {str(e)}")
+        print(f"❌ Error during data preparation: {e!s}")
         return False
 
 

@@ -7,20 +7,23 @@ Connects to Kraken WebSocket, runs continuous inference, buffers ticks to NVMe.
 24/7 high-frequency filtering: only alerts GPT-5 when anomaly detected.
 """
 
-import os
 import asyncio
-import logging
 import json
+import logging
+import os
 import time
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import datetime
 
-from src.kraken_websocket_v2 import KrakenWebSocketV2, Tick, kraken_websocket_session
-from src.hailo.inference import TimeSeriesTransformerONNX, AnomalyDetector
+from src.hailo.inference import AnomalyDetector, TimeSeriesTransformerONNX
 from src.hybrid.decision_gate import AnomalyAlert
-from src.hybrid.grpc_bridge import EdgeFilterRpcServer, StrategistRpcClient, grpc_available
+from src.hybrid.grpc_bridge import (
+    EdgeFilterRpcServer,
+    StrategistRpcClient,
+    grpc_available,
+)
 from src.hybrid.monitoring import ServiceMetrics
 from src.hybrid.transport import EdgeAlertPayload, MarketSnapshotPayload, TransportAck
+from src.kraken_websocket_v2 import Tick, kraken_websocket_session
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +103,7 @@ class HailoEdgeFilterService:
         tick_dict = tick.to_dict()
         await self.process_tick_dict(tick_dict, tick.symbol)
 
-    async def process_tick_dict(self, tick_dict: dict, symbol: str) -> Optional[AnomalyAlert]:
+    async def process_tick_dict(self, tick_dict: dict, symbol: str) -> AnomalyAlert | None:
         """Run inference for a single tick dictionary."""
         started = time.perf_counter()
 

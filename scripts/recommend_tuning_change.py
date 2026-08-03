@@ -11,31 +11,31 @@ import argparse
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import UTC, datetime
+from typing import Any
 
 
 @dataclass
 class Recommendation:
     action: str
     reason: str
-    parameter: Optional[str] = None
-    old_value: Optional[float] = None
-    new_value: Optional[float] = None
+    parameter: str | None = None
+    old_value: float | None = None
+    new_value: float | None = None
     phase: str = "phase_1"
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _load_json(path: str) -> Dict[str, Any]:
+def _load_json(path: str) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def _parse_env(path: str) -> Dict[str, str]:
-    values: Dict[str, str] = {}
+def _parse_env(path: str) -> dict[str, str]:
+    values: dict[str, str] = {}
     if not os.path.exists(path):
         return values
 
@@ -53,7 +53,7 @@ def _parse_env(path: str) -> Dict[str, str]:
     return values
 
 
-def _to_float(value: Any) -> Optional[float]:
+def _to_float(value: Any) -> float | None:
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -66,7 +66,7 @@ def _coerce_value_for_type(value: float, typ: str) -> float:
     return float(value)
 
 
-def _state_load(path: str) -> Dict[str, Any]:
+def _state_load(path: str) -> dict[str, Any]:
     if not os.path.exists(path):
         return {
             "created_utc": _utc_now(),
@@ -89,7 +89,7 @@ def _state_load(path: str) -> Dict[str, Any]:
         }
 
 
-def _state_save(path: str, state: Dict[str, Any]) -> None:
+def _state_save(path: str, state: dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=True, indent=2)
@@ -97,14 +97,14 @@ def _state_save(path: str, state: Dict[str, Any]) -> None:
 
 
 def _compare_acceptance(
-    prev_metrics: Dict[str, Any],
-    curr_metrics: Dict[str, Any],
-    acceptance: Dict[str, Any],
-) -> Tuple[Optional[bool], List[str]]:
+    prev_metrics: dict[str, Any],
+    curr_metrics: dict[str, Any],
+    acceptance: dict[str, Any],
+) -> tuple[bool | None, list[str]]:
     if not prev_metrics or not curr_metrics:
         return None, ["No previous metrics baseline available."]
 
-    reasons: List[str] = []
+    reasons: list[str] = []
     ok = True
 
     prev_pf = _to_float(prev_metrics.get("profit_factor"))
@@ -151,7 +151,7 @@ def _compare_acceptance(
     return ok, reasons
 
 
-def _resolve_phase(policy: Dict[str, Any], state: Dict[str, Any]) -> str:
+def _resolve_phase(policy: dict[str, Any], state: dict[str, Any]) -> str:
     phase = str(state.get("phase") or "phase_1")
     required = int(
         policy.get("activation_plan", {})
@@ -164,7 +164,7 @@ def _resolve_phase(policy: Dict[str, Any], state: Dict[str, Any]) -> str:
     return phase
 
 
-def _enabled_parameters(policy: Dict[str, Any], phase: str) -> List[str]:
+def _enabled_parameters(policy: dict[str, Any], phase: str) -> list[str]:
     plan = policy.get("activation_plan", {})
     if phase == "phase_2":
         return list(plan.get("phase_2", {}).get("enabled_parameters", []))
@@ -172,10 +172,10 @@ def _enabled_parameters(policy: Dict[str, Any], phase: str) -> List[str]:
 
 
 def _make_change(
-    param_cfg: Dict[str, Any],
+    param_cfg: dict[str, Any],
     current_value: float,
     mode: str,
-) -> Optional[float]:
+) -> float | None:
     step = float(param_cfg.get("step", 0.0))
     pmin = float(param_cfg.get("min"))
     pmax = float(param_cfg.get("max"))
@@ -188,26 +188,14 @@ def _make_change(
     if mode == "aggressive":
         if name == "MAX_HOLD_SECONDS":
             new = current_value + step
-        elif name == "REENTRY_COOLDOWN_MAX_SECONDS":
-            new = current_value - step
-        elif name == "ENTRY_MIN_RET_3":
-            new = current_value - step
-        elif name == "MIN_ENTRY_SCORE":
-            new = current_value - step
-        elif name == "TABULAR_BUY_MIN_CONFIDENCE":
+        elif name == "REENTRY_COOLDOWN_MAX_SECONDS" or name == "ENTRY_MIN_RET_3" or name == "MIN_ENTRY_SCORE" or name == "TABULAR_BUY_MIN_CONFIDENCE":
             new = current_value - step
         else:
             return None
     else:
         if name == "MAX_HOLD_SECONDS":
             new = current_value - step
-        elif name == "REENTRY_COOLDOWN_MAX_SECONDS":
-            new = current_value + step
-        elif name == "ENTRY_MIN_RET_3":
-            new = current_value + step
-        elif name == "MIN_ENTRY_SCORE":
-            new = current_value + step
-        elif name == "TABULAR_BUY_MIN_CONFIDENCE":
+        elif name == "REENTRY_COOLDOWN_MAX_SECONDS" or name == "ENTRY_MIN_RET_3" or name == "MIN_ENTRY_SCORE" or name == "TABULAR_BUY_MIN_CONFIDENCE":
             new = current_value + step
         else:
             return None
@@ -221,11 +209,11 @@ def _make_change(
 
 
 def recommend(
-    policy: Dict[str, Any],
-    status: Dict[str, Any],
-    env_values: Dict[str, str],
-    state: Dict[str, Any],
-) -> Tuple[Recommendation, Dict[str, Any]]:
+    policy: dict[str, Any],
+    status: dict[str, Any],
+    env_values: dict[str, str],
+    state: dict[str, Any],
+) -> tuple[Recommendation, dict[str, Any]]:
     phase = _resolve_phase(policy, state)
     enabled = _enabled_parameters(policy, phase)
 
@@ -236,7 +224,7 @@ def recommend(
     hard_dd = float(hard.get("max_drawdown_pct_hard", 3.0))
     curr_dd = _to_float(metrics.get("max_drawdown_pct"))
 
-    state_updates: Dict[str, Any] = {
+    state_updates: dict[str, Any] = {
         "phase": phase,
         "last_run_utc": _utc_now(),
         "last_status_verdict": verdict,
@@ -263,7 +251,7 @@ def recommend(
         if phase == "phase_1":
             state_updates["phase_1_successful_cycles"] = phase1_count + 1
         # Track stable params only when acceptance passed.
-        stable: Dict[str, Any] = dict(
+        stable: dict[str, Any] = dict(
             state.get("last_stable_params", {}) or {})
         for p in policy.get("tunable_parameters", []):
             name = str(p.get("name"))
@@ -360,7 +348,7 @@ def recommend(
     )
 
 
-def _capital_step_hint(policy: Dict[str, Any], status: Dict[str, Any]) -> Dict[str, Any]:
+def _capital_step_hint(policy: dict[str, Any], status: dict[str, Any]) -> dict[str, Any]:
     step_cfg = policy.get("capital_step_up", {})
     if not step_cfg.get("enabled", False):
         return {"eligible": False, "reason": "Capital step-up disabled."}

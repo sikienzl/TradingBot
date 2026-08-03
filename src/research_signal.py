@@ -1,11 +1,10 @@
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 import pandas as pd
 
 from src.api_models import MarketRegime, ResearchSignalFeatures, ResearchSignalPayload
-
 
 RESEARCH_FEATURE_COLUMNS = [
     "research_sentiment_score",
@@ -39,7 +38,7 @@ def _normalize_market_regime(value: Any) -> MarketRegime:
     return MarketRegime.SIDEWAYS
 
 
-def normalize_research_payload_model(payload: Optional[Dict[str, Any]]) -> ResearchSignalFeatures:
+def normalize_research_payload_model(payload: dict[str, Any] | None) -> ResearchSignalFeatures:
     """Maps arbitrary AutoResearch-style JSON to a typed fixed model feature vector."""
     raw = payload or {}
     regime = _normalize_market_regime(
@@ -58,12 +57,12 @@ def normalize_research_payload_model(payload: Optional[Dict[str, Any]]) -> Resea
     )
 
 
-def normalize_research_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, float]:
+def normalize_research_payload(payload: dict[str, Any] | None) -> dict[str, float]:
     """Maps arbitrary AutoResearch-style JSON to a fixed model feature vector."""
     return normalize_research_payload_model(payload).model_dump()
 
 
-def load_latest_research_signal_model(path: Optional[str]) -> ResearchSignalFeatures:
+def load_latest_research_signal_model(path: str | None) -> ResearchSignalFeatures:
     """Loads AutoResearch JSON from disk and returns typed normalized model features."""
     if not path or not os.path.exists(path):
         return normalize_research_payload_model(None)
@@ -75,7 +74,7 @@ def load_latest_research_signal_model(path: Optional[str]) -> ResearchSignalFeat
     return normalize_research_payload_model(payload)
 
 
-def load_research_signal_payload(path: Optional[str]) -> ResearchSignalPayload:
+def load_research_signal_payload(path: str | None) -> ResearchSignalPayload:
     """Loads canonical research signal JSON and returns a validated payload."""
     if not path or not os.path.exists(path):
         features = normalize_research_payload_model(None)
@@ -105,12 +104,12 @@ def load_research_signal_payload(path: Optional[str]) -> ResearchSignalPayload:
     )
 
 
-def load_latest_research_signal(path: Optional[str]) -> Dict[str, float]:
+def load_latest_research_signal(path: str | None) -> dict[str, float]:
     """Loads AutoResearch JSON from disk and returns normalized model features."""
     return load_latest_research_signal_model(path).model_dump()
 
 
-def apply_research_features(df: pd.DataFrame, research_features: Dict[str, float]) -> pd.DataFrame:
+def apply_research_features(df: pd.DataFrame, research_features: dict[str, float]) -> pd.DataFrame:
     out = df.copy()
     for col in RESEARCH_FEATURE_COLUMNS:
         out[col] = _to_float(research_features.get(col), 0.0)

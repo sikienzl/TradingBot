@@ -1,10 +1,15 @@
-import pandas as pd
-import numpy as np
-from sklearn.preprocessing import MinMaxScaler
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
-import torch
 import warnings
-from typing import Dict, Any, List, Tuple
+from typing import Any
+
+import pandas as pd
+import torch
+from sklearn.preprocessing import MinMaxScaler
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    pipeline,
+)
 
 # Configuration for clean output
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -94,7 +99,7 @@ Answer only with one word (buy/sell/hold):"""
                 return 'sell'
         return 'hold'
 
-    def predict(self, data: pd.DataFrame, n_votes: int = 5, confidence_threshold: float = 0.6) -> Dict[str, Any]:
+    def predict(self, data: pd.DataFrame, n_votes: int = 5, confidence_threshold: float = 0.6) -> dict[str, Any]:
         """Return the trading decision and confidence (ensemble of LLM and rule)."""
         try:
             processed_data = self.prepare_data(data)
@@ -153,7 +158,7 @@ Answer only with one word (buy/sell/hold):"""
                 'rule': rule_decision
             }
         except Exception as e:
-            print(f"Prediction error: {str(e)}")
+            print(f"Prediction error: {e!s}")
             return {'decision': 'halten', 'confidence': 0.0, 'llm_votes': {}, 'rule': 'halten'}
 
 

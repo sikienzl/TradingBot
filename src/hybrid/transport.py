@@ -1,24 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from src.hybrid.decision_gate import AnomalyAlert
 
 
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _parse_timestamp(value: str | None) -> datetime:
     if not value:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     normalized = value.replace("Z", "+00:00")
     parsed = datetime.fromisoformat(normalized)
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 @dataclass(slots=True)
@@ -34,7 +34,7 @@ class MarketTickPayload:
     last_trade_size: float
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "MarketTickPayload":
+    def from_dict(cls, payload: dict[str, Any]) -> MarketTickPayload:
         return cls(
             timestamp=float(payload.get("timestamp", 0.0)),
             symbol=str(payload.get("symbol", "")),
@@ -68,7 +68,7 @@ class MarketSnapshotPayload:
         source: str = "kraken-websocket",
         node_name: str | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> "MarketSnapshotPayload":
+    ) -> MarketSnapshotPayload:
         return cls(
             pair=pair,
             ticks=[MarketTickPayload.from_dict(tick) for tick in ticks],
@@ -78,7 +78,7 @@ class MarketSnapshotPayload:
         )
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "MarketSnapshotPayload":
+    def from_dict(cls, payload: dict[str, Any]) -> MarketSnapshotPayload:
         return cls(
             pair=str(payload.get("pair", "")),
             ticks=[
@@ -123,9 +123,9 @@ class EdgeAlertPayload:
         alert: AnomalyAlert,
         source_node: str | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> "EdgeAlertPayload":
+    ) -> EdgeAlertPayload:
         return cls(
-            timestamp_utc=alert.timestamp.astimezone(timezone.utc).isoformat(),
+            timestamp_utc=alert.timestamp.astimezone(UTC).isoformat(),
             hailo_score=alert.hailo_score,
             window_size=alert.window_size,
             signal_type=alert.signal_type,
@@ -137,7 +137,7 @@ class EdgeAlertPayload:
         )
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "EdgeAlertPayload":
+    def from_dict(cls, payload: dict[str, Any]) -> EdgeAlertPayload:
         return cls(
             timestamp_utc=str(payload.get("timestamp_utc", utc_now_iso())),
             hailo_score=float(payload.get("hailo_score", 0.0)),
@@ -176,7 +176,7 @@ class StrategistDecisionPayload:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "StrategistDecisionPayload":
+    def from_dict(cls, payload: dict[str, Any]) -> StrategistDecisionPayload:
         return cls(
             decision=str(payload.get("decision", "VETO")),
             reason=str(payload.get("reason", "Unknown")),
@@ -199,7 +199,7 @@ class TransportAck:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "TransportAck":
+    def from_dict(cls, payload: dict[str, Any]) -> TransportAck:
         return cls(
             accepted=bool(payload.get("accepted", False)),
             message=str(payload.get("message", "")),

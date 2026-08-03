@@ -4,15 +4,15 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 
-def _discover_repo_candidates() -> List[str]:
+def _discover_repo_candidates() -> list[str]:
     """Returns likely local AutoResearch repository paths."""
     home = os.path.expanduser("~")
     hints = [
@@ -24,7 +24,7 @@ def _discover_repo_candidates() -> List[str]:
         os.path.join(home, "projects", "autoresearch"),
     ]
 
-    candidates: List[str] = []
+    candidates: list[str] = []
     for path in hints:
         if os.path.isdir(path):
             candidates.append(path)
@@ -61,11 +61,11 @@ def _discover_repo_candidates() -> List[str]:
     return unique
 
 
-def _suggest_commands(repo_path: str, output_path: str) -> List[str]:
+def _suggest_commands(repo_path: str, output_path: str) -> list[str]:
     """Builds a short list of probable start commands."""
     py = os.path.join(ROOT_DIR, ".venv", "bin", "python")
     python_cmd = py if os.path.exists(py) else "python3"
-    candidates: List[str] = []
+    candidates: list[str] = []
 
     if os.path.exists(os.path.join(repo_path, "main.py")):
         candidates.append(f"{python_cmd} main.py --output {output_path}")
@@ -98,7 +98,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _normalize_research_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, float]:
+def _normalize_research_payload(payload: dict[str, Any] | None) -> dict[str, float]:
     raw = payload or {}
     regime = str(raw.get("market_regime", "sideways")
                  or "sideways").strip().lower()
@@ -121,7 +121,7 @@ def _normalize_research_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, 
     return features
 
 
-def _parse_timestamp(value: Any) -> Optional[datetime]:
+def _parse_timestamp(value: Any) -> datetime | None:
     if not value:
         return None
     raw = str(value).strip()
@@ -134,17 +134,17 @@ def _parse_timestamp(value: Any) -> Optional[datetime]:
     except ValueError:
         return None
     if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return ts.astimezone(timezone.utc)
+        ts = ts.replace(tzinfo=UTC)
+    return ts.astimezone(UTC)
 
 
-def _is_stale(payload: Dict[str, Any], max_age_minutes: int) -> bool:
+def _is_stale(payload: dict[str, Any], max_age_minutes: int) -> bool:
     if max_age_minutes <= 0:
         return False
     ts = _parse_timestamp(payload.get("timestamp_utc"))
     if ts is None:
         return True
-    age_seconds = (datetime.now(timezone.utc) - ts).total_seconds()
+    age_seconds = (datetime.now(UTC) - ts).total_seconds()
     return age_seconds > (max_age_minutes * 60)
 
 
@@ -162,7 +162,7 @@ def _run_command(command: str, cwd: str) -> None:
         )
 
 
-def _load_json(path: str) -> Dict[str, Any]:
+def _load_json(path: str) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, dict):
@@ -179,11 +179,11 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def _build_output_payload(raw_payload: Dict[str, Any]) -> Dict[str, Any]:
+def _build_output_payload(raw_payload: dict[str, Any]) -> dict[str, Any]:
     normalized = _normalize_research_payload(raw_payload)
-    out: Dict[str, Any] = {
+    out: dict[str, Any] = {
         "timestamp_utc": raw_payload.get("timestamp_utc")
-        or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        or datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "sentiment_score": _as_float(raw_payload.get("sentiment_score"), 0.0),
         "confidence": _as_float(raw_payload.get("confidence"), 0.0),
         "risk_score": _as_float(raw_payload.get("risk_score"), 0.0),
@@ -192,7 +192,7 @@ def _build_output_payload(raw_payload: Dict[str, Any]) -> Dict[str, Any]:
         "normalized_features": normalized,
         "integration": {
             "source": "autoresearch",
-            "written_at_utc": datetime.now(timezone.utc)
+            "written_at_utc": datetime.now(UTC)
             .isoformat()
             .replace("+00:00", "Z"),
         },
@@ -200,8 +200,8 @@ def _build_output_payload(raw_payload: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _build_neutral_payload(reason: str = "") -> Dict[str, Any]:
-    now_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+def _build_neutral_payload(reason: str = "") -> dict[str, Any]:
+    now_utc = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     payload = {
         "timestamp_utc": now_utc,
         "sentiment_score": 0.0,

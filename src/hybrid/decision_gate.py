@@ -4,12 +4,12 @@ Orchestration for Hybrid Decision Flow
 Hailo-8 Anomaly Score → Hybrid Gate → GPT-5 (if score > threshold) → Trade Decision
 """
 
-import os
 import asyncio
 import logging
-from typing import Optional, Dict, Any
+import os
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ class AnomalyAlert:
     window_size: int                # ticks in analysis window
     signal_type: str                # "breakout", "reversal", "volatility_spike"
     confidence: float               # 0-1 confidence in detection
-    market_context: Dict[str, Any]  # Last N ticks, RSI, volume, etc.
+    market_context: dict[str, Any]  # Last N ticks, RSI, volume, etc.
     coin: str                       # Trading pair
 
     def is_critical(self) -> bool:
@@ -49,7 +49,7 @@ class HybridDecisionGate:
         self.use_historical = os.getenv(
             "HYBRID_GATE_USE_HISTORICAL_DATA", "true").lower() == "true"
         
-    def process_alert(self, alert: AnomalyAlert) -> Optional[Dict[str, Any]]:
+    def process_alert(self, alert: AnomalyAlert) -> dict[str, Any] | None:
         """
         Process an anomaly alert from Hailo-8.
         
@@ -82,7 +82,7 @@ class HybridDecisionGate:
 
         logger.info(f"HybridDecisionGate initialized: enabled={self.enabled}")
 
-    async def evaluate(self, alert: AnomalyAlert) -> Optional[Dict[str, Any]]:
+    async def evaluate(self, alert: AnomalyAlert) -> dict[str, Any] | None:
         """
         Evaluate Hailo alert and decide whether to call GPT-5.
 
@@ -107,7 +107,7 @@ class HybridDecisionGate:
 
         logger.info(
             f"🚨 ANOMALY ALERT: score={alert.hailo_score}, coin={alert.coin}, type={alert.signal_type}")
-        logger.info(f"Triggering GPT-5 Chief Strategist evaluation...")
+        logger.info("Triggering GPT-5 Chief Strategist evaluation...")
 
         # TODO: Call GPT-5 with alert context
         # gpt5_decision = await self.call_gpt5_strategist(alert)

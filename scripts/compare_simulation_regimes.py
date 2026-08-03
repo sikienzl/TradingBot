@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from trading_bot import BotConfig, CryptoTradingBot, logger as bot_logger
 import argparse
 import logging
 import os
@@ -7,6 +6,8 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from trading_bot import BotConfig, CryptoTradingBot
+from trading_bot import logger as bot_logger
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent

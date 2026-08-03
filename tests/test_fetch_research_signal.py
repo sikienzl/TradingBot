@@ -1,12 +1,11 @@
 """Tests for scripts/fetch_research_signal.py"""
 
-import json
-import unittest
-from unittest.mock import MagicMock, patch
-
 # Allow importing the script as a module without running main()
 import importlib.util
+import json
 import os
+import unittest
+from unittest.mock import MagicMock, patch
 
 SCRIPT_PATH = os.path.join(os.path.dirname(
     __file__), "..", "scripts", "fetch_research_signal.py")

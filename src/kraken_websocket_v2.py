@@ -11,19 +11,20 @@ Features:
 - Metrics: connection uptime, ticks/sec, buffer health
 """
 
-import os
-import json
 import asyncio
+import json
 import logging
+import os
 import sqlite3
-from typing import Dict, List, Optional, Callable, Any
-from datetime import datetime, timedelta
-from dataclasses import dataclass, asdict
-from pathlib import Path
+from collections.abc import Callable
 from contextlib import asynccontextmanager
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any
+
 import websockets
 from websockets.client import WebSocketClientProtocol
-
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +43,12 @@ class Tick:
     last_trade_price: float  # Last trade price
     last_trade_size: float   # Last trade volume
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON/storage"""
         return asdict(self)
 
     @classmethod
-    def from_kraken_message(cls, msg: List, symbol: str) -> "Tick":
+    def from_kraken_message(cls, msg: list, symbol: str) -> "Tick":
         """
         Parse Kraken WebSocket V2 tick message.
 
@@ -105,9 +106,9 @@ class KrakenWebSocketV2:
 
     def __init__(
         self,
-        pairs: List[str],
-        buffer_path: Optional[str] = None,
-        tick_callback: Optional[Callable[[Tick], None]] = None,
+        pairs: list[str],
+        buffer_path: str | None = None,
+        tick_callback: Callable[[Tick], None] | None = None,
     ):
         """
         Initialize Kraken WebSocket V2 client.
@@ -119,7 +120,7 @@ class KrakenWebSocketV2:
         """
         self.pairs = pairs
         self.tick_callback = tick_callback
-        self.ws: Optional[WebSocketClientProtocol] = None
+        self.ws: WebSocketClientProtocol | None = None
         self.connected = False
         self.ticks_received = 0
         self.last_tick_time = None
@@ -195,7 +196,7 @@ class KrakenWebSocketV2:
             for pair in self.pairs:
                 await self._subscribe_ticker(pair)
 
-            logger.info(f"✅ Connected to Kraken WebSocket V2")
+            logger.info("✅ Connected to Kraken WebSocket V2")
             return True
 
         except Exception as e:
@@ -337,7 +338,7 @@ class KrakenWebSocketV2:
 
     def get_recent_ticks(
         self, symbol: str, limit: int = 100, seconds: int = 300
-    ) -> List[Tick]:
+    ) -> list[Tick]:
         """
         Get recent ticks from database.
 
@@ -383,7 +384,7 @@ class KrakenWebSocketV2:
             logger.error(f"Failed to fetch ticks: {e}")
             return []
 
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         """Get connection & throughput metrics"""
         uptime = None
         if self.connection_start_time:
@@ -407,8 +408,8 @@ class KrakenWebSocketV2:
 
 @asynccontextmanager
 async def kraken_websocket_session(
-    pairs: List[str],
-    tick_callback: Optional[Callable[[Tick], None]] = None,
+    pairs: list[str],
+    tick_callback: Callable[[Tick], None] | None = None,
 ):
     """
     Context manager for Kraken WebSocket session.

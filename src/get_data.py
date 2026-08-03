@@ -1,11 +1,9 @@
-import ccxt
-import talib
-import numpy as np
-import pandas as pd
-from datetime import datetime
-import time
 import sqlite3
-from pathlib import Path
+import time
+
+import ccxt
+import pandas as pd
+import talib
 
 
 class CryptoDataFetcher:
@@ -31,7 +29,7 @@ class CryptoDataFetcher:
             exchange.load_markets()
             return exchange
         except Exception as e:
-            print(f"❌ Exchange initialization failed: {str(e)}")
+            print(f"❌ Exchange initialization failed: {e!s}")
             return None
 
     def get_available_pairs(self, exchange):
@@ -49,7 +47,7 @@ class CryptoDataFetcher:
                 ohlcv = exchange.fetch_ohlcv(
                     symbol, self.timeframe, limit=self.days)
                 return ohlcv
-            except Exception as e:
+            except Exception:
                 wait_time = (attempt + 1) * 5
                 print(
                     f"Attempt {attempt + 1}/{max_retries} for {symbol} failed. Waiting {wait_time}s...", end="\r")
@@ -81,7 +79,7 @@ class CryptoDataFetcher:
                 df['close'])
             return True
         except Exception as e:
-            print(f"Indicator calculation failed: {str(e)}")
+            print(f"Indicator calculation failed: {e!s}")
             return False
 
     def process_symbol(self, exchange, symbol):
@@ -143,7 +141,7 @@ class CryptoDataFetcher:
             print(f"Data successfully saved to {filename}")
             return True
         except Exception as e:
-            print(f"Error while saving: {str(e)}")
+            print(f"Error while saving: {e!s}")
             return False
 
     def save_to_sqlite(self, filename="crypto_data.db"):
@@ -157,7 +155,7 @@ class CryptoDataFetcher:
             print(f"Data successfully saved to {filename}")
             return True
         except Exception as e:
-            print(f"Error while saving to SQLite: {str(e)}")
+            print(f"Error while saving to SQLite: {e!s}")
             return False
 
     def get_sample_data(self, symbol=None):

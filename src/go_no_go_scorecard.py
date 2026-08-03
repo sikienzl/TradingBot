@@ -1,11 +1,16 @@
 import argparse
 import json
-from typing import List
 
 import numpy as np
 import pandas as pd
 
-from src.api_models import ScorecardMetrics, ScorecardResponse, ScorecardResult, ScorecardVerdict, ScorecardThresholds
+from src.api_models import (
+    ScorecardMetrics,
+    ScorecardResponse,
+    ScorecardResult,
+    ScorecardThresholds,
+    ScorecardVerdict,
+)
 
 
 class ScorecardDataError(ValueError):
@@ -48,7 +53,7 @@ def _evaluate_verdict(
     min_catboost_vs_rules_pnl_delta: float = -1e18,
     min_source_trades_for_delta: int = 0,
 ) -> ScorecardResult:
-    reasons: List[str] = []
+    reasons: list[str] = []
 
     # Hard no-go conditions
     if closed_trades < max(1, int(min_closed_trades * 0.5)):
@@ -69,7 +74,7 @@ def _evaluate_verdict(
     if reasons:
         return ScorecardResult(verdict=ScorecardVerdict.NO_GO, reasons=reasons)
 
-    soft_fails: List[str] = []
+    soft_fails: list[str] = []
     if closed_trades < min_closed_trades:
         soft_fails.append(
             f"Trade count still too low: {closed_trades} < {min_closed_trades}")

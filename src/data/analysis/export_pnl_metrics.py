@@ -4,21 +4,21 @@ Export Trading Bot PnL metrics for Prometheus + Grafana
 Reads trade_journal.csv and exports current balance status as Prometheus metrics
 """
 import ast
-import csv
-import math
-import os
-import sys
-import json
-import re
-import time
 import base64
+import csv
 import hashlib
 import hmac
+import json
+import math
+import os
+import re
+import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections import deque
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 try:
     import ccxt
@@ -321,7 +321,7 @@ def extract_return_pct(trade):
 
 def calculate_pnl_metrics(trades, time_window_hours=24):
     """Calculate PnL metrics from trades"""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     cutoff = now - timedelta(hours=time_window_hours)
 
     all_time_realized_pnl = 0.0
@@ -400,17 +400,14 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
             per_trade_returns.append(extract_return_pct(trade))
 
             equity += pnl
-            if equity > peak_equity:
-                peak_equity = equity
+            peak_equity = max(peak_equity, equity)
             drawdown_usd = peak_equity - equity
-            if drawdown_usd > max_drawdown_usd:
-                max_drawdown_usd = drawdown_usd
+            max_drawdown_usd = max(max_drawdown_usd, drawdown_usd)
             if peak_equity > 0:
                 # Prevent unrealistic percentages when peak equity is near zero.
                 drawdown_pct = drawdown_usd / \
                     max(peak_equity, MIN_DRAWDOWN_PCT_BASE_USD)
-                if drawdown_pct > max_drawdown_pct:
-                    max_drawdown_pct = drawdown_pct
+                max_drawdown_pct = max(max_drawdown_pct, drawdown_pct)
         except Exception:
             continue
 
@@ -651,7 +648,7 @@ def read_ai_copilot_usage(env_path=ENV_PATH, state_path=AI_COPILOT_STATE_PATH):
         if os.path.exists(state_path):
             with open(state_path, 'r', encoding='utf-8') as f:
                 state = json.load(f)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             month_key = f"{now.year:04d}-{now.month:02d}"
             if state.get('month_key') == month_key:
                 result['ai_copilot_budget_cap_usd'] = float(
@@ -678,7 +675,7 @@ def read_ai_shadow_suggestions(log_path=BOT_LOG_PATH):
         with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
             tail_lines = list(deque(f, maxlen=4000))
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         suggestions = []
         rank = 1
 

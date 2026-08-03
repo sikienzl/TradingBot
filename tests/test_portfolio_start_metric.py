@@ -1,8 +1,8 @@
 import json
-import pytest
 
 import export_pnl_metrics
 import pnl_exporter
+import pytest
 
 
 def test_export_pnl_metrics_uses_kraken_balance_first(tmp_path, monkeypatch):

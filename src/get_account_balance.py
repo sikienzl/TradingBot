@@ -1,13 +1,14 @@
 # Get all asset balances.
 
-import http.client
-import urllib.request
-import urllib.parse
+import base64
 import hashlib
 import hmac
-import base64
+import http.client
 import json
 import time
+import urllib.parse
+import urllib.request
+
 
 def main():
    response = request(

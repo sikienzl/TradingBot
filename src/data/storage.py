@@ -4,10 +4,11 @@ Data Storage
 This module handles data storage and retrieval for the trading bot.
 """
 
-import sqlite3
-import pandas as pd
 import logging
-from typing import Optional, Dict, Any
+import sqlite3
+
+import pandas as pd
+
 
 class DataStorage:
     """Class for storing and retrieving market data"""
@@ -97,7 +98,7 @@ class DataStorage:
         self.logger.info(f"Retrieving OHLCV data for {symbol} ({timeframe})")
         
         conn = sqlite3.connect(self.db_path)
-        query = f"""
+        query = """
             SELECT * FROM ohlcv_data 
             WHERE symbol = ? AND timeframe = ? 
             ORDER BY timestamp DESC 

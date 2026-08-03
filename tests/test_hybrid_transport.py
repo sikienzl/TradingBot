@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from src.hybrid.decision_gate import AnomalyAlert
 from src.hybrid.transport import EdgeAlertPayload, MarketSnapshotPayload
@@ -36,7 +36,7 @@ def test_market_snapshot_roundtrip_preserves_tick_payloads() -> None:
 
 def test_edge_alert_roundtrip_restores_domain_alert() -> None:
     domain_alert = AnomalyAlert(
-        timestamp=datetime(2026, 7, 10, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 7, 10, tzinfo=UTC),
         hailo_score=91.2,
         window_size=100,
         signal_type="breakout",

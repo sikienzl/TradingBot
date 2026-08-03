@@ -11,21 +11,19 @@ In production, this class should integrate with dedicated vault solutions
 """
 
 import os
-from typing import Optional, Dict, Any
 from abc import ABC, abstractmethod
+
 
 class SecretManager(ABC):
     """Abstract base class for secret management."""
     
     @abstractmethod
-    def get_secret(self, key: str) -> Optional[str]:
+    def get_secret(self, key: str) -> str | None:
         """Retrieve a secret by key."""
-        pass
     
     @abstractmethod
     def initialize(self) -> None:
         """Initialize the secret manager."""
-        pass
 
 class VaultSecretManager(SecretManager):
     """Production implementation using HashiCorp Vault."""
@@ -46,7 +44,7 @@ class VaultSecretManager(SecretManager):
         except Exception as e:
             raise RuntimeError(f"Failed to initialize Vault client: {e}")
     
-    def get_secret(self, key: str) -> Optional[str]:
+    def get_secret(self, key: str) -> str | None:
         """Retrieve secret from Vault."""
         if not self._client:
             raise RuntimeError("SecretManager not initialized")
@@ -64,19 +62,18 @@ class VaultSecretManager(SecretManager):
 class MockSecretManager(SecretManager):
     """Development/testing implementation."""
     
-    def __init__(self, secrets: Dict[str, str] = None):
+    def __init__(self, secrets: dict[str, str] = None):
         self.secrets = secrets or {}
         
     def initialize(self) -> None:
         """Initialize mock manager."""
-        pass
         
-    def get_secret(self, key: str) -> Optional[str]:
+    def get_secret(self, key: str) -> str | None:
         """Retrieve secret from mock store."""
         return self.secrets.get(key)
 
 # Global instance
-_secret_manager: Optional[SecretManager] = None
+_secret_manager: SecretManager | None = None
 
 def get_secret_manager() -> SecretManager:
     """Get the configured secret manager."""
@@ -102,7 +99,7 @@ def get_secret_manager() -> SecretManager:
     
     return _secret_manager
 
-def get_secret(key: str) -> Optional[str]:
+def get_secret(key: str) -> str | None:
     """Get a secret using the configured manager."""
     manager = get_secret_manager()
     return manager.get_secret(key)

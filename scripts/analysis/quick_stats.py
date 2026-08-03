@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 import sys
-import pandas as pd
 from pathlib import Path
+
+import pandas as pd
 
 p = Path(sys.argv[1]) if len(sys.argv) > 1 else Path('data/remote_exports/trade_journal.csv')
 if not p.exists():

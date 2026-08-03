@@ -11,24 +11,21 @@ Architecture:
 - Output: Anomaly score (0-1) + confidence (0-1)
 """
 
-import os
+import argparse
 import json
 import logging
-import argparse
+import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple, Dict, List, Optional
-import pickle
 
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass
 
 try:
-    import torch
-    import torch.nn as nn
-    import torch.optim as optim
-    from torch.utils.data import Dataset, DataLoader
     import einops
+    import torch
+    from torch import nn, optim
+    from torch.utils.data import DataLoader, Dataset
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
@@ -59,7 +56,7 @@ class TimeSeriesDataset(Dataset):
         self,
         ticks_df: pd.DataFrame,
         seq_length: int = 60,
-        feature_cols: Optional[List[str]] = None,
+        feature_cols: list[str] | None = None,
         label_col: str = "is_anomaly",
     ):
         """
@@ -81,7 +78,7 @@ class TimeSeriesDataset(Dataset):
         self.sequences = prepared["sequences"]
         self.labels = prepared["labels"]
 
-    def _prepare_sequences(self, ticks_df: pd.DataFrame) -> Dict[str, List[np.ndarray]]:
+    def _prepare_sequences(self, ticks_df: pd.DataFrame) -> dict[str, list[np.ndarray]]:
         feature_cols = list(self.feature_cols)
         required_feature_set = set(feature_cols)
 
@@ -113,8 +110,8 @@ class TimeSeriesDataset(Dataset):
         else:
             grouped_frames = [ticks_df.copy()]
 
-        sequences: List[np.ndarray] = []
-        labels: List[float] = []
+        sequences: list[np.ndarray] = []
+        labels: list[float] = []
 
         for group in grouped_frames:
             if "timestamp" in group.columns:
@@ -203,7 +200,7 @@ class TimeSeriesDataset(Dataset):
     def __len__(self):
         return len(self.sequences)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         """Get one sequence"""
         X = torch.tensor(
             self.sequences[idx],
@@ -277,7 +274,7 @@ class TimeSeriesTransformer(nn.Module):
             nn.Sigmoid(),
         )
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass.
 
@@ -373,8 +370,8 @@ class TimeSeriesTransformerTrainer:
     def fit(
         self,
         train_loader: DataLoader,
-        val_loader: Optional[DataLoader] = None,
-    ) -> Dict:
+        val_loader: DataLoader | None = None,
+    ) -> dict:
         """
         Train model with early stopping.
 
@@ -448,7 +445,7 @@ def export_to_onnx(
         logger.error(f"❌ ONNX export failed: {e}")
 
 
-def export_hailo_assets(output_model_dir: str) -> Dict[str, str]:
+def export_hailo_assets(output_model_dir: str) -> dict[str, str]:
     output_dir = Path(output_model_dir)
     onnx_path = output_dir / "timeseries_transformer.onnx"
     config_path = output_dir / "model_config.json"
@@ -478,7 +475,7 @@ def export_hailo_assets(output_model_dir: str) -> Dict[str, str]:
 def train_transformer(
     training_data_path: str,
     output_model_dir: str = "/models/hailo",
-    config: Optional[TimeSeriesTransformerConfig] = None,
+    config: TimeSeriesTransformerConfig | None = None,
 ):
     """
     Full training pipeline: load data → train → export to ONNX
@@ -541,7 +538,7 @@ def train_transformer(
     export_to_onnx(model, str(onnx_path), seq_length=config.seq_length)
     export_hailo_assets(output_model_dir)
 
-    logger.info(f"🎉 Training complete! Ready for Hailo-8 deployment.")
+    logger.info("🎉 Training complete! Ready for Hailo-8 deployment.")
     return model, history
 
 

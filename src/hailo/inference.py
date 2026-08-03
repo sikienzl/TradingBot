@@ -5,13 +5,14 @@ Optimized inference for Time-Series-Transformer on Hailo-8 (26 TOPS).
 Handles ONNX model loading, batch inference, and anomaly score calculation.
 """
 
-import os
-import logging
-import json
-import time
 import importlib
-from typing import List, Tuple, Optional, Dict, Any
+import json
+import logging
+import os
+import time
 from pathlib import Path
+from typing import Any
+
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -61,9 +62,9 @@ class HailoHEFRunner:
         self.activation = None
         self.infer_pipeline = None
         self.input_name = ""
-        self.output_names: List[str] = []
-        self.input_shape: Tuple[int, ...] = ()
-        self.output_shapes: Dict[str, Tuple[int, ...]] = {}
+        self.output_names: list[str] = []
+        self.input_shape: tuple[int, ...] = ()
+        self.output_shapes: dict[str, tuple[int, ...]] = {}
         self.device_architecture = "unknown"
 
         self._initialize()
@@ -124,7 +125,7 @@ class HailoHEFRunner:
         )
         self.infer_pipeline.__enter__()
 
-    def infer(self, model_input: np.ndarray) -> Dict[str, np.ndarray]:
+    def infer(self, model_input: np.ndarray) -> dict[str, np.ndarray]:
         if self.infer_pipeline is None:
             raise RuntimeError("Hailo infer pipeline is not initialized")
         return self.infer_pipeline.infer({self.input_name: model_input.astype(np.float32, copy=False)})
@@ -189,7 +190,7 @@ class TimeSeriesTransformerONNX:
         self.seq_length = int(self.model_config.get("seq_length", seq_length))
         self.device = device
         self.session = None
-        self.hailo_runner: Optional[HailoHEFRunner] = None
+        self.hailo_runner: HailoHEFRunner | None = None
         self.use_hailo = use_hailo and HAILO_AVAILABLE
         self.last_inference_seconds = 0.0
         self.last_provider = "unknown"
@@ -216,7 +217,7 @@ class TimeSeriesTransformerONNX:
             f"seq_length={seq_length}, device={self.device}"
         )
 
-    def _load_model_config(self) -> Dict[str, Any]:
+    def _load_model_config(self) -> dict[str, Any]:
         if not self.model_config_path.exists():
             return {}
         try:
@@ -288,7 +289,7 @@ class TimeSeriesTransformerONNX:
             active_provider = providers[0] if providers else "unknown"
         self.last_provider = active_provider
 
-    def get_input_shape(self) -> Tuple[int, ...]:
+    def get_input_shape(self) -> tuple[int, ...]:
         """Get expected input shape from ONNX model"""
         inputs = self.session.get_inputs()
         if inputs:
@@ -297,13 +298,13 @@ class TimeSeriesTransformerONNX:
             return (1, *self.hailo_runner.input_shape)
         return (1, self.seq_length, self.n_features)
 
-    def get_output_names(self) -> List[str]:
+    def get_output_names(self) -> list[str]:
         """Get output tensor names"""
         if self.hailo_runner is not None:
             return list(self.hailo_runner.output_names)
         return [output.name for output in self.session.get_outputs()]
 
-    def preprocess_ticks(self, ticks: List[Dict[str, float]]) -> np.ndarray:
+    def preprocess_ticks(self, ticks: list[dict[str, float]]) -> np.ndarray:
         """
         Preprocess tick data for model input.
 
@@ -346,7 +347,7 @@ class TimeSeriesTransformerONNX:
 
         return X
 
-    def infer(self, ticks: List[Dict[str, float]]) -> Tuple[float, float]:
+    def infer(self, ticks: list[dict[str, float]]) -> tuple[float, float]:
         """
         Run inference on tick sequence.
 
@@ -392,7 +393,7 @@ class TimeSeriesTransformerONNX:
             self.last_inference_seconds = 0.0
             return 0.0, 0.0
 
-    def get_runtime_stats(self) -> Dict[str, Any]:
+    def get_runtime_stats(self) -> dict[str, Any]:
         return {
             "seq_length": self.seq_length,
             "n_features": self.n_features,
@@ -407,8 +408,8 @@ class TimeSeriesTransformerONNX:
         }
 
     def infer_batch(
-        self, tick_batches: List[List[Dict[str, float]]]
-    ) -> List[Tuple[float, float]]:
+        self, tick_batches: list[list[dict[str, float]]]
+    ) -> list[tuple[float, float]]:
         """
         Run batch inference on multiple tick sequences.
 
@@ -460,7 +461,7 @@ class AnomalyDetector:
             f"window_size={window_size}"
         )
 
-    def update(self, tick: Dict[str, float]) -> Optional[Dict[str, Any]]:
+    def update(self, tick: dict[str, float]) -> dict[str, Any] | None:
         """
         Update detector with new tick.
 
@@ -503,7 +504,7 @@ class AnomalyDetector:
 
         return None
 
-    def _classify_anomaly(self, tick: Dict[str, float]) -> str:
+    def _classify_anomaly(self, tick: dict[str, float]) -> str:
         """Classify type of anomaly (breakout, reversal, volatility_spike)"""
         # TODO: Implement multi-class classification
         # For now: return simple heuristic
@@ -518,7 +519,7 @@ class AnomalyDetector:
         else:
             return "pattern_anomaly"
 
-    def get_buffer_stats(self) -> Dict[str, Any]:
+    def get_buffer_stats(self) -> dict[str, Any]:
         """Get statistics about current buffer"""
         if not self.tick_buffer:
             return {

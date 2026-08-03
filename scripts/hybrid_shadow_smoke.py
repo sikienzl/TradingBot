@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -91,7 +91,7 @@ async def run() -> None:
     ack = await edge.process_market_snapshot(build_snapshot())
     if not captured:
         fallback_alert = AnomalyAlert(
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             hailo_score=92.0,
             window_size=100,
             signal_type="smoke_breakout",
@@ -103,7 +103,7 @@ async def run() -> None:
         await fake_emit(fallback_alert)
 
     result = {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "timestamp_utc": datetime.now(UTC).isoformat(),
         "snapshot_ack": ack.to_dict(),
         "edge_metrics": edge.get_metrics(),
         "strategist_metrics": strategist.get_metrics(),

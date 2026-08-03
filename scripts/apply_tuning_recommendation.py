@@ -10,15 +10,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import UTC, datetime
+from typing import Any
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _load_json(path: str) -> Dict[str, Any]:
+def _load_json(path: str) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -34,12 +34,12 @@ def _format_env_value(value: Any) -> str:
         return str(value)
 
 
-def _replace_or_append(lines: List[str], key: str, value: str) -> Tuple[List[str], Optional[str], bool]:
-    old_value: Optional[str] = None
+def _replace_or_append(lines: list[str], key: str, value: str) -> tuple[list[str], str | None, bool]:
+    old_value: str | None = None
     replaced = False
 
     prefixes = (f"{key}=", f"export {key}=")
-    out: List[str] = []
+    out: list[str] = []
 
     for line in lines:
         stripped = line.strip()
@@ -70,7 +70,7 @@ def _replace_or_append(lines: List[str], key: str, value: str) -> Tuple[List[str
 
 def _backup_file(src: str, backup_dir: str) -> str:
     os.makedirs(backup_dir, exist_ok=True)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     backup_path = os.path.join(backup_dir, f"{os.path.basename(src)}.{ts}.bak")
     with open(src, "r", encoding="utf-8", errors="ignore") as fin, open(
         backup_path, "w", encoding="utf-8"
@@ -107,7 +107,7 @@ def main() -> None:
     new_value_raw = rec.get("new_value")
     reason = str(rec.get("reason") or "")
 
-    summary: Dict[str, Any] = {
+    summary: dict[str, Any] = {
         "generated_at_utc": _utc_now(),
         "recommendation_json": args.recommendation_json,
         "env_file": args.env_file,

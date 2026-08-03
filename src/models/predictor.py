@@ -5,10 +5,12 @@ This module handles making predictions using trained models.
 """
 
 import logging
+from typing import Any
+
 import pandas as pd
-import torch
-from typing import Dict, Any, Optional
+
 from .base_model import BaseModel
+
 
 class ModelPredictor(BaseModel):
     """Class for making predictions with trained models."""
@@ -24,7 +26,7 @@ class ModelPredictor(BaseModel):
         self.logger = logging.getLogger(__name__)
         self.logger.info("Model predictor initialized")
     
-    def train(self, data: pd.DataFrame, **kwargs) -> Dict[str, Any]:
+    def train(self, data: pd.DataFrame, **kwargs) -> dict[str, Any]:
         """
         Train the prediction model.
         

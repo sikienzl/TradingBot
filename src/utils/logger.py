@@ -6,9 +6,9 @@ This module handles logging configuration for the trading bot.
 
 import logging
 import os
-from typing import Optional
 
-def setup_logger(name: str, log_level: Optional[int] = None) -> logging.Logger:
+
+def setup_logger(name: str, log_level: int | None = None) -> logging.Logger:
     """
     Setup and configure logger.
     

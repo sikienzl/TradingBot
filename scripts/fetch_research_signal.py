@@ -14,11 +14,11 @@ import email.utils
 import json
 import os
 import sys
-import urllib.request
 import urllib.error
+import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 FNG_URL = "https://api.alternative.me/fng/?limit=1"
 REQUEST_TIMEOUT_SEC = 15
@@ -66,14 +66,14 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
-def _env_csv(name: str, default: List[str]) -> List[str]:
+def _env_csv(name: str, default: list[str]) -> list[str]:
     raw = os.getenv(name, "")
     if not raw.strip():
         return default
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-def _parse_iso_utc(value: str) -> Optional[datetime]:
+def _parse_iso_utc(value: str) -> datetime | None:
     if not value:
         return None
     txt = value.strip()
@@ -86,11 +86,11 @@ def _parse_iso_utc(value: str) -> Optional[datetime]:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
-def _parse_any_datetime(value: str) -> Optional[datetime]:
+def _parse_any_datetime(value: str) -> datetime | None:
     if not value:
         return None
     txt = value.strip()
@@ -104,8 +104,8 @@ def _parse_any_datetime(value: str) -> Optional[datetime]:
     except (TypeError, ValueError):
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _to_market_regime(sentiment_score: float) -> str:
@@ -116,7 +116,7 @@ def _to_market_regime(sentiment_score: float) -> str:
     return "sideways"
 
 
-def _headline_sentiment(title: str) -> Tuple[float, int, int]:
+def _headline_sentiment(title: str) -> tuple[float, int, int]:
     text = (title or "").lower()
     pos_hits = sum(1 for term in POSITIVE_NEWS_TERMS if term in text)
     neg_hits = sum(1 for term in NEGATIVE_NEWS_TERMS if term in text)
@@ -124,7 +124,7 @@ def _headline_sentiment(title: str) -> Tuple[float, int, int]:
     return _clamp(raw, -1.0, 1.0), pos_hits, neg_hits
 
 
-def _fetch_json(url: str) -> Dict[str, Any]:
+def _fetch_json(url: str) -> dict[str, Any]:
     req = urllib.request.Request(
         url,
         headers={"User-Agent": "TradingBot/1.0 (fetch_research_signal)"},
@@ -137,7 +137,7 @@ def _fetch_json(url: str) -> Dict[str, Any]:
     return payload
 
 
-def _fetch_fng_signal() -> Dict[str, Any]:
+def _fetch_fng_signal() -> dict[str, Any]:
     payload = _fetch_json(FNG_URL)
     data = payload.get("data", [])
     if not data:
@@ -148,7 +148,7 @@ def _fetch_fng_signal() -> Dict[str, Any]:
     return _fetch_fng_signal_from_entry(entry)
 
 
-def _map_fng(entry: Dict[str, Any]) -> Dict[str, Any]:
+def _map_fng(entry: dict[str, Any]) -> dict[str, Any]:
     raw_value = int(entry.get("value", 50))
     provider_signal = _fetch_fng_signal_from_entry(entry)
     market_regime = provider_signal["market_regime"]
@@ -179,15 +179,15 @@ def _map_fng(entry: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _fetch_fng_signal_from_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+def _fetch_fng_signal_from_entry(entry: dict[str, Any]) -> dict[str, Any]:
     raw_value = int(entry.get("value", 50))
     classification = str(entry.get("value_classification", "")).lower()
     ts_epoch = entry.get("timestamp")
     if ts_epoch:
         ts_utc = datetime.fromtimestamp(
-            int(ts_epoch), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+            int(ts_epoch), tz=UTC).isoformat().replace("+00:00", "Z")
     else:
-        ts_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        ts_utc = datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
     sentiment_score = _clamp((raw_value - 50) / 50.0, -1.0, 1.0)
     confidence = _clamp(abs(raw_value - 50) / 50.0, 0.0, 1.0)
@@ -216,7 +216,7 @@ def _fetch_fng_signal_from_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _fetch_fng() -> Dict[str, Any]:
+def _fetch_fng() -> dict[str, Any]:
     payload = _fetch_json(FNG_URL)
     data = payload.get("data", [])
     if not data:
@@ -227,9 +227,9 @@ def _fetch_fng() -> Dict[str, Any]:
     return entry
 
 
-def _extract_rss_items(xml_bytes: bytes) -> List[Dict[str, str]]:
+def _extract_rss_items(xml_bytes: bytes) -> list[dict[str, str]]:
     root = ET.fromstring(xml_bytes)
-    items: List[Dict[str, str]] = []
+    items: list[dict[str, str]] = []
 
     # RSS format
     for item in root.findall(".//item"):
@@ -262,16 +262,16 @@ def _extract_rss_items(xml_bytes: bytes) -> List[Dict[str, str]]:
 
 
 def _fetch_news_signal(
-    feeds: List[str],
+    feeds: list[str],
     lookback_hours: int,
     max_items_per_feed: int,
-) -> Dict[str, Any]:
-    now_utc = datetime.now(timezone.utc)
+) -> dict[str, Any]:
+    now_utc = datetime.now(UTC)
     cutoff = now_utc - timedelta(hours=max(1, lookback_hours))
 
-    scored: List[float] = []
-    citations: List[str] = []
-    recent_titles: List[str] = []
+    scored: list[float] = []
+    citations: list[str] = []
+    recent_titles: list[str] = []
     positive_hits = 0
     negative_hits = 0
 
@@ -336,9 +336,9 @@ def _fetch_news_signal(
 
 
 def _combine_provider_signals(
-    signals: List[Dict[str, Any]],
-    provider_weights: Dict[str, float],
-) -> Dict[str, Any]:
+    signals: list[dict[str, Any]],
+    provider_weights: dict[str, float],
+) -> dict[str, Any]:
     if not signals:
         raise ValueError("No provider signals available")
 
@@ -346,8 +346,8 @@ def _combine_provider_signals(
     weighted_conf = 0.0
     weighted_risk = 0.0
     weight_total = 0.0
-    citations: List[str] = []
-    details: Dict[str, Any] = {
+    citations: list[str] = []
+    details: dict[str, Any] = {
         "providers": {},
         "provider_weights": provider_weights,
     }
@@ -399,7 +399,7 @@ def _combine_provider_signals(
     }
 
     return {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "timestamp_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "sentiment_score": normalized_features["research_sentiment_score"],
         "confidence": normalized_features["research_confidence"],
         "risk_score": normalized_features["research_risk_score"],
@@ -409,7 +409,7 @@ def _combine_provider_signals(
         "normalized_features": normalized_features,
         "integration": {
             "source": "fetch_research_signal",
-            "written_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "written_at_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         },
     }
 
@@ -482,8 +482,8 @@ def main() -> None:
         "news": max(0.0, args.news_weight),
     }
 
-    provider_signals: List[Dict[str, Any]] = []
-    provider_errors: Dict[str, str] = {}
+    provider_signals: list[dict[str, Any]] = []
+    provider_errors: dict[str, str] = {}
 
     for provider in providers:
         try:

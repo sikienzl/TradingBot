@@ -16,25 +16,25 @@ import json
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime
 from glob import glob
-from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, text=True, capture_output=True, check=False)
 
 
-def _load_json(path: str) -> Dict[str, Any]:
+def _load_json(path: str) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def _list_recent_scorecard_reports(path: str, limit: int) -> List[str]:
+def _list_recent_scorecard_reports(path: str, limit: int) -> list[str]:
     pattern = os.path.join(path, "scorecard_*.txt")
     reports = [p for p in glob(pattern) if os.path.isfile(p)]
     reports.sort(key=os.path.getmtime, reverse=True)
@@ -68,12 +68,12 @@ def _extract_max_drawdown_pct(path: str) -> float | None:
     return None
 
 
-def _build_safety_guard_result(args: argparse.Namespace, status: Dict[str, Any]) -> Dict[str, Any]:
+def _build_safety_guard_result(args: argparse.Namespace, status: dict[str, Any]) -> dict[str, Any]:
     verdict = str(status.get("verdict", "ERROR")).upper()
-    reasons: List[str] = []
-    recent_reports_checked: List[str] = []
-    recent_no_go_reports: List[str] = []
-    recent_drawdown_violations: List[str] = []
+    reasons: list[str] = []
+    recent_reports_checked: list[str] = []
+    recent_no_go_reports: list[str] = []
+    recent_drawdown_violations: list[str] = []
     allow_apply = True
 
     if args.require_go_verdict and verdict != "GO":

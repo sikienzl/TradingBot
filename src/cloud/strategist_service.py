@@ -6,13 +6,14 @@ Listens for anomaly alerts from Hailo-8 edge.
 Calls GPT-5 API only when critical anomalies detected (95% cost reduction).
 """
 
-import os
 import asyncio
-import logging
 import json
+import logging
+import os
 import time
-from typing import Optional, Dict, Any
 from datetime import datetime
+from typing import Any
+
 import aiohttp
 
 from src.hybrid.decision_gate import AnomalyAlert, HybridDecisionGate
@@ -75,7 +76,7 @@ class GPT5StrategistService:
 
         logger.info("🧠 GPT5StrategistService initialized")
 
-    async def process_anomaly_alert(self, alert: AnomalyAlert) -> Dict[str, Any]:
+    async def process_anomaly_alert(self, alert: AnomalyAlert) -> dict[str, Any]:
         """
         Process anomaly alert from Hailo-8.
 
@@ -96,7 +97,7 @@ class GPT5StrategistService:
         # Check hybrid gate
         gate_result = await self.hybrid_gate.evaluate(alert)
         if gate_result is None:
-            logger.debug(f"Alert filtered by hybrid gate")
+            logger.debug("Alert filtered by hybrid gate")
             self.service_metrics.observe_event(
                 "alert_filtered", time.perf_counter() - started)
             return {
@@ -156,7 +157,7 @@ class GPT5StrategistService:
             },
         )
 
-    async def _get_macro_context(self, alert: AnomalyAlert) -> Dict[str, Any]:
+    async def _get_macro_context(self, alert: AnomalyAlert) -> dict[str, Any]:
         """
         Fetch macro context for anomaly.
 
@@ -182,7 +183,7 @@ class GPT5StrategistService:
         }
         return context
 
-    def _build_gpt5_prompt(self, alert: AnomalyAlert, macro_context: Dict) -> str:
+    def _build_gpt5_prompt(self, alert: AnomalyAlert, macro_context: dict) -> str:
         """
         Build prompt for GPT-5 Chief Strategist.
 
@@ -227,7 +228,7 @@ class GPT5StrategistService:
         """
         return prompt
 
-    async def _call_gpt5(self, prompt: str) -> Dict[str, Any]:
+    async def _call_gpt5(self, prompt: str) -> dict[str, Any]:
         """
         Call GPT-5 API.
 
@@ -278,9 +279,9 @@ class GPT5StrategistService:
         except Exception as e:
             logger.error(f"GPT-5 call failed: {e}")
             self.service_metrics.observe_event("api_call_exception")
-            return {"decision": "ERROR", "reason": f"Exception: {str(e)}"}
+            return {"decision": "ERROR", "reason": f"Exception: {e!s}"}
 
-    def _extract_gpt5_response(self, api_response: Dict) -> Dict:
+    def _extract_gpt5_response(self, api_response: dict) -> dict:
         """Parse GPT-5 API response"""
         try:
             content = api_response["choices"][0]["message"]["content"]
@@ -296,9 +297,9 @@ class GPT5StrategistService:
 
         except Exception as e:
             logger.error(f"Response parsing error: {e}")
-            return {"decision": "ERROR", "reason": f"Parse error: {str(e)}"}
+            return {"decision": "ERROR", "reason": f"Parse error: {e!s}"}
 
-    def _parse_gpt5_response(self, gpt5_reply: Dict) -> Dict[str, Any]:
+    def _parse_gpt5_response(self, gpt5_reply: dict) -> dict[str, Any]:
         """Convert GPT-5 response to trading decision"""
         return {
             "decision": gpt5_reply.get("decision", "VETO"),
@@ -308,7 +309,7 @@ class GPT5StrategistService:
             "position_size_pct": float(gpt5_reply.get("position_size_pct", 1.0)),
         }
 
-    def _update_metrics(self, gpt5_response: Dict):
+    def _update_metrics(self, gpt5_response: dict):
         """Update metrics from GPT-5 call"""
         self.metrics["calls_today"] += 1
         self.metrics["calls_total"] += 1
@@ -328,7 +329,7 @@ class GPT5StrategistService:
 
         self.metrics["last_decision"] = datetime.utcnow().isoformat()
 
-    def get_metrics(self) -> Dict:
+    def get_metrics(self) -> dict:
         """Get service metrics for Prometheus"""
         return self.metrics
 

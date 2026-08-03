@@ -4,17 +4,19 @@ Crypto Data Fetcher
 This module handles fetching cryptocurrency market data from various sources.
 """
 
+import logging
+import time
+
 import ccxt
 import pandas as pd
-import time
-import logging
-from typing import Dict, List, Optional
+
 from .storage import DataStorage
+
 
 class CryptoDataFetcher:
     """Class for fetching and processing cryptocurrency data"""
     
-    def __init__(self, storage: Optional[DataStorage] = None):
+    def __init__(self, storage: DataStorage | None = None):
         """
         Initialize the data fetcher.
         
@@ -90,7 +92,7 @@ class CryptoDataFetcher:
 class AdvancedDataFetcher(CryptoDataFetcher):
     """Advanced data fetcher with sentiment and additional data sources."""
     
-    def __init__(self, storage: Optional[DataStorage] = None):
+    def __init__(self, storage: DataStorage | None = None):
         super().__init__(storage)
         self.sentiment_sources = []
         self.cache = {}  # Simple cache for performance optimization
@@ -116,7 +118,7 @@ class AdvancedDataFetcher(CryptoDataFetcher):
         self.sentiment_sources.append((source_name, fetch_function))
         self.logger.info(f"Added sentiment source: {source_name}")
     
-    def fetch_sentiment_data(self, symbol: str) -> Dict:
+    def fetch_sentiment_data(self, symbol: str) -> dict:
         """
         Fetch sentiment data from all sources.
         
@@ -165,7 +167,7 @@ class AdvancedDataFetcher(CryptoDataFetcher):
             
         return sentiment_data
     
-    def fetch_news_data(self, symbol: str) -> List[Dict]:
+    def fetch_news_data(self, symbol: str) -> list[dict]:
         """
         Fetch news data for a symbol.
         
@@ -196,7 +198,7 @@ class AdvancedDataFetcher(CryptoDataFetcher):
             }
         ]
     
-    def fetch_social_media_data(self, symbol: str) -> Dict:
+    def fetch_social_media_data(self, symbol: str) -> dict:
         """
         Fetch social media data for a symbol.
         
@@ -227,7 +229,7 @@ class AdvancedDataFetcher(CryptoDataFetcher):
         self.cache.clear()
         self.logger.info("Data cache cleared")
         
-    def get_cache_stats(self) -> Dict[str, int]:
+    def get_cache_stats(self) -> dict[str, int]:
         """
         Get cache statistics.
         

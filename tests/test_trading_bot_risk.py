@@ -1,8 +1,4 @@
-import json
-import logging
-from datetime import datetime, timedelta, timezone
 
-import pandas as pd
 
 from src.trading_bot import BotConfig, CryptoTradingBot
 

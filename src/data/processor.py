@@ -4,11 +4,10 @@ Data Processor
 This module handles processing and transforming market data.
 """
 
-import pandas as pd
-import numpy as np
-import talib
 import logging
-from typing import Dict, List, Optional, Tuple
+
+import pandas as pd
+import talib
 
 
 class DataProcessor:

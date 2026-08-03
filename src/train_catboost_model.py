@@ -1,14 +1,12 @@
 import json
 import os
-from typing import List, Tuple
 
 import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier
 from sklearn.metrics import accuracy_score, classification_report, f1_score
 
-
-BASE_FEATURE_COLUMNS: List[str] = [
+BASE_FEATURE_COLUMNS: list[str] = [
     "rsi",
     "macd",
     "macd_signal",
@@ -95,7 +93,7 @@ def create_profit_labels(
     return out
 
 
-def train_val_split_time(df: pd.DataFrame, train_ratio: float = 0.8) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def train_val_split_time(df: pd.DataFrame, train_ratio: float = 0.8) -> tuple[pd.DataFrame, pd.DataFrame]:
     split_idx = int(len(df) * train_ratio)
     return df.iloc[:split_idx].copy(), df.iloc[split_idx:].copy()
 
@@ -105,7 +103,7 @@ def generate_walk_forward_splits(
     n_splits: int = 3,
     min_train_size: int = 300,
     min_val_size: int = 100,
-) -> List[Tuple[int, int, int, int]]:
+) -> list[tuple[int, int, int, int]]:
     """Erzeugt expanding-window Splits: Train [0:train_end), Val [val_start:val_end)."""
     if n_rows <= 0 or n_splits <= 0:
         return []
@@ -114,7 +112,7 @@ def generate_walk_forward_splits(
     effective_splits = min(n_splits, max_splits_by_val)
     val_size = max(min_val_size, n_rows // (effective_splits + 1))
 
-    splits: List[Tuple[int, int, int, int]] = []
+    splits: list[tuple[int, int, int, int]] = []
     train_end = max(min_train_size, val_size)
     for _ in range(effective_splits):
         val_start = train_end
@@ -167,8 +165,8 @@ def run_walk_forward_evaluation(
         y_pred = model.predict(x_val).reshape(-1).astype(int)
         rows.append({
             "fold": fold_idx,
-            "train_size": int(len(x_train)),
-            "val_size": int(len(x_val)),
+            "train_size": len(x_train),
+            "val_size": len(x_val),
             "accuracy": float(accuracy_score(y_val, y_pred)),
             "macro_f1": float(f1_score(y_val, y_pred, average="macro", zero_division=0)),
             "weighted_f1": float(f1_score(y_val, y_pred, average="weighted", zero_division=0)),
@@ -177,7 +175,7 @@ def run_walk_forward_evaluation(
     return pd.DataFrame(rows)
 
 
-def prepare_xy(df: pd.DataFrame) -> Tuple[pd.DataFrame, np.ndarray, List[str]]:
+def prepare_xy(df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray, list[str]]:
     all_features = BASE_FEATURE_COLUMNS + ["ret_1", "ret_3", "ret_6", "vol_6"]
     available_features = [c for c in all_features if c in df.columns]
     x = df[available_features].copy()
