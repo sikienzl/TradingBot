@@ -133,7 +133,7 @@ def _fetch_json(url: str) -> dict[str, Any]:
         raw = resp.read()
     payload = json.loads(raw)
     if not isinstance(payload, dict):
-        raise ValueError(f"JSON payload at {url} is not an object")
+        raise TypeError(f"JSON payload at {url} is not an object")
     return payload
 
 
@@ -141,7 +141,7 @@ def _fetch_fng_signal() -> dict[str, Any]:
     payload = _fetch_json(FNG_URL)
     data = payload.get("data", [])
     if not data:
-        raise ValueError("Fear & Greed API returned empty data array")
+        raise TypeError("Fear & Greed API returned empty data array")
     entry = data[0]
     if not isinstance(entry, dict):
         raise ValueError("Fear & Greed API entry is not an object")
@@ -220,7 +220,7 @@ def _fetch_fng() -> dict[str, Any]:
     payload = _fetch_json(FNG_URL)
     data = payload.get("data", [])
     if not data:
-        raise ValueError("Fear & Greed API returned empty data array")
+        raise TypeError("Fear & Greed API returned empty data array")
     entry = data[0]
     if not isinstance(entry, dict):
         raise ValueError("Fear & Greed API entry is not an object")

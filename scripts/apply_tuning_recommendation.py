@@ -27,7 +27,7 @@ def _format_env_value(value: Any) -> str:
     try:
         num = float(value)
         if abs(num - round(num)) < 1e-12:
-            return str(int(round(num)))
+            return str(round(num))
         text = f"{num:.8f}".rstrip("0").rstrip(".")
         return text if text else "0"
     except (TypeError, ValueError):

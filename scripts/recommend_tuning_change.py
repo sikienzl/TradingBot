@@ -62,7 +62,7 @@ def _to_float(value: Any) -> float | None:
 
 def _coerce_value_for_type(value: float, typ: str) -> float:
     if typ == "int":
-        return float(int(round(value)))
+        return float(round(value))
     return float(value)
 
 

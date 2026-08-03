@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import logging
+import math
 import os
 import sys
 from collections import Counter
@@ -39,7 +40,7 @@ def _has_valid_number(value) -> bool:
         numeric = float(value)
     except (TypeError, ValueError):
         return False
-    return numeric == numeric
+    return not math.isnan(numeric)
 
 
 def _build_bot(regime: str, seed: int, top_n: int, coins: list[str]) -> CryptoTradingBot:
