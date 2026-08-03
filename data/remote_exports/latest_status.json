@@ -1,0 +1,19 @@
+{
+  "timestamp_utc": "2026-08-03T10:45:05Z",
+  "run_mode": "standard",
+  "verdict": "GO",
+  "primary_reason": "none",
+  "underlying_exit_code": 0,
+  "final_exit_code": 0,
+  "report_file": "/opt/trading_2/results/scorecards/scorecard_20260803_124450.txt",
+  "latest_report_link": "/opt/trading_2/results/scorecards/latest_scorecard.txt",
+  "metrics": {
+    "closed_trades": 716,
+    "win_rate": 69.97206703910615,
+    "realized_pnl": 16.252891323305093,
+    "avg_pnl": 0.022699568887297617,
+    "profit_factor": 2.2568457115853526,
+    "max_drawdown_base": -0.5583118598610497,
+    "max_drawdown_pct": 2.7915592993052485
+  }
+}

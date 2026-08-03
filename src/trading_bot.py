@@ -731,6 +731,18 @@ class BotConfig:
             os.getenv('UPTREND_ENTRY_MIN_PROBA_EDGE', -0.05))
         self.uptrend_entry_min_proba_edge_by_coin = _env_symbol_float_map(
             'UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN', 'TRX:-0.13,ONDO:-0.055')
+        # Simulation override: when enabled, relax entry gates for backtests/simulations.
+        # Use SIMULATION_MODE=true in the environment to activate.
+        self.simulation_mode = _env_bool('SIMULATION_MODE', False)
+        if self.simulation_mode:
+            # Disable strict uptrend entry gating so simulations can exercise logic.
+            self.uptrend_entry_gate_enabled = False
+            # Allow any buy probability / RSI during simulation
+            self.uptrend_entry_min_buy_proba = 0.0
+            self.uptrend_entry_max_rsi = 999.0
+            # Enable fallback and force-fill to make simulation produce entries
+            self.enable_fallback_entry = True
+            self.force_fill_slots = True
         self.uptrend_rules_fast_exit_enabled = _env_bool(
             'UPTREND_RULES_FAST_EXIT_ENABLED', True)
         self.uptrend_rules_fast_exit_seconds = int(

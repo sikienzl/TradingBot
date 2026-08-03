@@ -1,0 +1,49 @@
+=== Weekly Go/No-Go Scorecard ===
+Timestamp: 2026-08-03T12:44:50+02:00
+Python: /opt/trading_2/.venv/bin/python
+Journal: /opt/trading_2/trade_journal.csv
+SCORECARD_PROFILE=paper
+SCORECARD_GATES_PROFILE=conservative
+RUN_MODE=standard
+AUTORESEARCH_ENABLED=true
+
+Running AutoResearch precheck...
+INFO: AutoResearch precheck summary
+INFO: - enabled: true
+INFO: - required: false
+INFO: - repo: <unset>
+INFO: - output: /opt/trading_2/./data/research_signal_latest.json
+AutoResearch precheck passed
+
+Running AutoResearch bridge...
+Research signal written to /opt/trading_2/./data/research_signal_latest.json (providers=news, regime=sideways, sentiment=-0.0196, confidence=0.6624)
+AutoResearch signal updated
+Output: /opt/trading_2/./data/research_signal_latest.json
+Sentiment: -0.020
+Confidence: 0.662
+Risk: 0.510
+
+=== Go/No-Go Scorecard ===
+File:                 /opt/trading_2/trade_journal.csv
+Closed trades:        716
+Win rate:             69.97%
+Realized PnL:         16.252891 EUR
+Avg PnL per sell:     0.022700 EUR
+Profit factor:        2.2568
+Max DD (realized):    -0.558312 EUR
+Max DD (% of start):  2.79%
+Recent PnL (120): 3.098095 EUR
+Recent win rate:      74.17%
+CatBoost vs rules Δ:  -16.252891 EUR (catboost=0.000000, rules=16.252891)
+VERDICT:              GO
+
+Reason(s):
+- All defined scorecard criteria met.
+
+Verdict summary: GO
+Primary reason: none
+RUN_MODE=standard
+FINAL_EXIT_CODE=0
+Status file: /opt/trading_2/results/scorecards/latest_status.env
+Status JSON file: /opt/trading_2/results/scorecards/latest_status.json
+Status Prometheus file: /opt/trading_2/results/scorecards/textfile/trading_scorecard.prom
