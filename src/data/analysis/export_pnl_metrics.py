@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 
 try:
     import ccxt
-except Exception:  # pragma: no cover - optional dependency in test shells
+except (ImportError, ModuleNotFoundError):  # pragma: no cover - optional dependency in test shells
     ccxt = None
 
 
@@ -66,7 +66,7 @@ def _read_env_value(env_key):
                     if key.strip() != env_key:
                         continue
                     return value.strip().strip('"').strip("'")
-    except Exception:
+    except OSError:
         pass
     return ''
 
@@ -142,7 +142,7 @@ def _read_kraken_trade_balance(base_currency, api_key, api_secret):
         try:
             response = _kraken_private_request(
                 path, payload, api_key, api_secret)
-        except Exception:
+        except (urllib.error.URLError, OSError):
             continue
         errors = response.get('error', []) if isinstance(
             response, dict) else []
@@ -220,7 +220,9 @@ def _extract_portfolio_value_from_balance(exchange, balance, base_currency):
 
     try:
         markets = exchange.load_markets()
-    except Exception:
+    except Exception as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
         markets = {}
     symbol_map = _build_base_symbol_map(markets, base_currency)
 
@@ -230,7 +232,9 @@ def _extract_portfolio_value_from_balance(exchange, balance, base_currency):
             continue
         try:
             ticker = exchange.fetch_ticker(symbol)
-        except Exception:
+        except Exception as exc:
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
             continue
         last_price = ticker.get('last') if isinstance(ticker, dict) else None
         if last_price is None:
@@ -285,7 +289,7 @@ def read_trades(journal_path):
             reader = csv.DictReader(f)
             for row in reader:
                 trades.append(row)
-    except Exception as e:
+    except (OSError, csv.Error) as e:
         print(f"Error reading trades: {e}", file=sys.stderr)
         return []
     return trades
@@ -301,7 +305,7 @@ def parse_timestamp(timestamp_str):
     except ValueError:
         try:
             return datetime.fromisoformat(ts.split('.')[0])
-        except Exception:
+        except ValueError:
             return None
 
 
@@ -408,7 +412,7 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
                 drawdown_pct = drawdown_usd / \
                     max(peak_equity, MIN_DRAWDOWN_PCT_BASE_USD)
                 max_drawdown_pct = max(max_drawdown_pct, drawdown_pct)
-        except Exception:
+        except (TypeError, ValueError, KeyError):
             continue
 
     win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
@@ -483,7 +487,7 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
                     value_part = line.split('Portfolio value:', 1)[1].strip()
                     snapshot['portfolio_value_eur'] = float(
                         value_part.split(' ')[0])
-                except Exception:
+                except (ValueError, IndexError):
                     pass
 
             if snapshot['portfolio_cash_eur'] == 0.0 and '  - Cash:' in line:
@@ -491,7 +495,7 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
                     cash_part = line.split('Cash:', 1)[1].strip()
                     snapshot['portfolio_cash_eur'] = float(
                         cash_part.split(' ')[0])
-                except Exception:
+                except (ValueError, IndexError):
                     pass
 
             if not snapshot['holdings_amount_coin'] and '  - Holdings:' in line:
@@ -504,7 +508,7 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
                             for coin, amount in parsed.items()
                             if float(amount) > 0.0
                         }
-                except Exception:
+                except (ValueError, SyntaxError):
                     pass
 
             if '  - Open trades details:' in line:
@@ -544,7 +548,7 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
                     for coin in snapshot['holdings_amount_coin']
                 ):
                     break
-    except Exception:
+    except OSError:
         return snapshot
 
     for coin, amount_coin in snapshot['holdings_amount_coin'].items():
@@ -587,7 +591,7 @@ def read_portfolio_start_value(log_path=BOT_LOG_PATH):
             with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
                 tail_lines = list(deque(f, maxlen=4000))
 
-            awaiting_initial_value = False
+            # awaiting_initial_value not needed; removed unused assignment
             for line in tail_lines:
                 if 'Portfolio value:' not in line:
                     continue
@@ -596,7 +600,7 @@ def read_portfolio_start_value(log_path=BOT_LOG_PATH):
                     value_part = line.split('Portfolio value:', 1)[1].strip()
                     value = float(value_part.split(' ')[0])
                     break
-                except Exception:
+                except (ValueError, IndexError):
                     continue
 
         if value > 0.0:
@@ -613,7 +617,7 @@ def read_portfolio_start_value(log_path=BOT_LOG_PATH):
             START_VALUE_CACHE['expires_at'] = now + \
                 START_VALUE_CACHE_TTL_SECONDS
             return value
-    except Exception:
+    except OSError:
         return 0.0
     return 0.0
 
@@ -641,7 +645,7 @@ def read_ai_copilot_usage(env_path=ENV_PATH, state_path=AI_COPILOT_STATE_PATH):
                         result['ai_copilot_budget_cap_usd'] = float(value)
                     elif key == 'AI_COPILOT_MAX_CALLS_PER_MONTH':
                         result['ai_copilot_calls_cap_monthly'] = float(value)
-    except Exception:
+    except OSError:
         pass
 
     try:
@@ -659,7 +663,7 @@ def read_ai_copilot_usage(env_path=ENV_PATH, state_path=AI_COPILOT_STATE_PATH):
                     state.get('monthly_spend_usd', 0.0) or 0.0)
                 result['ai_copilot_calls_used_monthly'] = float(
                     state.get('monthly_calls', 0) or 0)
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         pass
 
     return result
@@ -714,11 +718,13 @@ def read_ai_shadow_suggestions(log_path=BOT_LOG_PATH):
                 else:
                     continue
 
-                ts = datetime.strptime(
-                    timestamp_raw.strip(), '%Y-%m-%d %H:%M:%S,%f')
-                age_minutes = max(0.0, (now - ts).total_seconds() / 60.0)
-            except Exception:
-                continue
+                try:
+                    ts = datetime.strptime(
+                        timestamp_raw.strip(), '%Y-%m-%d %H:%M:%S,%f')
+                    ts = ts.replace(tzinfo=UTC)
+                    age_minutes = max(0.0, (now - ts).total_seconds() / 60.0)
+                except (ValueError, IndexError):
+                    continue
 
             if not isinstance(changes, dict):
                 continue
@@ -742,7 +748,7 @@ def read_ai_shadow_suggestions(log_path=BOT_LOG_PATH):
                 break
 
         result['ai_copilot_shadow_suggestions'] = suggestions
-    except Exception:
+    except OSError:
         pass
 
     return result

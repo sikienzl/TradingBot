@@ -1,0 +1,3640 @@
+PERF402 Use `list` or `list.copy` to create a copy of a list
+  --> scripts/daily_dryrun_review.py:52:13
+   |
+50 |         reader = csv.DictReader(f)
+51 |         for row in reader:
+52 |             rows.append(row)
+   |             ^^^^^^^^^^^^^^^^
+53 |     return rows
+   |
+
+invalid-syntax: Expected `except` or `finally` after `try` block
+   --> src/data/analysis/export_pnl_metrics.py:729:13
+    |
+727 |                     continue
+728 |
+729 |             if not isinstance(changes, dict):
+    |             ^^
+730 |                 continue
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:269:16
+    |
+267 |             response = self._kraken_private_request(
+268 |                 '/0/private/Balance', payload, api_key, api_secret)
+269 |         except Exception:
+    |                ^^^^^^^^^
+270 |             return {}
+271 |         errors = response.get('error', []) if isinstance(
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:292:16
+    |
+290 |                 payload = json.loads(
+291 |                     response.read().decode('utf-8', errors='replace'))
+292 |         except Exception:
+    |                ^^^^^^^^^
+293 |             return {}
+294 |         errors = payload.get('error', []) if isinstance(payload, dict) else []
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:313:16
+    |
+311 |                 payload = json.loads(
+312 |                     response.read().decode('utf-8', errors='replace'))
+313 |         except Exception:
+    |                ^^^^^^^^^
+314 |             return None
+315 |         errors = payload.get('error', []) if isinstance(payload, dict) else []
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:449:16
+    |
+447 |         try:
+448 |             markets = exchange.load_markets()
+449 |         except Exception:
+    |                ^^^^^^^^^
+450 |             markets = {}
+451 |         symbol_map = self._build_base_symbol_map(markets, base_currency)
+    |
+
+S112 `try`-`except`-`continue` detected, consider logging the exception
+   --> src/data/analysis/pnl_exporter.py:459:13
+    |
+457 |               try:
+458 |                   ticker = exchange.fetch_ticker(symbol)
+459 | /             except Exception:
+460 | |                 continue
+    | |________________________^
+461 |               last_price = ticker.get('last') if isinstance(
+462 |                   ticker, dict) else None
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:459:20
+    |
+457 |             try:
+458 |                 ticker = exchange.fetch_ticker(symbol)
+459 |             except Exception:
+    |                    ^^^^^^^^^
+460 |                 continue
+461 |             last_price = ticker.get('last') if isinstance(
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:509:16
+    |
+507 |             balance = exchange.fetch_balance()
+508 |             return float(self._extract_portfolio_value_from_balance(exchange, balance, base_currency))
+509 |         except Exception:
+    |                ^^^^^^^^^
+510 |             return None
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:542:16
+    |
+540 |                 payload = json.loads(
+541 |                     resp.read().decode('utf-8', errors='replace'))
+542 |         except Exception:
+    |                ^^^^^^^^^
+543 |             AI_SPEND_CACHE['expires_at'] = now + AI_SPEND_CACHE_TTL_SECONDS
+544 |             return AI_SPEND_CACHE['value']
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:612:36
+    |
+610 | …                             exchange = exchange_cls(
+611 | …                                 {'enableRateLimit': True})
+612 | …                     except Exception:
+    |                              ^^^^^^^^^
+613 | …                         exchange = None
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:619:40
+    |
+617 | …                     try:
+618 | …                         markets = exchange.load_markets()
+619 | …                     except Exception:
+    |                              ^^^^^^^^^
+620 | …                         markets = {}
+621 | …                     symbol_map = self._build_base_symbol_map(
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:638:44
+    |
+636 | …                                 valued = float(
+637 | …                                     amt) * float(last_price)
+638 | …                         except Exception:
+    |                                  ^^^^^^^^^
+639 | …                             valued = None
+640 | …                     if valued is None:
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:653:28
+    |
+651 |                                     holdings_cost.get(coin, 0.0))
+652 |                                 holdings_unrealized[coin] = 0.0
+653 |                     except Exception:
+    |                            ^^^^^^^^^
+654 |                         for coin in holdings_amount:
+655 |                             holdings_value[coin] = float(
+    |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+   --> src/data/analysis/pnl_exporter.py:664:9
+    |
+662 |                       # mark that this snapshot was derived from the trade journal
+663 |                       snapshot['_derived_from_journal'] = True
+664 | /         except Exception:
+665 | |             pass
+    | |________________^
+666 |           # Recompute portfolio value from cash + mark-to-market holdings so
+667 |           # Grafana reflects current buys/sells immediately.
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:664:16
+    |
+662 |                     # mark that this snapshot was derived from the trade journal
+663 |                     snapshot['_derived_from_journal'] = True
+664 |         except Exception:
+    |                ^^^^^^^^^
+665 |             pass
+666 |         # Recompute portfolio value from cash + mark-to-market holdings so
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:670:16
+    |
+668 |         try:
+669 |             cash = float(snapshot.get('portfolio_cash_eur', 0.0) or 0.0)
+670 |         except Exception:
+    |                ^^^^^^^^^
+671 |             cash = 0.0
+672 |         try:
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:675:16
+    |
+673 | …         holdings_values = snapshot.get('holdings_value_eur') or {}
+674 | …         total_holdings = float(sum(float(v or 0.0) for v in (holdings_values.values() if isinstance(holdings_values, dict) else [])…
+675 | …     except Exception:
+    |              ^^^^^^^^^
+676 | …         total_holdings = 0.0
+677 | …     # If configured to force cash-only, ignore holdings and make portfolio value == cash.
+    |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+   --> src/data/analysis/pnl_exporter.py:715:9
+    |
+713 |                   # journal (i.e. prefer locally-derived simulated holdings).
+714 |                   metrics_dict['portfolio_value_eur'] = float(start_val)
+715 | /         except Exception:
+716 | |             pass
+    | |________________^
+717 |
+718 |           # Ensure the primary exported portfolio value reflects cash + MTM holdings
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:715:16
+    |
+713 |                 # journal (i.e. prefer locally-derived simulated holdings).
+714 |                 metrics_dict['portfolio_value_eur'] = float(start_val)
+715 |         except Exception:
+    |                ^^^^^^^^^
+716 |             pass
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:723:16
+    |
+721 |         try:
+722 |             cash_final = float(snapshot.get('portfolio_cash_eur', 0.0) or 0.0)
+723 |         except Exception:
+    |                ^^^^^^^^^
+724 |             cash_final = 0.0
+725 |         try:
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:728:16
+    |
+726 |             hv = snapshot.get('holdings_value_eur') or {}
+727 |             holdings_sum = float(sum(float(v or 0.0) for v in (hv.values() if isinstance(hv, dict) else [])))
+728 |         except Exception:
+    |                ^^^^^^^^^
+729 |             holdings_sum = 0.0
+730 |         metrics_dict['portfolio_value_eur'] = cash_final + holdings_sum
+    |
+
+PERF402 Use `list` or `list.copy` to create a copy of a list
+   --> src/data/analysis/pnl_exporter.py:748:21
+    |
+746 |                 reader = csv.DictReader(f)
+747 |                 for row in reader:
+748 |                     trades.append(row)
+    |                     ^^^^^^^^^^^^^^^^^^
+749 |         except Exception:
+750 |             pass
+    |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+   --> src/data/analysis/pnl_exporter.py:749:9
+    |
+747 |                   for row in reader:
+748 |                       trades.append(row)
+749 | /         except Exception:
+750 | |             pass
+    | |________________^
+751 |           return trades
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:749:16
+    |
+747 |                 for row in reader:
+748 |                     trades.append(row)
+749 |         except Exception:
+    |                ^^^^^^^^^
+750 |             pass
+751 |         return trades
+    |
+
+S112 `try`-`except`-`continue` detected, consider logging the exception
+   --> src/data/analysis/pnl_exporter.py:780:17
+    |
+778 |                       amt_coin = float(raw)
+779 |                       break
+780 | /                 except Exception:
+781 | |                     continue
+    | |____________________________^
+782 |               if amt_coin is None:
+783 |                   continue
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:780:24
+    |
+778 |                     amt_coin = float(raw)
+779 |                     break
+780 |                 except Exception:
+    |                        ^^^^^^^^^
+781 |                     continue
+782 |             if amt_coin is None:
+    |
+
+S112 `try`-`except`-`continue` detected, consider logging the exception
+   --> src/data/analysis/pnl_exporter.py:794:17
+    |
+792 |                       amount_base = float(raw)
+793 |                       break
+794 | /                 except Exception:
+795 | |                     continue
+    | |____________________________^
+796 |
+797 |               price = None
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:794:24
+    |
+792 |                     amount_base = float(raw)
+793 |                     break
+794 |                 except Exception:
+    |                        ^^^^^^^^^
+795 |                     continue
+    |
+
+S112 `try`-`except`-`continue` detected, consider logging the exception
+   --> src/data/analysis/pnl_exporter.py:805:17
+    |
+803 |                       price = float(raw)
+804 |                       break
+805 | /                 except Exception:
+806 | |                     continue
+    | |____________________________^
+807 |
+808 |               rec = per.setdefault(coin, {'net_coin': 0.0, 'cost_eur': 0.0})
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:805:24
+    |
+803 |                     price = float(raw)
+804 |                     break
+805 |                 except Exception:
+    |                        ^^^^^^^^^
+806 |                     continue
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:833:20
+    |
+831 |             try:
+832 |                 dt = datetime.fromisoformat(ts.split('.')[0])
+833 |             except Exception:
+    |                    ^^^^^^^^^
+834 |                 return None
+835 |         if dt.tzinfo is None:
+    |
+
+DTZ007 Naive datetime constructed using `datetime.datetime.strptime()` without %z
+   --> src/data/analysis/pnl_exporter.py:843:20
+    |
+841 |         try:
+842 |             timestamp_raw = line.split(' - ', 1)[0].strip()
+843 |             return datetime.strptime(timestamp_raw, '%Y-%m-%d %H:%M:%S,%f')
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+844 |         except Exception:
+845 |             return None
+    |
+help: Call `.replace(tzinfo=<timezone>)` or `.astimezone()` to convert to an aware datetime
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:844:16
+    |
+842 |             timestamp_raw = line.split(' - ', 1)[0].strip()
+843 |             return datetime.strptime(timestamp_raw, '%Y-%m-%d %H:%M:%S,%f')
+844 |         except Exception:
+    |                ^^^^^^^^^
+845 |             return None
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:935:28
+    |
+933 |                         amount_base = float(
+934 |                             trade.get('amount_base', 0.0) or 0.0)
+935 |                     except Exception:
+    |                            ^^^^^^^^^
+936 |                         amount_base = 0.0
+937 |                     if amount_base > 0.0:
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:969:32
+    |
+967 |                                 exchange = exchange_cls(
+968 |                                     {'enableRateLimit': True})
+969 |                         except Exception:
+    |                                ^^^^^^^^^
+970 |                             exchange = None
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:977:40
+    |
+975 | …                     try:
+976 | …                         markets = exchange.load_markets()
+977 | …                     except Exception:
+    |                              ^^^^^^^^^
+978 | …                         markets = {}
+979 | …                     symbol_map = self._build_base_symbol_map(
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:981:32
+    |
+979 |                                 symbol_map = self._build_base_symbol_map(
+980 |                                     markets, self._read_env_value('BASE_CURRENCY') or 'EUR')
+981 |                         except Exception:
+    |                                ^^^^^^^^^
+982 |                             symbol_map = {}
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/analysis/pnl_exporter.py:997:40
+    |
+995 | …                             if last_price is not None:
+996 | …                                 valued = float(amt) * float(last_price)
+997 | …                         except Exception:
+    |                                  ^^^^^^^^^
+998 | …                             valued = None
+999 | …                     if valued is None:
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1008:24
+     |
+1006 |                             snapshot['holdings_value_eur'][coin] = float(
+1007 |                                 valued)
+1008 |                 except Exception:
+     |                        ^^^^^^^^^
+1009 |                     # On any failure above, fall back to cost-basis mapping
+1010 |                     for coin, amt in snapshot['holdings_amount_coin'].items():
+     |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+    --> src/data/analysis/pnl_exporter.py:1028:17
+     |
+1026 |                       ):
+1027 |                           snapshot['portfolio_value_eur'] = float(start_val)
+1028 | /                 except Exception:
+1029 | |                     pass
+     | |________________________^
+1030 |                   return snapshot
+1031 |           except Exception:
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1028:24
+     |
+1026 |                     ):
+1027 |                         snapshot['portfolio_value_eur'] = float(start_val)
+1028 |                 except Exception:
+     |                        ^^^^^^^^^
+1029 |                     pass
+1030 |                 return snapshot
+     |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+    --> src/data/analysis/pnl_exporter.py:1031:9
+     |
+1029 |                       pass
+1030 |                   return snapshot
+1031 | /         except Exception:
+1032 | |             # If snapshot file is unreadable, continue to bot log parsing fallback
+1033 | |             pass
+     | |________________^
+1034 |
+1035 |           if not os.path.exists(BOT_LOG_PATH):
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1031:16
+     |
+1029 |                     pass
+1030 |                 return snapshot
+1031 |         except Exception:
+     |                ^^^^^^^^^
+1032 |             # If snapshot file is unreadable, continue to bot log parsing fallback
+1033 |             pass
+     |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+    --> src/data/analysis/pnl_exporter.py:1060:21
+     |
+1058 |                               snapshot['portfolio_snapshot_timestamp_unixtime'] = line_ts.timestamp(
+1059 |                               )
+1060 | /                     except Exception:
+1061 | |                         pass
+     | |____________________________^
+1062 |
+1063 |                   if snapshot['portfolio_cash_eur'] == 0.0 and '  - Cash:' in line:
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1060:28
+     |
+1058 |                             snapshot['portfolio_snapshot_timestamp_unixtime'] = line_ts.timestamp(
+1059 |                             )
+1060 |                     except Exception:
+     |                            ^^^^^^^^^
+1061 |                         pass
+     |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+    --> src/data/analysis/pnl_exporter.py:1068:21
+     |
+1066 |                           snapshot['portfolio_cash_eur'] = float(
+1067 |                               cash_part.split(' ')[0])
+1068 | /                     except Exception:
+1069 | |                         pass
+     | |____________________________^
+1070 |
+1071 |                   if not snapshot['holdings_amount_coin'] and '  - Holdings:' in line:
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1068:28
+     |
+1066 |                         snapshot['portfolio_cash_eur'] = float(
+1067 |                             cash_part.split(' ')[0])
+1068 |                     except Exception:
+     |                            ^^^^^^^^^
+1069 |                         pass
+     |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+    --> src/data/analysis/pnl_exporter.py:1081:21
+     |
+1079 |                                   if float(amount) > 0.0
+1080 |                               }
+1081 | /                     except Exception:
+1082 | |                         pass
+     | |____________________________^
+1083 |
+1084 |                   if '  - Open trades details:' in line:
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1081:28
+     |
+1079 |                                 if float(amount) > 0.0
+1080 |                             }
+1081 |                     except Exception:
+     |                            ^^^^^^^^^
+1082 |                         pass
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1122:16
+     |
+1120 |                     ):
+1121 |                         break
+1122 |         except Exception:
+     |                ^^^^^^^^^
+1123 |             return snapshot
+     |
+
+S112 `try`-`except`-`continue` detected, consider logging the exception
+    --> src/data/analysis/pnl_exporter.py:1177:25
+     |
+1175 |                               value = float(value_part.split(' ')[0])
+1176 |                               break
+1177 | /                         except Exception:
+1178 | |                             continue
+     | |____________________________________^
+1179 |
+1180 |               if value <= 0.0 and os.path.exists(PORTFOLIO_STATE_PATH):
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1177:32
+     |
+1175 |                             value = float(value_part.split(' ')[0])
+1176 |                             break
+1177 |                         except Exception:
+     |                                ^^^^^^^^^
+1178 |                             continue
+     |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+    --> src/data/analysis/pnl_exporter.py:1185:17
+     |
+1183 |                           state = json.load(f)
+1184 |                       value = float(state.get('initial_portfolio_value') or 0.0)
+1185 | /                 except Exception:
+1186 | |                     pass
+     | |________________________^
+1187 |
+1188 |               # Final fallback: reuse the scorecard runtime start value metric.
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1185:24
+     |
+1183 |                         state = json.load(f)
+1184 |                     value = float(state.get('initial_portfolio_value') or 0.0)
+1185 |                 except Exception:
+     |                        ^^^^^^^^^
+1186 |                     pass
+     |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+    --> src/data/analysis/pnl_exporter.py:1199:17
+     |
+1197 |                                   value = float(parts[-1])
+1198 |                                   break
+1199 | /                 except Exception:
+1200 | |                     pass
+     | |________________________^
+1201 |
+1202 |               START_VALUE_CACHE['value'] = value
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1199:24
+     |
+1197 |                                 value = float(parts[-1])
+1198 |                                 break
+1199 |                 except Exception:
+     |                        ^^^^^^^^^
+1200 |                     pass
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1206:16
+     |
+1204 |                 START_VALUE_CACHE_TTL_SECONDS
+1205 |             return value
+1206 |         except Exception:
+     |                ^^^^^^^^^
+1207 |             return 0.0
+     |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+    --> src/data/analysis/pnl_exporter.py:1226:9
+     |
+1224 |               if calls_cap:
+1225 |                   result['ai_copilot_calls_cap_monthly'] = float(calls_cap)
+1226 | /         except Exception:
+1227 | |             pass
+     | |________________^
+1228 |
+1229 |           try:
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1226:16
+     |
+1224 |             if calls_cap:
+1225 |                 result['ai_copilot_calls_cap_monthly'] = float(calls_cap)
+1226 |         except Exception:
+     |                ^^^^^^^^^
+1227 |             pass
+     |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+    --> src/data/analysis/pnl_exporter.py:1248:9
+     |
+1246 |                           state.get('monthly_calls', 0) or 0)
+1247 |                       break
+1248 | /         except Exception:
+1249 | |             pass
+     | |________________^
+1250 |
+1251 |           try:
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1248:16
+     |
+1246 |                         state.get('monthly_calls', 0) or 0)
+1247 |                     break
+1248 |         except Exception:
+     |                ^^^^^^^^^
+1249 |             pass
+     |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+    --> src/data/analysis/pnl_exporter.py:1255:9
+     |
+1253 |               if api_usage:
+1254 |                   result.update(api_usage)
+1255 | /         except Exception:
+1256 | |             pass
+     | |________________^
+1257 |
+1258 |           return result
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1255:16
+     |
+1253 |             if api_usage:
+1254 |                 result.update(api_usage)
+1255 |         except Exception:
+     |                ^^^^^^^^^
+1256 |             pass
+     |
+
+S112 `try`-`except`-`continue` detected, consider logging the exception
+    --> src/data/analysis/pnl_exporter.py:1274:17
+     |
+1272 |                       if model:
+1273 |                           return model
+1274 | /                 except Exception:
+1275 | |                     continue
+     | |____________________________^
+1276 |               return ''
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1274:24
+     |
+1272 |                     if model:
+1273 |                         return model
+1274 |                 except Exception:
+     |                        ^^^^^^^^^
+1275 |                     continue
+1276 |             return ''
+     |
+
+DTZ007 Naive datetime constructed using `datetime.datetime.strptime()` without %z
+    --> src/data/analysis/pnl_exporter.py:1346:26
+     |
+1344 |                           continue
+1345 |
+1346 |                       ts = datetime.strptime(
+     |  __________________________^
+1347 | |                         timestamp_raw.strip(), '%Y-%m-%d %H:%M:%S,%f')
+     | |______________________________________________________________________^
+1348 |                       age_minutes = max(
+1349 |                           0.0, (now - ts).total_seconds() / 60.0)
+     |
+help: Call `.replace(tzinfo=<timezone>)` or `.astimezone()` to convert to an aware datetime
+
+S112 `try`-`except`-`continue` detected, consider logging the exception
+    --> src/data/analysis/pnl_exporter.py:1350:17
+     |
+1348 |                       age_minutes = max(
+1349 |                           0.0, (now - ts).total_seconds() / 60.0)
+1350 | /                 except Exception:
+1351 | |                     continue
+     | |____________________________^
+1352 |
+1353 |                   if not isinstance(changes, dict):
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1350:24
+     |
+1348 |                     age_minutes = max(
+1349 |                         0.0, (now - ts).total_seconds() / 60.0)
+1350 |                 except Exception:
+     |                        ^^^^^^^^^
+1351 |                     continue
+     |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+    --> src/data/analysis/pnl_exporter.py:1375:9
+     |
+1374 |               result['ai_copilot_shadow_suggestions'] = suggestions
+1375 | /         except Exception:
+1376 | |             pass
+     | |________________^
+1377 |
+1378 |           return result
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1375:16
+     |
+1374 |             result['ai_copilot_shadow_suggestions'] = suggestions
+1375 |         except Exception:
+     |                ^^^^^^^^^
+1376 |             pass
+     |
+
+S112 `try`-`except`-`continue` detected, consider logging the exception
+    --> src/data/analysis/pnl_exporter.py:1469:13
+     |
+1467 |                           max(peak_equity, MIN_DRAWDOWN_PCT_BASE_USD)
+1468 |                       max_drawdown_pct = max(max_drawdown_pct, drawdown_pct)
+1469 | /             except Exception:
+1470 | |                 continue
+     | |________________________^
+1471 |
+1472 |           win_rate = (winning_trades / total_trades *
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1469:20
+     |
+1467 |                         max(peak_equity, MIN_DRAWDOWN_PCT_BASE_USD)
+1468 |                     max_drawdown_pct = max(max_drawdown_pct, drawdown_pct)
+1469 |             except Exception:
+     |                    ^^^^^^^^^
+1470 |                 continue
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1585:16
+     |
+1583 |         try:
+1584 |             _cash = float(metrics.get('portfolio_cash_eur', 0.0) or 0.0)
+1585 |         except Exception:
+     |                ^^^^^^^^^
+1586 |             _cash = 0.0
+1587 |         try:
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1590:16
+     |
+1588 |             _hv = metrics.get('holdings_value_eur') or {}
+1589 |             _holdings_sum = float(sum(float(v or 0.0) for v in (_hv.values() if isinstance(_hv, dict) else [])))
+1590 |         except Exception:
+     |                ^^^^^^^^^
+1591 |             _holdings_sum = 0.0
+1592 |         output.append(f'trading_portfolio_value_eur {_cash + _holdings_sum}')
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/data/analysis/pnl_exporter.py:1602:16
+     |
+1600 |             return_pct = (return_eur / start_val *
+1601 |                           100.0) if start_val > 0.0 else 0.0
+1602 |         except Exception:
+     |                ^^^^^^^^^
+1603 |             return_eur = 0.0
+1604 |             return_pct = 0.0
+     |
+
+TRY004 Prefer `TypeError` exception for invalid type
+   --> src/data/fetcher.py:116:13
+    |
+115 |         if not callable(fetch_function):
+116 |             raise ValueError("Fetch function must be callable")
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+117 |             
+118 |         self.sentiment_sources.append((source_name, fetch_function))
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/data/fetcher.py:154:20
+    |
+152 |                 data = fetch_func(symbol)
+153 |                 sentiment_data[source_name] = data
+154 |             except Exception as e:
+    |                    ^^^^^^^^^
+155 |                 self.logger.error(f"Failed to fetch sentiment from {source_name}: {e}")
+156 |                 sentiment_data[source_name] = None
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+  --> src/data_preperation.py:92:12
+   |
+90 |         return True
+91 |
+92 |     except Exception as e:
+   |            ^^^^^^^^^
+93 |         print(f"❌ Error during data preparation: {e!s}")
+94 |         return False
+   |
+
+SIM102 Use a single `if` statement instead of nested `if` statements
+  --> src/fastapi_app.py:58:5
+   |
+56 |                   detail="Access denied: file is outside the allowed directory.",
+57 |               )
+58 | /     elif not pathlib.Path(file).is_absolute():
+59 | |         # Relative path: block traversal that escapes the project root.
+60 | |         if not str(resolved).startswith(str(project_root) + os.sep) and resolved != project_root:
+   | |_________________________________________________________________________________________________^
+61 |               raise HTTPException(
+62 |                   status_code=403,
+   |
+help: Combine `if` statements using `and`
+
+BLE001 Do not catch blind exception: `Exception`
+  --> src/get_data.py:31:16
+   |
+29 |             exchange.load_markets()
+30 |             return exchange
+31 |         except Exception as e:
+   |                ^^^^^^^^^
+32 |             print(f"❌ Exchange initialization failed: {e!s}")
+33 |             return None
+   |
+
+BLE001 Do not catch blind exception: `Exception`
+  --> src/get_data.py:50:20
+   |
+48 |                     symbol, self.timeframe, limit=self.days)
+49 |                 return ohlcv
+50 |             except Exception:
+   |                    ^^^^^^^^^
+51 |                 wait_time = (attempt + 1) * 5
+52 |                 print(
+   |
+
+F821 Undefined name `e`
+  --> src/get_data.py:55:44
+   |
+53 |                     f"Attempt {attempt + 1}/{max_retries} for {symbol} failed. Waiting {wait_time}s...", end="\r")
+54 |                 time.sleep(wait_time)
+55 |         self.error_log.append((symbol, str(e)))
+   |                                            ^
+56 |         return None
+   |
+
+BLE001 Do not catch blind exception: `Exception`
+  --> src/get_data.py:81:16
+   |
+79 |                 df['close'])
+80 |             return True
+81 |         except Exception as e:
+   |                ^^^^^^^^^
+82 |             print(f"Indicator calculation failed: {e!s}")
+83 |             return False
+   |
+
+PERF402 Use `list` or `list.copy` to create a copy of a list
+   --> src/get_data.py:133:17
+    |
+131 |             all_dfs = []
+132 |             for df in self.data.values():
+133 |                 all_dfs.append(df)
+    |                 ^^^^^^^^^^^^^^^^^^
+134 |
+135 |             if not all_dfs:
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/get_data.py:143:16
+    |
+141 |             print(f"Data successfully saved to {filename}")
+142 |             return True
+143 |         except Exception as e:
+    |                ^^^^^^^^^
+144 |             print(f"Error while saving: {e!s}")
+145 |             return False
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/get_data.py:157:16
+    |
+155 |             print(f"Data successfully saved to {filename}")
+156 |             return True
+157 |         except Exception as e:
+    |                ^^^^^^^^^
+158 |             print(f"Error while saving to SQLite: {e!s}")
+159 |             return False
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+  --> src/hailo/edge_filter_service.py:72:16
+   |
+70 |                 self.model, threshold=threshold, window_size=window_size
+71 |             )
+72 |         except Exception as e:
+   |                ^^^^^^^^^
+73 |             self.inference_enabled = False
+74 |             logger.warning(
+   |
+
+DTZ003 `datetime.datetime.utcnow()` used
+   --> src/hailo/edge_filter_service.py:117:43
+    |
+116 |             self.metrics["ticks_processed"] += 1
+117 |             self.metrics["last_update"] = datetime.utcnow().isoformat()
+    |                                           ^^^^^^^^^^^^^^^^^
+118 |             if self.model is not None:
+119 |                 self.metrics["inference_time_ms"] = round(
+    |
+help: Use `datetime.datetime.now(tz=...)` instead
+
+DTZ003 `datetime.datetime.utcnow()` used
+   --> src/hailo/edge_filter_service.py:140:31
+    |
+138 |                 # Create AnomalyAlert for hybrid gate
+139 |                 anomaly_alert = AnomalyAlert(
+140 |                     timestamp=datetime.utcnow(),
+    |                               ^^^^^^^^^^^^^^^^^
+141 |                     hailo_score=alert_dict["anomaly_score"],
+142 |                     window_size=alert_dict["window_size"],
+    |
+help: Use `datetime.datetime.now(tz=...)` instead
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/hailo/edge_filter_service.py:156:16
+    |
+154 |                 await self.emit_alert(anomaly_alert)
+155 |                 return anomaly_alert
+156 |         except Exception as e:
+    |                ^^^^^^^^^
+157 |             logger.error(f"Error processing tick: {e}")
+158 |             self.service_metrics.observe_event("tick_error")
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/hailo/edge_filter_service.py:216:20
+    |
+214 |                 logger.info("Strategist decision: %s", decision.to_dict())
+215 |                 return
+216 |             except Exception as exc:
+    |                    ^^^^^^^^^
+217 |                 logger.warning("Failed to forward alert via gRPC: %s", exc)
+218 |                 self.service_metrics.observe_event("alert_forward_failed")
+    |
+
+ASYNC230 Async functions should not open files with blocking methods like `open`
+   --> src/hailo/edge_filter_service.py:223:14
+    |
+221 |         # For now: log & write to JSON file (development)
+222 |         alert_file = "/tmp/hailo_alerts.jsonl"
+223 |         with open(alert_file, "a") as f:
+    |              ^^^^
+224 |             f.write(json.dumps(alert_payload.to_dict()) + "\n")
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/hailo/edge_filter_service.py:266:20
+    |
+264 |             except KeyboardInterrupt:
+265 |                 logger.info("Shutting down...")
+266 |             except Exception as e:
+    |                    ^^^^^^^^^
+267 |                 logger.error(f"Service error: {e}")
+268 |             finally:
+    |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+  --> src/hailo/inference.py:94:13
+   |
+92 |                       self.device_architecture = str(
+93 |                           devices[0].device_architecture)
+94 | /             except Exception:
+95 | |                 pass
+   | |____________________^
+96 |
+97 |           vdevice_params = hailort.VDevice.create_params() if hasattr(
+   |
+
+BLE001 Do not catch blind exception: `Exception`
+  --> src/hailo/inference.py:94:20
+   |
+92 |                     self.device_architecture = str(
+93 |                         devices[0].device_architecture)
+94 |             except Exception:
+   |                    ^^^^^^^^^
+95 |                 pass
+   |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+   --> src/hailo/inference.py:147:13
+    |
+145 |               try:
+146 |                   self.vdevice.release()
+147 | /             except Exception:
+148 | |                 pass
+    | |____________________^
+149 |               self.vdevice = None
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/hailo/inference.py:147:20
+    |
+145 |             try:
+146 |                 self.vdevice.release()
+147 |             except Exception:
+    |                    ^^^^^^^^^
+148 |                 pass
+149 |             self.vdevice = None
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/hailo/inference.py:225:16
+    |
+223 |         try:
+224 |             return json.loads(self.model_config_path.read_text())
+225 |         except Exception as exc:
+    |                ^^^^^^^^^
+226 |             logger.warning("Failed to read model config %s: %s",
+227 |                            self.model_config_path, exc)
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/hailo/inference.py:246:20
+    |
+244 |                             self.hef_path)
+245 |                 return
+246 |             except Exception as exc:
+    |                    ^^^^^^^^^
+247 |                 logger.warning(
+248 |                     "Failed to initialize direct Hailo HEF runtime from %s: %s. Falling back to ONNX runtime.",
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/hailo/inference.py:288:16
+    |
+286 |         try:
+287 |             active_provider = self.session.get_providers()[0]
+288 |         except Exception:
+    |                ^^^^^^^^^
+289 |             active_provider = providers[0] if providers else "unknown"
+290 |         self.last_provider = active_provider
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/hailo/inference.py:391:16
+    |
+389 |             return anomaly_score, confidence
+390 |
+391 |         except Exception as e:
+    |                ^^^^^^^^^
+392 |             logger.error(f"Inference failed: {e}")
+393 |             self.last_inference_seconds = 0.0
+    |
+
+DTZ005 `datetime.datetime.now()` called without a `tz` argument
+   --> src/hybrid/decision_gate.py:132:19
+    |
+130 |     # Simulated alert from Hailo-8
+131 |     alert = AnomalyAlert(
+132 |         timestamp=datetime.now(),
+    |                   ^^^^^^^^^^^^^^
+133 |         hailo_score=92.5,
+134 |         window_size=100,
+    |
+help: Pass a `datetime.timezone` object to the `tz` parameter
+
+UP047 Generic function `deserialize_message` should use type parameters
+  --> src/hybrid/grpc_bridge.py:54:5
+   |
+54 | def deserialize_message(payload: bytes, factory: Callable[[dict[str, Any]], T]) -> T:
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+55 |     return factory(_json_loads(payload))
+   |
+help: Use type parameters
+
+DTZ003 `datetime.datetime.utcnow()` used
+  --> src/kraken_websocket_v2.py:77:21
+   |
+76 |         data = msg[1]
+77 |         timestamp = datetime.utcnow().timestamp()
+   |                     ^^^^^^^^^^^^^^^^^
+78 |
+79 |         return cls(
+   |
+help: Use `datetime.datetime.now(tz=...)` instead
+
+DTZ003 `datetime.datetime.utcnow()` used
+   --> src/kraken_websocket_v2.py:193:42
+    |
+191 |             )
+192 |             self.connected = True
+193 |             self.connection_start_time = datetime.utcnow()
+    |                                          ^^^^^^^^^^^^^^^^^
+194 |
+195 |             # Subscribe to ticker channel for each pair
+    |
+help: Use `datetime.datetime.now(tz=...)` instead
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/kraken_websocket_v2.py:202:16
+    |
+200 |             return True
+201 |
+202 |         except Exception as e:
+    |                ^^^^^^^^^
+203 |             logger.error(f"❌ WebSocket connection failed: {e}")
+204 |             self.connected = False
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/kraken_websocket_v2.py:257:20
+    |
+255 |                 await asyncio.sleep(5)
+256 |
+257 |             except Exception as e:
+    |                    ^^^^^^^^^
+258 |                 logger.error(f"Error in listen loop: {e}")
+259 |                 self.connected = False
+    |
+
+DTZ003 `datetime.datetime.utcnow()` used
+   --> src/kraken_websocket_v2.py:285:43
+    |
+284 |                     self.ticks_received += 1
+285 |                     self.last_tick_time = datetime.utcnow()
+    |                                           ^^^^^^^^^^^^^^^^^
+286 |
+287 |         except Exception as e:
+    |
+help: Use `datetime.datetime.now(tz=...)` instead
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/kraken_websocket_v2.py:287:16
+    |
+285 |                     self.last_tick_time = datetime.utcnow()
+286 |
+287 |         except Exception as e:
+    |                ^^^^^^^^^
+288 |             logger.warning(f"Error handling message: {e}")
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/kraken_websocket_v2.py:316:16
+    |
+314 |             conn.commit()
+315 |             conn.close()
+316 |         except Exception as e:
+    |                ^^^^^^^^^
+317 |             logger.warning(f"Failed to store tick: {e}")
+    |
+
+DTZ003 `datetime.datetime.utcnow()` used
+   --> src/kraken_websocket_v2.py:321:23
+    |
+319 |     def cleanup_old_ticks(self):
+320 |         """Remove ticks older than retention period"""
+321 |         cutoff_date = datetime.utcnow() - timedelta(days=self.retention_days)
+    |                       ^^^^^^^^^^^^^^^^^
+322 |         cutoff_timestamp = cutoff_date.timestamp()
+    |
+help: Use `datetime.datetime.now(tz=...)` instead
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/kraken_websocket_v2.py:336:16
+    |
+334 |             logger.info(
+335 |                 f"Cleaned up {deleted} old ticks (>{self.retention_days}d)")
+336 |         except Exception as e:
+    |                ^^^^^^^^^
+337 |             logger.error(f"Cleanup failed: {e}")
+    |
+
+DTZ003 `datetime.datetime.utcnow()` used
+   --> src/kraken_websocket_v2.py:353:18
+    |
+351 |             List of Tick objects
+352 |         """
+353 |         cutoff = datetime.utcnow().timestamp() - seconds
+    |                  ^^^^^^^^^^^^^^^^^
+354 |
+355 |         try:
+    |
+help: Use `datetime.datetime.now(tz=...)` instead
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/kraken_websocket_v2.py:383:16
+    |
+381 |                 for row in rows
+382 |             ]
+383 |         except Exception as e:
+    |                ^^^^^^^^^
+384 |             logger.error(f"Failed to fetch ticks: {e}")
+385 |             return []
+    |
+
+DTZ003 `datetime.datetime.utcnow()` used
+   --> src/kraken_websocket_v2.py:391:23
+    |
+389 |         uptime = None
+390 |         if self.connection_start_time:
+391 |             uptime = (datetime.utcnow() -
+    |                       ^^^^^^^^^^^^^^^^^
+392 |                       self.connection_start_time).total_seconds()
+    |
+help: Use `datetime.datetime.now(tz=...)` instead
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/models/predict.py:162:16
+    |
+160 |                 'rule': rule_decision
+161 |             }
+162 |         except Exception as e:
+    |                ^^^^^^^^^
+163 |             print(f"Prediction error: {e!s}")
+164 |             return {'decision': 'hold', 'confidence': 0.0, 'llm_votes': {}, 'rule': 'hold'}
+    |
+
+F401 `einops` imported but unused; consider using `importlib.util.find_spec` to test for availability
+  --> src/models/train_timeseries_transformer.py:25:12
+   |
+24 | try:
+25 |     import einops
+   |            ^^^^^^
+26 |     import torch
+27 |     from torch import nn, optim
+   |
+help: Remove unused import: `einops`
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/models/train_timeseries_transformer.py:444:12
+    |
+442 |         )
+443 |         logger.info(f"✅ Model exported to {output_path}")
+444 |     except Exception as e:
+    |            ^^^^^^^^^
+445 |         logger.error(f"❌ ONNX export failed: {e}")
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+  --> src/models/train_trading_model.py:77:12
+   |
+75 |         return df
+76 |
+77 |     except Exception as e:
+   |            ^^^^^^^^^
+78 |         print(f"❌ Error during data preparation: {e!s}")
+79 |         return None
+   |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/models/train_trading_model.py:125:12
+    |
+123 |         print(f"📚 Dataset created with {len(dataset)} examples")
+124 |         return dataset
+125 |     except Exception as e:
+    |            ^^^^^^^^^
+126 |         print(f"❌ Error during dataset creation: {e!s}")
+127 |         return None
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/models/train_trading_model.py:217:12
+    |
+215 |         return True
+216 |
+217 |     except Exception as e:
+    |            ^^^^^^^^^
+218 |         print(f"❌ Training failed: {e!s}")
+219 |         return False
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/models/train_trading_model.py:249:12
+    |
+247 |             print("❌ Training ended with errors")
+248 |
+249 |     except Exception as e:
+    |            ^^^^^^^^^
+250 |         print(f"\n❌ Fehler: {e!s}")
+251 |         print("\n🔍 Troubleshooting tips:")
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/models/train_trading_model_backup.py:156:12
+    |
+155 |         print("🎉 Model saved to './fine_tuned_trading_model'!")
+156 |     except Exception as e:
+    |            ^^^^^^^^^
+157 |         print(f"\n❌ Error: {e!s}")
+158 |         print("\n🔍 Tips:")
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/predict.py:160:16
+    |
+158 |                 'rule': rule_decision
+159 |             }
+160 |         except Exception as e:
+    |                ^^^^^^^^^
+161 |             print(f"Prediction error: {e!s}")
+162 |             return {'decision': 'halten', 'confidence': 0.0, 'llm_votes': {}, 'rule': 'halten'}
+    |
+
+TRY004 Prefer `TypeError` exception for invalid type
+  --> src/research_signal.py:73:9
+   |
+71 |         payload = json.load(f)
+72 |     if not isinstance(payload, dict):
+73 |         raise ValueError("Research signal file must contain a JSON object")
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+74 |     return normalize_research_payload_model(payload)
+   |
+
+TRY004 Prefer `TypeError` exception for invalid type
+  --> src/research_signal.py:89:9
+   |
+87 |         payload = json.load(f)
+88 |     if not isinstance(payload, dict):
+89 |         raise ValueError("Research signal file must contain a JSON object")
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+90 |
+91 |     features = normalize_research_payload_model(payload)
+   |
+
+FURB162 Unnecessary timezone replacement with zero offset
+  --> src/trading_bot.py:34:39
+   |
+33 |     try:
+34 |         return datetime.fromisoformat(value.replace('Z', '+00:00'))
+   |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+35 |     except ValueError:
+36 |         return value
+   |
+help: Remove `.replace()` call
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+   --> src/trading_bot.py:319:17
+    |
+317 |                   try:
+318 |                       os.makedirs(parent, exist_ok=True)
+319 | /                 except Exception:
+320 | |                     pass
+    | |________________________^
+321 |
+322 |               state = {
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/trading_bot.py:319:24
+    |
+317 |                 try:
+318 |                     os.makedirs(parent, exist_ok=True)
+319 |                 except Exception:
+    |                        ^^^^^^^^^
+320 |                     pass
+    |
+
+DTZ005 `datetime.datetime.now()` called without a `tz` argument
+   --> src/trading_bot.py:328:30
+    |
+326 |                 'base_currency': self.base_currency,
+327 |                 'initial_portfolio_value': self.initial_portfolio_value,
+328 |                 'timestamp': datetime.now().isoformat(),
+    |                              ^^^^^^^^^^^^^^
+329 |             }
+330 |             with open(state_file, 'w') as f:
+    |
+help: Pass a `datetime.timezone` object to the `tz` parameter
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+   --> src/trading_bot.py:336:13
+    |
+334 |               try:
+335 |                   os.chmod(state_file, 0o640)
+336 | /             except Exception:
+337 | |                 pass
+    | |____________________^
+338 |               try:
+339 |                   # Prefer shutil.chown where available (handles names)
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/trading_bot.py:336:20
+    |
+334 |             try:
+335 |                 os.chmod(state_file, 0o640)
+336 |             except Exception:
+    |                    ^^^^^^^^^
+337 |                 pass
+338 |             try:
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/trading_bot.py:342:24
+    |
+340 |                 try:
+341 |                     shutil.chown(state_file, user='trading', group='trading')
+342 |                 except Exception:
+    |                        ^^^^^^^^^
+343 |                     # Fallback to os.chown with numeric ids if possible
+344 |                     try:
+    |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+   --> src/trading_bot.py:351:21
+    |
+349 |                           gid = grp.getgrnam('trading').gr_gid
+350 |                           os.chown(state_file, uid, gid)
+351 | /                     except Exception:
+352 | |                         pass
+    | |____________________________^
+353 |               except Exception:
+354 |                   pass
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/trading_bot.py:351:28
+    |
+349 |                         gid = grp.getgrnam('trading').gr_gid
+350 |                         os.chown(state_file, uid, gid)
+351 |                     except Exception:
+    |                            ^^^^^^^^^
+352 |                         pass
+353 |             except Exception:
+    |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+   --> src/trading_bot.py:353:13
+    |
+351 |                       except Exception:
+352 |                           pass
+353 | /             except Exception:
+354 | |                 pass
+    | |____________________^
+355 |               logger.debug(f"Portfolio state saved to {state_file}")
+356 |               return True
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/trading_bot.py:353:20
+    |
+351 |                     except Exception:
+352 |                         pass
+353 |             except Exception:
+    |                    ^^^^^^^^^
+354 |                 pass
+355 |             logger.debug(f"Portfolio state saved to {state_file}")
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/trading_bot.py:357:16
+    |
+355 |             logger.debug(f"Portfolio state saved to {state_file}")
+356 |             return True
+357 |         except Exception as e:
+    |                ^^^^^^^^^
+358 |             logger.error(f"Failed to save portfolio state: {e}")
+359 |             return False
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/trading_bot.py:391:24
+    |
+389 |                     else:
+390 |                         self.open_trades = {}
+391 |                 except Exception:
+    |                        ^^^^^^^^^
+392 |                     self.open_trades = {}
+393 |             initial_value = state.get('initial_portfolio_value')
+    |
+
+DTZ005 `datetime.datetime.now()` called without a `tz` argument
+   --> src/trading_bot.py:400:42
+    |
+398 |                     trade.get('timestamp'))
+399 |                 if isinstance(trade['timestamp'], str):
+400 |                     trade['timestamp'] = datetime.now()
+    |                                          ^^^^^^^^^^^^^^
+401 |                 trade['partial_tp_timestamp'] = _parse_persisted_datetime(
+402 |                     trade.get('partial_tp_timestamp'))
+    |
+help: Pass a `datetime.timezone` object to the `tz` parameter
+
+BLE001 Do not catch blind exception: `Exception`
+   --> src/trading_bot.py:410:16
+    |
+408 |                     f"  Open trades restored: {list(self.open_trades.keys())}")
+409 |             return True
+410 |         except Exception as e:
+    |                ^^^^^^^^^
+411 |             logger.error(f"Failed to load portfolio state: {e}")
+412 |             return False
+    |
+
+DTZ005 `datetime.datetime.now()` called without a `tz` argument
+   --> src/trading_bot.py:453:26
+    |
+451 |             'amount_coin': amount_coin,
+452 |             'amount_base': amount_base,  # Invested amount in base currency
+453 |             'timestamp': datetime.now(),
+    |                          ^^^^^^^^^^^^^^
+454 |             'peak_price': buy_price,
+455 |             'partial_tp_taken': False,
+    |
+help: Pass a `datetime.timezone` object to the `tz` parameter
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:598:51
+    |
+596 |             'DYNAMIC_LOSSMAKER_EXCLUSION_ENABLED', True)
+597 |         self.dynamic_lossmaker_window = int(
+598 |             os.getenv('DYNAMIC_LOSSMAKER_WINDOW', 80))
+    |                                                   ^^
+599 |         self.dynamic_lossmaker_min_sells = int(
+600 |             os.getenv('DYNAMIC_LOSSMAKER_MIN_SELLS', 3))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:600:54
+    |
+598 |             os.getenv('DYNAMIC_LOSSMAKER_WINDOW', 80))
+599 |         self.dynamic_lossmaker_min_sells = int(
+600 |             os.getenv('DYNAMIC_LOSSMAKER_MIN_SELLS', 3))
+    |                                                      ^
+601 |         self.dynamic_lossmaker_max_win_rate_pct = float(
+602 |             os.getenv('DYNAMIC_LOSSMAKER_MAX_WIN_RATE_PCT', 45.0))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:602:61
+    |
+600 |             os.getenv('DYNAMIC_LOSSMAKER_MIN_SELLS', 3))
+601 |         self.dynamic_lossmaker_max_win_rate_pct = float(
+602 |             os.getenv('DYNAMIC_LOSSMAKER_MAX_WIN_RATE_PCT', 45.0))
+    |                                                             ^^^^
+603 |         self.dynamic_lossmaker_min_pnl_loss = float(
+604 |             os.getenv('DYNAMIC_LOSSMAKER_MIN_PNL_LOSS', 0.003))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:604:57
+    |
+602 |             os.getenv('DYNAMIC_LOSSMAKER_MAX_WIN_RATE_PCT', 45.0))
+603 |         self.dynamic_lossmaker_min_pnl_loss = float(
+604 |             os.getenv('DYNAMIC_LOSSMAKER_MIN_PNL_LOSS', 0.003))
+    |                                                         ^^^^^
+605 |         self.dynamic_lossmaker_min_max_hold_exit_ratio = float(
+606 |             os.getenv('DYNAMIC_LOSSMAKER_MIN_MAX_HOLD_EXIT_RATIO', 0.5))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:606:68
+    |
+604 |             os.getenv('DYNAMIC_LOSSMAKER_MIN_PNL_LOSS', 0.003))
+605 |         self.dynamic_lossmaker_min_max_hold_exit_ratio = float(
+606 |             os.getenv('DYNAMIC_LOSSMAKER_MIN_MAX_HOLD_EXIT_RATIO', 0.5))
+    |                                                                    ^^^
+607 |         self.recent_pnl_guard_enabled = _env_bool(
+608 |             'RECENT_PNL_GUARD_ENABLED', True)
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:610:50
+    |
+608 |             'RECENT_PNL_GUARD_ENABLED', True)
+609 |         self.recent_pnl_guard_window = int(
+610 |             os.getenv('RECENT_PNL_GUARD_WINDOW', 120))
+    |                                                  ^^^
+611 |         self.recent_pnl_guard_min_trades = int(
+612 |             os.getenv('RECENT_PNL_GUARD_MIN_TRADES', 60))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:612:54
+    |
+610 |             os.getenv('RECENT_PNL_GUARD_WINDOW', 120))
+611 |         self.recent_pnl_guard_min_trades = int(
+612 |             os.getenv('RECENT_PNL_GUARD_MIN_TRADES', 60))
+    |                                                      ^^
+613 |         self.recent_pnl_guard_min_realized_pnl = float(
+614 |             os.getenv('RECENT_PNL_GUARD_MIN_REALIZED_PNL', 0.0))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:614:60
+    |
+612 |             os.getenv('RECENT_PNL_GUARD_MIN_TRADES', 60))
+613 |         self.recent_pnl_guard_min_realized_pnl = float(
+614 |             os.getenv('RECENT_PNL_GUARD_MIN_REALIZED_PNL', 0.0))
+    |                                                            ^^^
+615 |         self.recent_pnl_guard_max_profit_factor = float(
+616 |             os.getenv('RECENT_PNL_GUARD_MAX_PROFIT_FACTOR', 1.0))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:616:61
+    |
+614 |             os.getenv('RECENT_PNL_GUARD_MIN_REALIZED_PNL', 0.0))
+615 |         self.recent_pnl_guard_max_profit_factor = float(
+616 |             os.getenv('RECENT_PNL_GUARD_MAX_PROFIT_FACTOR', 1.0))
+    |                                                             ^^^
+617 |         # Amount in base currency per trade
+618 |         self.trade_amount = float(os.getenv('TRADE_AMOUNT', 20))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:618:61
+    |
+616 |             os.getenv('RECENT_PNL_GUARD_MAX_PROFIT_FACTOR', 1.0))
+617 |         # Amount in base currency per trade
+618 |         self.trade_amount = float(os.getenv('TRADE_AMOUNT', 20))
+    |                                                             ^^
+619 |         self.portfolio_trade_amount_multipliers = _env_threshold_float_pairs(
+620 |             'PORTFOLIO_TRADE_AMOUNT_MULTIPLIERS',
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:624:69
+    |
+622 |         )
+623 |         # Minimum amount per trade in base currency
+624 |         self.min_trade_amount = float(os.getenv('MIN_TRADE_AMOUNT', 5))
+    |                                                                     ^
+625 |         # Seconds between iterations
+626 |         self.check_interval = int(os.getenv('CHECK_INTERVAL', 100))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:626:63
+    |
+624 |         self.min_trade_amount = float(os.getenv('MIN_TRADE_AMOUNT', 5))
+625 |         # Seconds between iterations
+626 |         self.check_interval = int(os.getenv('CHECK_INTERVAL', 100))
+    |                                                               ^^^
+627 |         self.dry_run = _env_bool('DRY_RUN', True)
+628 |         self.simulate_data = _env_bool('SIMULATE_DATA', False)
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:629:65
+    |
+627 |         self.dry_run = _env_bool('DRY_RUN', True)
+628 |         self.simulate_data = _env_bool('SIMULATE_DATA', False)
+629 |         self.simulation_seed = int(os.getenv('SIMULATION_SEED', 42))
+    |                                                                 ^^
+630 |         self.simulation_regime = _env_str(
+631 |             'SIMULATION_REGIME', 'neutral').lower()
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:633:40
+    |
+631 |             'SIMULATION_REGIME', 'neutral').lower()
+632 |         self.stop_loss_pct = float(
+633 |             os.getenv('STOP_LOSS_PCT', 0.05))  # 5% loss
+    |                                        ^^^^
+634 |         self.take_profit_pct = float(
+635 |             os.getenv('TAKE_PROFIT_PCT', 0.10))  # 10% gain
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:635:42
+    |
+633 |             os.getenv('STOP_LOSS_PCT', 0.05))  # 5% loss
+634 |         self.take_profit_pct = float(
+635 |             os.getenv('TAKE_PROFIT_PCT', 0.10))  # 10% gain
+    |                                          ^^^^
+636 |         self.max_open_trades = int(os.getenv('MAX_OPEN_TRADES', 3))
+637 |         self.portfolio_max_open_trades_tiers = _env_threshold_int_pairs(
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:636:65
+    |
+634 |         self.take_profit_pct = float(
+635 |             os.getenv('TAKE_PROFIT_PCT', 0.10))  # 10% gain
+636 |         self.max_open_trades = int(os.getenv('MAX_OPEN_TRADES', 3))
+    |                                                                 ^
+637 |         self.portfolio_max_open_trades_tiers = _env_threshold_int_pairs(
+638 |             'PORTFOLIO_MAX_OPEN_TRADES_TIERS',
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:642:67
+    |
+640 |         )
+641 |         # Minimum 24h volume in base currency
+642 |         self.min_volume_base = float(os.getenv('MIN_VOLUME_BASE', 100000))
+    |                                                                   ^^^^^^
+643 |         # Number of top coins for analysis
+644 |         self.top_n_for_analysis = int(os.getenv('TOP_N_FOR_ANALYSIS', 10))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:644:71
+    |
+642 |         self.min_volume_base = float(os.getenv('MIN_VOLUME_BASE', 100000))
+643 |         # Number of top coins for analysis
+644 |         self.top_n_for_analysis = int(os.getenv('TOP_N_FOR_ANALYSIS', 10))
+    |                                                                       ^^
+645 |         self.exchange_timeout_ms = int(os.getenv('EXCHANGE_TIMEOUT_MS', 15000))
+646 |         # Split ticker requests into manageable chunks to avoid oversized exchange calls.
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:645:73
+    |
+643 |         # Number of top coins for analysis
+644 |         self.top_n_for_analysis = int(os.getenv('TOP_N_FOR_ANALYSIS', 10))
+645 |         self.exchange_timeout_ms = int(os.getenv('EXCHANGE_TIMEOUT_MS', 15000))
+    |                                                                         ^^^^^
+646 |         # Split ticker requests into manageable chunks to avoid oversized exchange calls.
+647 |         self.ticker_batch_size = int(os.getenv('TICKER_BATCH_SIZE', 80))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:647:69
+    |
+645 |         self.exchange_timeout_ms = int(os.getenv('EXCHANGE_TIMEOUT_MS', 15000))
+646 |         # Split ticker requests into manageable chunks to avoid oversized exchange calls.
+647 |         self.ticker_batch_size = int(os.getenv('TICKER_BATCH_SIZE', 80))
+    |                                                                     ^^
+648 |         self.ticker_fetch_retries = int(os.getenv('TICKER_FETCH_RETRIES', 2))
+649 |         self.ticker_retry_delay_seconds = float(
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:648:75
+    |
+646 |         # Split ticker requests into manageable chunks to avoid oversized exchange calls.
+647 |         self.ticker_batch_size = int(os.getenv('TICKER_BATCH_SIZE', 80))
+648 |         self.ticker_fetch_retries = int(os.getenv('TICKER_FETCH_RETRIES', 2))
+    |                                                                           ^
+649 |         self.ticker_retry_delay_seconds = float(
+650 |             os.getenv('TICKER_RETRY_DELAY_SECONDS', 1.0))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:650:53
+    |
+648 |         self.ticker_fetch_retries = int(os.getenv('TICKER_FETCH_RETRIES', 2))
+649 |         self.ticker_retry_delay_seconds = float(
+650 |             os.getenv('TICKER_RETRY_DELAY_SECONDS', 1.0))
+    |                                                     ^^^
+651 |         self.ohlcv_fetch_retries = int(os.getenv('OHLCV_FETCH_RETRIES', 1))
+652 |         self.ohlcv_retry_delay_seconds = float(
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:651:73
+    |
+649 |         self.ticker_retry_delay_seconds = float(
+650 |             os.getenv('TICKER_RETRY_DELAY_SECONDS', 1.0))
+651 |         self.ohlcv_fetch_retries = int(os.getenv('OHLCV_FETCH_RETRIES', 1))
+    |                                                                         ^
+652 |         self.ohlcv_retry_delay_seconds = float(
+653 |             os.getenv('OHLCV_RETRY_DELAY_SECONDS', 1.0))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:653:52
+    |
+651 |         self.ohlcv_fetch_retries = int(os.getenv('OHLCV_FETCH_RETRIES', 1))
+652 |         self.ohlcv_retry_delay_seconds = float(
+653 |             os.getenv('OHLCV_RETRY_DELAY_SECONDS', 1.0))
+    |                                                    ^^^
+654 |         self.slow_analysis_warning_seconds = float(
+655 |             os.getenv('SLOW_ANALYSIS_WARNING_SECONDS', 8.0))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:655:56
+    |
+653 |             os.getenv('OHLCV_RETRY_DELAY_SECONDS', 1.0))
+654 |         self.slow_analysis_warning_seconds = float(
+655 |             os.getenv('SLOW_ANALYSIS_WARNING_SECONDS', 8.0))
+    |                                                        ^^^
+656 |         self.rsi_period = int(os.getenv('RSI_PERIOD', 14))
+657 |         self.sma_period_short = int(os.getenv('SMA_PERIOD_SHORT', 20))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:656:55
+    |
+654 |         self.slow_analysis_warning_seconds = float(
+655 |             os.getenv('SLOW_ANALYSIS_WARNING_SECONDS', 8.0))
+656 |         self.rsi_period = int(os.getenv('RSI_PERIOD', 14))
+    |                                                       ^^
+657 |         self.sma_period_short = int(os.getenv('SMA_PERIOD_SHORT', 20))
+658 |         self.sma_period_long = int(os.getenv('SMA_PERIOD_LONG', 50))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:657:67
+    |
+655 |             os.getenv('SLOW_ANALYSIS_WARNING_SECONDS', 8.0))
+656 |         self.rsi_period = int(os.getenv('RSI_PERIOD', 14))
+657 |         self.sma_period_short = int(os.getenv('SMA_PERIOD_SHORT', 20))
+    |                                                                   ^^
+658 |         self.sma_period_long = int(os.getenv('SMA_PERIOD_LONG', 50))
+659 |         # Minimum score for entries (HOLD (Up-Trend) also possible)
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:658:65
+    |
+656 |         self.rsi_period = int(os.getenv('RSI_PERIOD', 14))
+657 |         self.sma_period_short = int(os.getenv('SMA_PERIOD_SHORT', 20))
+658 |         self.sma_period_long = int(os.getenv('SMA_PERIOD_LONG', 50))
+    |                                                                 ^^
+659 |         # Minimum score for entries (HOLD (Up-Trend) also possible)
+660 |         self.min_entry_score = int(os.getenv('MIN_ENTRY_SCORE', 60))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:660:65
+    |
+658 |         self.sma_period_long = int(os.getenv('SMA_PERIOD_LONG', 50))
+659 |         # Minimum score for entries (HOLD (Up-Trend) also possible)
+660 |         self.min_entry_score = int(os.getenv('MIN_ENTRY_SCORE', 60))
+    |                                                                 ^^
+661 |         # If no classic BUY recommendation is available, still trade the strongest candidate
+662 |         self.enable_fallback_entry = _env_bool('ENABLE_FALLBACK_ENTRY', True)
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:664:71
+    |
+662 |         self.enable_fallback_entry = _env_bool('ENABLE_FALLBACK_ENTRY', True)
+663 |         # Minimum score for fallback entries only (can be lower than MIN_ENTRY_SCORE)
+664 |         self.fallback_min_score = int(os.getenv('FALLBACK_MIN_SCORE', 45))
+    |                                                                       ^^
+665 |         # RSI limit for fallback entries (avoid overbought assets)
+666 |         self.fallback_max_rsi = float(os.getenv('FALLBACK_MAX_RSI', 68))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:666:69
+    |
+664 |         self.fallback_min_score = int(os.getenv('FALLBACK_MIN_SCORE', 45))
+665 |         # RSI limit for fallback entries (avoid overbought assets)
+666 |         self.fallback_max_rsi = float(os.getenv('FALLBACK_MAX_RSI', 68))
+    |                                                                     ^^
+667 |         self.fallback_max_rsi_by_coin = _env_symbol_float_map(
+668 |             'FALLBACK_MAX_RSI_BY_COIN', 'TRX:72')
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:672:75
+    |
+670 |         self.force_fill_slots = _env_bool('FORCE_FILL_SLOTS', False)
+671 |         # Minimum score for forced slot filling (without RSI limit)
+672 |         self.force_fill_min_score = int(os.getenv('FORCE_FILL_MIN_SCORE', 35))
+    |                                                                           ^^
+673 |         self.defensive_entry_mode_enabled = _env_bool(
+674 |             'DEFENSIVE_ENTRY_MODE_ENABLED', True)
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:679:53
+    |
+677 |             'DOWNTREND_REVERSAL_ENTRY_ENABLED', True)
+678 |         self.downtrend_reversal_max_rsi = float(
+679 |             os.getenv('DOWNTREND_REVERSAL_MAX_RSI', 30.0))
+    |                                                     ^^^^
+680 |         self.downtrend_reversal_max_rsi_by_coin = _env_symbol_float_map(
+681 |             'DOWNTREND_REVERSAL_MAX_RSI_BY_COIN', '')
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:683:59
+    |
+681 |             'DOWNTREND_REVERSAL_MAX_RSI_BY_COIN', '')
+682 |         self.downtrend_reversal_min_buy_proba = float(
+683 |             os.getenv('DOWNTREND_REVERSAL_MIN_BUY_PROBA', 0.20))
+    |                                                           ^^^^
+684 |         self.downtrend_reversal_min_buy_proba_by_coin = _env_symbol_float_map(
+685 |             'DOWNTREND_REVERSAL_MIN_BUY_PROBA_BY_COIN', '')
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:687:60
+    |
+685 |             'DOWNTREND_REVERSAL_MIN_BUY_PROBA_BY_COIN', '')
+686 |         self.downtrend_reversal_max_sell_proba = float(
+687 |             os.getenv('DOWNTREND_REVERSAL_MAX_SELL_PROBA', 0.35))
+    |                                                            ^^^^
+688 |         self.downtrend_reversal_max_sell_proba_by_coin = _env_symbol_float_map(
+689 |             'DOWNTREND_REVERSAL_MAX_SELL_PROBA_BY_COIN', '')
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:691:60
+    |
+689 |             'DOWNTREND_REVERSAL_MAX_SELL_PROBA_BY_COIN', '')
+690 |         self.downtrend_reversal_min_proba_edge = float(
+691 |             os.getenv('DOWNTREND_REVERSAL_MIN_PROBA_EDGE', 0.02))
+    |                                                            ^^^^
+692 |         self.downtrend_reversal_min_proba_edge_by_coin = _env_symbol_float_map(
+693 |             'DOWNTREND_REVERSAL_MIN_PROBA_EDGE_BY_COIN', '')
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:695:55
+    |
+693 |             'DOWNTREND_REVERSAL_MIN_PROBA_EDGE_BY_COIN', '')
+694 |         self.downtrend_reversal_min_ret_1 = float(
+695 |             os.getenv('DOWNTREND_REVERSAL_MIN_RET_1', 0.0))
+    |                                                       ^^^
+696 |         self.downtrend_reversal_min_ret_3 = float(
+697 |             os.getenv('DOWNTREND_REVERSAL_MIN_RET_3', -0.01))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:697:55
+    |
+695 |             os.getenv('DOWNTREND_REVERSAL_MIN_RET_1', 0.0))
+696 |         self.downtrend_reversal_min_ret_3 = float(
+697 |             os.getenv('DOWNTREND_REVERSAL_MIN_RET_3', -0.01))
+    |                                                       ^^^^^
+698 |         self.downtrend_reversal_min_macd_hist = float(
+699 |             os.getenv('DOWNTREND_REVERSAL_MIN_MACD_HIST', 0.0))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:699:59
+    |
+697 |             os.getenv('DOWNTREND_REVERSAL_MIN_RET_3', -0.01))
+698 |         self.downtrend_reversal_min_macd_hist = float(
+699 |             os.getenv('DOWNTREND_REVERSAL_MIN_MACD_HIST', 0.0))
+    |                                                           ^^^
+700 |         self.downtrend_reversal_allowed_coins = {
+701 |             c.strip().upper() for c in os.getenv(
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:707:63
+    |
+705 |             'DOWNTREND_REVERSAL_FAST_EXIT_ENABLED', True)
+706 |         self.downtrend_reversal_fast_exit_seconds = int(
+707 |             os.getenv('DOWNTREND_REVERSAL_FAST_EXIT_SECONDS', 120))
+    |                                                               ^^^
+708 |         self.downtrend_reversal_flat_max_profit_pct = float(
+709 |             os.getenv('DOWNTREND_REVERSAL_FLAT_MAX_PROFIT_PCT', 0.10))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:709:65
+    |
+707 |             os.getenv('DOWNTREND_REVERSAL_FAST_EXIT_SECONDS', 120))
+708 |         self.downtrend_reversal_flat_max_profit_pct = float(
+709 |             os.getenv('DOWNTREND_REVERSAL_FLAT_MAX_PROFIT_PCT', 0.10))
+    |                                                                 ^^^^
+710 |         self.downtrend_reversal_weak_signal_exit_seconds = int(
+711 |             os.getenv('DOWNTREND_REVERSAL_WEAK_SIGNAL_EXIT_SECONDS', 45))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:711:70
+    |
+709 |             os.getenv('DOWNTREND_REVERSAL_FLAT_MAX_PROFIT_PCT', 0.10))
+710 |         self.downtrend_reversal_weak_signal_exit_seconds = int(
+711 |             os.getenv('DOWNTREND_REVERSAL_WEAK_SIGNAL_EXIT_SECONDS', 45))
+    |                                                                      ^^
+712 |         self.downtrend_reversal_weak_signal_max_profit_pct = float(
+713 |             os.getenv('DOWNTREND_REVERSAL_WEAK_SIGNAL_MAX_PROFIT_PCT', 0.02))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:713:72
+    |
+711 |             os.getenv('DOWNTREND_REVERSAL_WEAK_SIGNAL_EXIT_SECONDS', 45))
+712 |         self.downtrend_reversal_weak_signal_max_profit_pct = float(
+713 |             os.getenv('DOWNTREND_REVERSAL_WEAK_SIGNAL_MAX_PROFIT_PCT', 0.02))
+    |                                                                        ^^^^
+714 |         self.downtrend_reversal_max_hold_seconds = int(
+715 |             os.getenv('DOWNTREND_REVERSAL_MAX_HOLD_SECONDS', 240))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:715:62
+    |
+713 |             os.getenv('DOWNTREND_REVERSAL_WEAK_SIGNAL_MAX_PROFIT_PCT', 0.02))
+714 |         self.downtrend_reversal_max_hold_seconds = int(
+715 |             os.getenv('DOWNTREND_REVERSAL_MAX_HOLD_SECONDS', 240))
+    |                                                              ^^^
+716 |         self.uptrend_entry_gate_enabled = _env_bool(
+717 |             'UPTREND_ENTRY_GATE_ENABLED', True)
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:719:48
+    |
+717 |             'UPTREND_ENTRY_GATE_ENABLED', True)
+718 |         self.uptrend_entry_max_rsi = float(
+719 |             os.getenv('UPTREND_ENTRY_MAX_RSI', 72.0))
+    |                                                ^^^^
+720 |         self.uptrend_entry_max_rsi_by_coin = _env_symbol_float_map(
+721 |             'UPTREND_ENTRY_MAX_RSI_BY_COIN', 'XDC:78,TRX:74')
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:723:54
+    |
+721 |             'UPTREND_ENTRY_MAX_RSI_BY_COIN', 'XDC:78,TRX:74')
+722 |         self.uptrend_entry_min_buy_proba = float(
+723 |             os.getenv('UPTREND_ENTRY_MIN_BUY_PROBA', 0.24))
+    |                                                      ^^^^
+724 |         self.uptrend_entry_min_buy_proba_by_coin = _env_symbol_float_map(
+725 |             'UPTREND_ENTRY_MIN_BUY_PROBA_BY_COIN', 'TRX:0.150')
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:727:55
+    |
+725 |             'UPTREND_ENTRY_MIN_BUY_PROBA_BY_COIN', 'TRX:0.150')
+726 |         self.uptrend_entry_max_sell_proba = float(
+727 |             os.getenv('UPTREND_ENTRY_MAX_SELL_PROBA', 0.34))
+    |                                                       ^^^^
+728 |         self.uptrend_entry_max_sell_proba_by_coin = _env_symbol_float_map(
+729 |             'UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN', 'ONDO:0.445')
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:731:55
+    |
+729 |             'UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN', 'ONDO:0.445')
+730 |         self.uptrend_entry_min_proba_edge = float(
+731 |             os.getenv('UPTREND_ENTRY_MIN_PROBA_EDGE', -0.05))
+    |                                                       ^^^^^
+732 |         self.uptrend_entry_min_proba_edge_by_coin = _env_symbol_float_map(
+733 |             'UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN', 'TRX:-0.13,ONDO:-0.055')
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:749:58
+    |
+747 |             'UPTREND_RULES_FAST_EXIT_ENABLED', True)
+748 |         self.uptrend_rules_fast_exit_seconds = int(
+749 |             os.getenv('UPTREND_RULES_FAST_EXIT_SECONDS', 120))
+    |                                                          ^^^
+750 |         self.uptrend_rules_fast_exit_seconds_by_coin = _env_symbol_int_map(
+751 |             'UPTREND_RULES_FAST_EXIT_SECONDS_BY_COIN')
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:753:60
+    |
+751 |             'UPTREND_RULES_FAST_EXIT_SECONDS_BY_COIN')
+752 |         self.uptrend_rules_flat_max_profit_pct = float(
+753 |             os.getenv('UPTREND_RULES_FLAT_MAX_PROFIT_PCT', 0.08))
+    |                                                            ^^^^
+754 |         self.uptrend_rules_flat_max_profit_pct_by_coin = _env_symbol_float_map(
+755 |             'UPTREND_RULES_FLAT_MAX_PROFIT_PCT_BY_COIN')
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:757:57
+    |
+755 |             'UPTREND_RULES_FLAT_MAX_PROFIT_PCT_BY_COIN')
+756 |         self.uptrend_rules_max_hold_seconds = int(
+757 |             os.getenv('UPTREND_RULES_MAX_HOLD_SECONDS', 300))
+    |                                                         ^^^
+758 |         self.uptrend_rules_max_hold_seconds_by_coin = _env_symbol_int_map(
+759 |             'UPTREND_RULES_MAX_HOLD_SECONDS_BY_COIN')
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:763:67
+    |
+761 |         self.entry_momentum_filter_enabled = _env_bool(
+762 |             'ENTRY_MOMENTUM_FILTER_ENABLED', True)
+763 |         self.entry_min_ret_3 = float(os.getenv('ENTRY_MIN_RET_3', -0.01))
+    |                                                                   ^^^^^
+764 |         self.entry_min_ret_3_by_coin = _env_symbol_float_map(
+765 |             'ENTRY_MIN_RET_3_BY_COIN')
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:770:67
+    |
+768 |         self.entry_sharp_pump_filter_enabled = _env_bool(
+769 |             'ENTRY_SHARP_PUMP_FILTER_ENABLED', True)
+770 |         self.entry_max_ret_1 = float(os.getenv('ENTRY_MAX_RET_1', 0.04))
+    |                                                                   ^^^^
+771 |         self.entry_max_ret_3 = float(os.getenv('ENTRY_MAX_RET_3', 0.08))
+772 |         self.reentry_cooldown_seconds = int(
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:771:67
+    |
+769 |             'ENTRY_SHARP_PUMP_FILTER_ENABLED', True)
+770 |         self.entry_max_ret_1 = float(os.getenv('ENTRY_MAX_RET_1', 0.04))
+771 |         self.entry_max_ret_3 = float(os.getenv('ENTRY_MAX_RET_3', 0.08))
+    |                                                                   ^^^^
+772 |         self.reentry_cooldown_seconds = int(
+773 |             os.getenv('REENTRY_COOLDOWN_SECONDS', 900))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:773:51
+    |
+771 |         self.entry_max_ret_3 = float(os.getenv('ENTRY_MAX_RET_3', 0.08))
+772 |         self.reentry_cooldown_seconds = int(
+773 |             os.getenv('REENTRY_COOLDOWN_SECONDS', 900))
+    |                                                   ^^^
+774 |         self.reentry_dynamic_enabled = _env_bool(
+775 |             'REENTRY_DYNAMIC_ENABLED', True)
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:777:55
+    |
+775 |             'REENTRY_DYNAMIC_ENABLED', True)
+776 |         self.reentry_cooldown_min_seconds = int(
+777 |             os.getenv('REENTRY_COOLDOWN_MIN_SECONDS', 300))
+    |                                                       ^^^
+778 |         self.reentry_cooldown_max_seconds = int(
+779 |             os.getenv(
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:785:57
+    |
+783 |         self.reentry_cooldown_max_seconds = max(self.reentry_cooldown_max_seconds, self.reentry_cooldown_min_seconds)
+784 |         self.reentry_volatility_low_atr_pct = float(
+785 |             os.getenv('REENTRY_VOLATILITY_LOW_ATR_PCT', 0.008))
+    |                                                         ^^^^^
+786 |         self.reentry_volatility_high_atr_pct = float(
+787 |             os.getenv('REENTRY_VOLATILITY_HIGH_ATR_PCT', 0.018))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:787:58
+    |
+785 |             os.getenv('REENTRY_VOLATILITY_LOW_ATR_PCT', 0.008))
+786 |         self.reentry_volatility_high_atr_pct = float(
+787 |             os.getenv('REENTRY_VOLATILITY_HIGH_ATR_PCT', 0.018))
+    |                                                          ^^^^^
+788 |         self.reentry_cooldown_mult_low_vol = float(
+789 |             os.getenv('REENTRY_COOLDOWN_MULT_LOW_VOL', 0.70))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:789:56
+    |
+787 |             os.getenv('REENTRY_VOLATILITY_HIGH_ATR_PCT', 0.018))
+788 |         self.reentry_cooldown_mult_low_vol = float(
+789 |             os.getenv('REENTRY_COOLDOWN_MULT_LOW_VOL', 0.70))
+    |                                                        ^^^^
+790 |         self.reentry_cooldown_mult_mid_vol = float(
+791 |             os.getenv('REENTRY_COOLDOWN_MULT_MID_VOL', 1.00))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:791:56
+    |
+789 |             os.getenv('REENTRY_COOLDOWN_MULT_LOW_VOL', 0.70))
+790 |         self.reentry_cooldown_mult_mid_vol = float(
+791 |             os.getenv('REENTRY_COOLDOWN_MULT_MID_VOL', 1.00))
+    |                                                        ^^^^
+792 |         self.reentry_cooldown_mult_high_vol = float(
+793 |             os.getenv('REENTRY_COOLDOWN_MULT_HIGH_VOL', 1.30))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:793:57
+    |
+791 |             os.getenv('REENTRY_COOLDOWN_MULT_MID_VOL', 1.00))
+792 |         self.reentry_cooldown_mult_high_vol = float(
+793 |             os.getenv('REENTRY_COOLDOWN_MULT_HIGH_VOL', 1.30))
+    |                                                         ^^^^
+794 |         # Enables additional exit signals from market analysis
+795 |         self.enable_signal_exits = _env_bool('ENABLE_SIGNAL_EXITS', True)
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:799:63
+    |
+797 |         self.exit_on_downtrend = _env_bool('EXIT_ON_DOWNTREND', True)
+798 |         # ATR multipliers for stop-loss and take-profit
+799 |         self.atr_stop_mult = float(os.getenv('ATR_STOP_MULT', 1.0))
+    |                                                               ^^^
+800 |         self.atr_tp_mult = float(os.getenv('ATR_TP_MULT', 2.0))
+801 |         self.partial_take_profit_enabled = _env_bool(
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:800:59
+    |
+798 |         # ATR multipliers for stop-loss and take-profit
+799 |         self.atr_stop_mult = float(os.getenv('ATR_STOP_MULT', 1.0))
+800 |         self.atr_tp_mult = float(os.getenv('ATR_TP_MULT', 2.0))
+    |                                                           ^^^
+801 |         self.partial_take_profit_enabled = _env_bool(
+802 |             'PARTIAL_TAKE_PROFIT_ENABLED', True)
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:804:55
+    |
+802 |             'PARTIAL_TAKE_PROFIT_ENABLED', True)
+803 |         self.partial_take_profit_atr_mult = float(
+804 |             os.getenv('PARTIAL_TAKE_PROFIT_ATR_MULT', 1.0))
+    |                                                       ^^^
+805 |         self.partial_take_profit_fraction = float(
+806 |             os.getenv('PARTIAL_TAKE_PROFIT_FRACTION', 0.5))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:806:55
+    |
+804 |             os.getenv('PARTIAL_TAKE_PROFIT_ATR_MULT', 1.0))
+805 |         self.partial_take_profit_fraction = float(
+806 |             os.getenv('PARTIAL_TAKE_PROFIT_FRACTION', 0.5))
+    |                                                       ^^^
+807 |         self.partial_take_profit_remainder_max_hold_seconds = int(
+808 |             os.getenv('PARTIAL_TAKE_PROFIT_REMAINDER_MAX_HOLD_SECONDS', 300))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:808:73
+    |
+806 |             os.getenv('PARTIAL_TAKE_PROFIT_FRACTION', 0.5))
+807 |         self.partial_take_profit_remainder_max_hold_seconds = int(
+808 |             os.getenv('PARTIAL_TAKE_PROFIT_REMAINDER_MAX_HOLD_SECONDS', 300))
+    |                                                                         ^^^
+809 |         self.partial_take_profit_exit_on_weak_signal = _env_bool(
+810 |             'PARTIAL_TAKE_PROFIT_EXIT_ON_WEAK_SIGNAL', True)
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:813:49
+    |
+811 |         self.trailing_stop_enabled = _env_bool('TRAILING_STOP_ENABLED', True)
+812 |         self.trailing_stop_atr_mult = float(
+813 |             os.getenv('TRAILING_STOP_ATR_MULT', 1.0))
+    |                                                 ^^^
+814 |         self.break_even_enabled = _env_bool('BREAK_EVEN_ENABLED', True)
+815 |         self.break_even_trigger_pct = float(
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:816:49
+    |
+814 |         self.break_even_enabled = _env_bool('BREAK_EVEN_ENABLED', True)
+815 |         self.break_even_trigger_pct = float(
+816 |             os.getenv('BREAK_EVEN_TRIGGER_PCT', 1.0))
+    |                                                 ^^^
+817 |         self.break_even_buffer_pct = float(
+818 |             os.getenv('BREAK_EVEN_BUFFER_PCT', 0.1))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:818:48
+    |
+816 |             os.getenv('BREAK_EVEN_TRIGGER_PCT', 1.0))
+817 |         self.break_even_buffer_pct = float(
+818 |             os.getenv('BREAK_EVEN_BUFFER_PCT', 0.1))
+    |                                                ^^^
+819 |         # Maximum hold time in seconds (0 = disabled)
+820 |         self.max_hold_seconds = int(os.getenv('MAX_HOLD_SECONDS', 120))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:820:67
+    |
+818 |             os.getenv('BREAK_EVEN_BUFFER_PCT', 0.1))
+819 |         # Maximum hold time in seconds (0 = disabled)
+820 |         self.max_hold_seconds = int(os.getenv('MAX_HOLD_SECONDS', 120))
+    |                                                                   ^^^
+821 |         self.coin_max_hold_seconds = _env_symbol_int_map(
+822 |             'COIN_MAX_HOLD_SECONDS', 'LINK:420,SUI:420,ONDO:420')
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:826:69
+    |
+824 |         self.allow_partial_trades = _env_bool('ALLOW_PARTIAL_TRADES', True)
+825 |         # Fraction of cash kept in reserve (safety buffer)
+826 |         self.cash_reserve_pct = float(os.getenv('CASH_RESERVE_PCT', 0.02))
+    |                                                                     ^^^^
+827 |         # Additional data for calculations
+828 |         self.ohlcv_limit = max(self.rsi_period, self.sma_period_long) + 5
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:836:71
+    |
+834 |             'MODEL_PATH', './model/fine_tuned_trading_model')
+835 |         # Minimum confidence for ML signals (0.0 - 1.0)
+836 |         self.ml_min_confidence = float(os.getenv('ML_MIN_CONFIDENCE', 0.5))
+    |                                                                       ^^^
+837 |         # Optional CatBoost model for fast tabular signals
+838 |         self.use_tabular_model = _env_bool('USE_TABULAR_MODEL', False)
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:844:49
+    |
+842 |             'TABULAR_RESEARCH_SIGNAL_PATH', './data/research_signal_latest.json')
+843 |         self.tabular_min_confidence = float(
+844 |             os.getenv('TABULAR_MIN_CONFIDENCE', 0.45))
+    |                                                 ^^^^
+845 |         self.tabular_buy_min_confidence = float(
+846 |             os.getenv('TABULAR_BUY_MIN_CONFIDENCE', str(self.tabular_min_confidence)))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:852:58
+    |
+850 |             'TABULAR_SOURCE_GATE_ENABLED', False)
+851 |         self.tabular_override_min_confidence = float(
+852 |             os.getenv('TABULAR_OVERRIDE_MIN_CONFIDENCE', 0.60))
+    |                                                          ^^^^
+853 |         self.tabular_override_margin = float(
+854 |             os.getenv('TABULAR_OVERRIDE_MARGIN', 0.15))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:854:50
+    |
+852 |             os.getenv('TABULAR_OVERRIDE_MIN_CONFIDENCE', 0.60))
+853 |         self.tabular_override_margin = float(
+854 |             os.getenv('TABULAR_OVERRIDE_MARGIN', 0.15))
+    |                                                  ^^^^
+855 |         # Optional safety filter: block new entries when CatBoost signals a strong sell
+856 |         self.tabular_block_on_sell = _env_bool('TABULAR_BLOCK_ON_SELL', False)
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:858:55
+    |
+856 |         self.tabular_block_on_sell = _env_bool('TABULAR_BLOCK_ON_SELL', False)
+857 |         self.tabular_sell_block_min_proba = float(
+858 |             os.getenv('TABULAR_SELL_BLOCK_MIN_PROBA', 0.50))
+    |                                                       ^^^^
+859 |         # Optional: automatic recommendation/application of confidence threshold from journal data
+860 |         self.auto_tune_tabular_confidence = _env_bool(
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:863:52
+    |
+861 |             'AUTO_TUNE_TABULAR_CONFIDENCE', False)
+862 |         self.auto_tune_lookback_trades = int(
+863 |             os.getenv('AUTO_TUNE_LOOKBACK_TRADES', 200))
+    |                                                    ^^^
+864 |         self.auto_tune_threshold_min = float(
+865 |             os.getenv('AUTO_TUNE_THRESHOLD_MIN', 0.45))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:865:50
+    |
+863 |             os.getenv('AUTO_TUNE_LOOKBACK_TRADES', 200))
+864 |         self.auto_tune_threshold_min = float(
+865 |             os.getenv('AUTO_TUNE_THRESHOLD_MIN', 0.45))
+    |                                                  ^^^^
+866 |         self.auto_tune_threshold_max = float(
+867 |             os.getenv('AUTO_TUNE_THRESHOLD_MAX', 0.90))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:867:50
+    |
+865 |             os.getenv('AUTO_TUNE_THRESHOLD_MIN', 0.45))
+866 |         self.auto_tune_threshold_max = float(
+867 |             os.getenv('AUTO_TUNE_THRESHOLD_MAX', 0.90))
+    |                                                  ^^^^
+868 |         self.auto_tune_threshold_step = float(
+869 |             os.getenv('AUTO_TUNE_THRESHOLD_STEP', 0.02))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:869:51
+    |
+867 |             os.getenv('AUTO_TUNE_THRESHOLD_MAX', 0.90))
+868 |         self.auto_tune_threshold_step = float(
+869 |             os.getenv('AUTO_TUNE_THRESHOLD_STEP', 0.02))
+    |                                                   ^^^^
+870 |         self.auto_tune_min_trades = int(os.getenv('AUTO_TUNE_MIN_TRADES', 10))
+871 |         # Safety brake: maximum threshold adjustment per bot start
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:870:75
+    |
+868 |         self.auto_tune_threshold_step = float(
+869 |             os.getenv('AUTO_TUNE_THRESHOLD_STEP', 0.02))
+870 |         self.auto_tune_min_trades = int(os.getenv('AUTO_TUNE_MIN_TRADES', 10))
+    |                                                                           ^^
+871 |         # Safety brake: maximum threshold adjustment per bot start
+872 |         self.auto_tune_max_delta = float(
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:873:46
+    |
+871 |         # Safety brake: maximum threshold adjustment per bot start
+872 |         self.auto_tune_max_delta = float(
+873 |             os.getenv('AUTO_TUNE_MAX_DELTA', 0.02))
+    |                                              ^^^^
+874 |         # Cooldown between auto-tune adjustments (in minutes)
+875 |         self.auto_tune_cooldown_minutes = int(
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:876:53
+    |
+874 |         # Cooldown between auto-tune adjustments (in minutes)
+875 |         self.auto_tune_cooldown_minutes = int(
+876 |             os.getenv('AUTO_TUNE_COOLDOWN_MINUTES', 0))
+    |                                                     ^
+877 |         self.auto_tune_state_file = os.getenv(
+878 |             'AUTO_TUNE_STATE_FILE', 'auto_tune_state.json')
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:885:51
+    |
+883 |             'PERFORMANCE_LOG_FILE', 'trade_journal.csv')
+884 |         self.performance_report_every = int(
+885 |             os.getenv('PERFORMANCE_REPORT_EVERY', 1))
+    |                                                   ^
+886 |         self.analytics_db_enabled = _env_bool_any(
+887 |             ['ANALYTICS_DB_ENABLED', 'POSTGRES_ENABLED'], False)
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:909:73
+    |
+907 |             _env_str_any(['ANALYTICS_DB_SNAPSHOT_EVERY', 'POSTGRES_SNAPSHOT_EVERY'], '1'))
+908 |         # Hard risk guardrails (0 = disabled)
+909 |         self.max_daily_loss_pct = float(os.getenv('MAX_DAILY_LOSS_PCT', 0))
+    |                                                                         ^
+910 |         self.max_buys_per_hour = int(os.getenv('MAX_BUYS_PER_HOUR', 0))
+911 |         self.loss_streak_pause_threshold = int(
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:910:69
+    |
+908 |         # Hard risk guardrails (0 = disabled)
+909 |         self.max_daily_loss_pct = float(os.getenv('MAX_DAILY_LOSS_PCT', 0))
+910 |         self.max_buys_per_hour = int(os.getenv('MAX_BUYS_PER_HOUR', 0))
+    |                                                                     ^
+911 |         self.loss_streak_pause_threshold = int(
+912 |             os.getenv('LOSS_STREAK_PAUSE_THRESHOLD', 0))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:912:54
+    |
+910 |         self.max_buys_per_hour = int(os.getenv('MAX_BUYS_PER_HOUR', 0))
+911 |         self.loss_streak_pause_threshold = int(
+912 |             os.getenv('LOSS_STREAK_PAUSE_THRESHOLD', 0))
+    |                                                      ^
+913 |         self.loss_streak_pause_seconds = int(
+914 |             os.getenv('LOSS_STREAK_PAUSE_SECONDS', 0))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:914:52
+    |
+912 |             os.getenv('LOSS_STREAK_PAUSE_THRESHOLD', 0))
+913 |         self.loss_streak_pause_seconds = int(
+914 |             os.getenv('LOSS_STREAK_PAUSE_SECONDS', 0))
+    |                                                    ^
+915 |
+916 |         # Optional external AI co-pilot (budget-limited, disabled by default)
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:923:54
+    |
+921 |         self.ai_copilot_model = _env_str('AI_COPILOT_MODEL', 'gpt-5.4-nano')
+922 |         self.ai_copilot_interval_minutes = int(
+923 |             os.getenv('AI_COPILOT_INTERVAL_MINUTES', 62))
+    |                                                      ^^
+924 |         self.ai_copilot_state_file = os.getenv(
+925 |             'AI_COPILOT_STATE_FILE', 'ai_copilot_state.json')
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:928:55
+    |
+926 |         self.ai_copilot_shadow_mode = _env_bool('AI_COPILOT_SHADOW_MODE', True)
+927 |         self.ai_copilot_max_calls_per_day = int(
+928 |             os.getenv('AI_COPILOT_MAX_CALLS_PER_DAY', 24))
+    |                                                       ^^
+929 |         self.ai_copilot_max_calls_per_month = int(
+930 |             os.getenv('AI_COPILOT_MAX_CALLS_PER_MONTH', 720))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:930:57
+    |
+928 |             os.getenv('AI_COPILOT_MAX_CALLS_PER_DAY', 24))
+929 |         self.ai_copilot_max_calls_per_month = int(
+930 |             os.getenv('AI_COPILOT_MAX_CALLS_PER_MONTH', 720))
+    |                                                         ^^^
+931 |         self.ai_copilot_max_budget_usd_per_month = float(
+932 |             os.getenv('AI_COPILOT_MAX_BUDGET_USD_PER_MONTH', 5.0))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:932:62
+    |
+930 |             os.getenv('AI_COPILOT_MAX_CALLS_PER_MONTH', 720))
+931 |         self.ai_copilot_max_budget_usd_per_month = float(
+932 |             os.getenv('AI_COPILOT_MAX_BUDGET_USD_PER_MONTH', 5.0))
+    |                                                              ^^^
+933 |         self.ai_copilot_max_output_tokens = int(
+934 |             os.getenv('AI_COPILOT_MAX_OUTPUT_TOKENS', 300))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:934:55
+    |
+932 |             os.getenv('AI_COPILOT_MAX_BUDGET_USD_PER_MONTH', 5.0))
+933 |         self.ai_copilot_max_output_tokens = int(
+934 |             os.getenv('AI_COPILOT_MAX_OUTPUT_TOKENS', 300))
+    |                                                       ^^^
+935 |         self.ai_copilot_temperature = float(
+936 |             os.getenv('AI_COPILOT_TEMPERATURE', 0.1))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:936:49
+    |
+934 |             os.getenv('AI_COPILOT_MAX_OUTPUT_TOKENS', 300))
+935 |         self.ai_copilot_temperature = float(
+936 |             os.getenv('AI_COPILOT_TEMPERATURE', 0.1))
+    |                                                 ^^^
+937 |         self.ai_copilot_max_consecutive_errors = int(
+938 |             os.getenv('AI_COPILOT_MAX_CONSECUTIVE_ERRORS', 3))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:938:60
+    |
+936 |             os.getenv('AI_COPILOT_TEMPERATURE', 0.1))
+937 |         self.ai_copilot_max_consecutive_errors = int(
+938 |             os.getenv('AI_COPILOT_MAX_CONSECUTIVE_ERRORS', 3))
+    |                                                            ^
+939 |         self.ai_copilot_cost_input_per_mtok = float(
+940 |             os.getenv('AI_COPILOT_COST_INPUT_PER_MTOK', 0.2))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:940:57
+    |
+938 |             os.getenv('AI_COPILOT_MAX_CONSECUTIVE_ERRORS', 3))
+939 |         self.ai_copilot_cost_input_per_mtok = float(
+940 |             os.getenv('AI_COPILOT_COST_INPUT_PER_MTOK', 0.2))
+    |                                                         ^^^
+941 |         self.ai_copilot_cost_output_per_mtok = float(
+942 |             os.getenv('AI_COPILOT_COST_OUTPUT_PER_MTOK', 1.25))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:942:58
+    |
+940 |             os.getenv('AI_COPILOT_COST_INPUT_PER_MTOK', 0.2))
+941 |         self.ai_copilot_cost_output_per_mtok = float(
+942 |             os.getenv('AI_COPILOT_COST_OUTPUT_PER_MTOK', 1.25))
+    |                                                          ^^^^
+943 |         self.ai_copilot_hailo_gate_enabled = _env_bool(
+944 |             'AI_COPILOT_HAILO_GATE_ENABLED', False)
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:958:57
+    |
+956 |             os.getenv('AI_COPILOT_HAILO_MAX_LINES_SCAN', '400'))
+957 |         self.ai_copilot_min_entry_score_min = int(
+958 |             os.getenv('AI_COPILOT_MIN_ENTRY_SCORE_MIN', 55))
+    |                                                         ^^
+959 |         self.ai_copilot_min_entry_score_max = int(
+960 |             os.getenv('AI_COPILOT_MIN_ENTRY_SCORE_MAX', 70))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:960:57
+    |
+958 |             os.getenv('AI_COPILOT_MIN_ENTRY_SCORE_MIN', 55))
+959 |         self.ai_copilot_min_entry_score_max = int(
+960 |             os.getenv('AI_COPILOT_MIN_ENTRY_SCORE_MAX', 70))
+    |                                                         ^^
+961 |         self.ai_copilot_reentry_cooldown_min = int(
+962 |             os.getenv('AI_COPILOT_REENTRY_COOLDOWN_MIN', 300))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:962:58
+    |
+960 |             os.getenv('AI_COPILOT_MIN_ENTRY_SCORE_MAX', 70))
+961 |         self.ai_copilot_reentry_cooldown_min = int(
+962 |             os.getenv('AI_COPILOT_REENTRY_COOLDOWN_MIN', 300))
+    |                                                          ^^^
+963 |         self.ai_copilot_reentry_cooldown_max = int(
+964 |             os.getenv('AI_COPILOT_REENTRY_COOLDOWN_MAX', 1200))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:964:58
+    |
+962 |             os.getenv('AI_COPILOT_REENTRY_COOLDOWN_MIN', 300))
+963 |         self.ai_copilot_reentry_cooldown_max = int(
+964 |             os.getenv('AI_COPILOT_REENTRY_COOLDOWN_MAX', 1200))
+    |                                                          ^^^^
+965 |         self.ai_copilot_tabular_buy_conf_min = float(
+966 |             os.getenv('AI_COPILOT_TABULAR_BUY_CONF_MIN', 0.50))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:966:58
+    |
+964 |             os.getenv('AI_COPILOT_REENTRY_COOLDOWN_MAX', 1200))
+965 |         self.ai_copilot_tabular_buy_conf_min = float(
+966 |             os.getenv('AI_COPILOT_TABULAR_BUY_CONF_MIN', 0.50))
+    |                                                          ^^^^
+967 |         self.ai_copilot_tabular_buy_conf_max = float(
+968 |             os.getenv('AI_COPILOT_TABULAR_BUY_CONF_MAX', 0.65))
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:968:58
+    |
+966 |             os.getenv('AI_COPILOT_TABULAR_BUY_CONF_MIN', 0.50))
+967 |         self.ai_copilot_tabular_buy_conf_max = float(
+968 |             os.getenv('AI_COPILOT_TABULAR_BUY_CONF_MAX', 0.65))
+    |                                                          ^^^^
+969 |         self.ai_copilot_benchmark_enabled = _env_bool(
+970 |             'AI_COPILOT_BENCHMARK_ENABLED', False)
+    |
+
+PLW1508 Invalid type for environment variable default; expected `str` or `None`
+   --> src/trading_bot.py:982:72
+    |
+980 |             os.getenv('AI_COPILOT_BENCHMARK_MAX_CALLS_PER_MONTH', str(self.ai_copilot_max_calls_per_month)))
+981 |         self.ai_copilot_benchmark_max_budget_usd_per_month = float(
+982 |             os.getenv('AI_COPILOT_BENCHMARK_MAX_BUDGET_USD_PER_MONTH', 1.0))
+    |                                                                        ^^^
+983 |         self.ai_copilot_benchmark_max_output_tokens = int(
+984 |             os.getenv('AI_COPILOT_BENCHMARK_MAX_OUTPUT_TOKENS', str(self.ai_copilot_max_output_tokens)))
+    |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1047:16
+     |
+1045 |             if self._psycopg is None:
+1046 |                 self._psycopg = importlib.import_module('psycopg')
+1047 |         except Exception as exc:
+     |                ^^^^^^^^^
+1048 |             if not self._disabled_reason_logged:
+1049 |                 logger.warning(
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1067:16
+     |
+1065 |             self._ensure_schema()
+1066 |             return True
+1067 |         except Exception as exc:
+     |                ^^^^^^^^^
+1068 |             if not self._disabled_reason_logged:
+1069 |                 logger.warning(
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1185:16
+     |
+1183 |                     ),
+1184 |                 )
+1185 |         except Exception as exc:
+     |                ^^^^^^^^^
+1186 |             logger.warning(
+1187 |                 'Failed to write trade event to analytics DB: %s', exc)
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1240:16
+     |
+1238 |                     ),
+1239 |                 )
+1240 |         except Exception as exc:
+     |                ^^^^^^^^^
+1241 |             logger.warning(
+1242 |                 'Failed to write portfolio snapshot to analytics DB: %s', exc)
+     |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+    --> src/trading_bot.py:1252:9
+     |
+1250 |           try:
+1251 |               conn.close()
+1252 | /         except Exception:
+1253 | |             pass
+     | |________________^
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1252:16
+     |
+1250 |         try:
+1251 |             conn.close()
+1252 |         except Exception:
+     |                ^^^^^^^^^
+1253 |             pass
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1306:20
+     |
+1304 |                 logger.info(
+1305 |                     f"🤖 ML model loaded from '{self.config.model_path}'.")
+1306 |             except Exception as e:
+     |                    ^^^^^^^^^
+1307 |                 logger.warning(
+1308 |                     f"ML model could not be loaded: {e}. Using rule-based analysis only.")
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1320:20
+     |
+1318 |                 logger.info(
+1319 |                     f"📊 CatBoost model loaded from '{self.config.tabular_model_path}'.")
+1320 |             except Exception as e:
+     |                    ^^^^^^^^^
+1321 |                 logger.warning(
+1322 |                     f"CatBoost model could not be loaded: {e}.")
+     |
+
+DTZ005 `datetime.datetime.now()` called without a `tz` argument
+    --> src/trading_bot.py:1347:42
+     |
+1345 |                 writer = csv.writer(f)
+1346 |                 writer.writerow([
+1347 |                     row.get('timestamp', datetime.now().isoformat()),
+     |                                          ^^^^^^^^^^^^^^
+1348 |                     row.get('iteration', self.iteration),
+1349 |                     row.get('coin', ''),
+     |
+help: Pass a `datetime.timezone` object to the `tz` parameter
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1397:16
+     |
+1395 |         try:
+1396 |             df = pd.read_csv(path)
+1397 |         except Exception as e:
+     |                ^^^^^^^^^
+1398 |             logger.warning(
+1399 |                 f"Journal could not be read for auto-tuning: {e}")
+     |
+
+FURB192 Prefer `max` over `sorted()` to compute the maximum value in a sequence
+    --> src/trading_bot.py:1441:16
+     |
+1440 |           # Primarily highest total PnL, secondarily higher AvgPnL, then more trades
+1441 |           best = sorted(candidates, key=lambda x: (
+     |  ________________^
+1442 | |             x[2], x[3], x[1]), reverse=True)[0]
+     | |_______________________________________________^
+1443 |           logger.info(
+1444 |               f"🔧 Auto-Tune Threshold Recommendation: {best[0]:.2f} "
+     |
+help: Replace with `max`
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1583:16
+     |
+1581 |         try:
+1582 |             return pd.read_csv(path)
+1583 |         except Exception as e:
+     |                ^^^^^^^^^
+1584 |             logger.warning(
+1585 |                 f"Journal could not be read: {e}")
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1595:16
+     |
+1593 |             with open(path, 'r', encoding='utf-8') as f:
+1594 |                 return json.load(f)
+1595 |         except Exception:
+     |                ^^^^^^^^^
+1596 |             return {}
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1605:16
+     |
+1603 |             with open(path, 'w', encoding='utf-8') as f:
+1604 |                 json.dump(state, f, ensure_ascii=True, indent=2)
+1605 |         except Exception as e:
+     |                ^^^^^^^^^
+1606 |             logger.warning(
+1607 |                 f"Auto-tune state could not be saved: {e}")
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1621:16
+     |
+1619 |             if last_dt.tzinfo is None:
+1620 |                 last_dt = last_dt.replace(tzinfo=UTC)
+1621 |         except Exception:
+     |                ^^^^^^^^^
+1622 |             return 0.0
+1623 |         elapsed_minutes = (datetime.now(UTC) -
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1687:20
+     |
+1685 |                         'Recovered AI co-pilot state from backup file')
+1686 |                 return state
+1687 |             except Exception as exc:
+     |                    ^^^^^^^^^
+1688 |                 last_error = exc
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1705:24
+     |
+1703 |                 try:
+1704 |                     shutil.copyfile(path, backup_path)
+1705 |                 except Exception as exc:
+     |                        ^^^^^^^^^
+1706 |                     logger.warning(
+1707 |                         f'AI co-pilot state backup could not be updated: {exc}')
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1711:16
+     |
+1709 |                 json.dump(state, f, ensure_ascii=True, indent=2)
+1710 |             os.replace(tmp_path, path)
+1711 |         except Exception as e:
+     |                ^^^^^^^^^
+1712 |             try:
+1713 |                 if os.path.exists(tmp_path):
+     |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+    --> src/trading_bot.py:1796:13
+     |
+1794 |                   if elapsed_min < interval_minutes:
+1795 |                       return False, 'interval_not_reached'
+1796 | /             except Exception:
+1797 | |                 pass
+     | |____________________^
+1798 |           return True, 'ok'
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1796:20
+     |
+1794 |                 if elapsed_min < interval_minutes:
+1795 |                     return False, 'interval_not_reached'
+1796 |             except Exception:
+     |                    ^^^^^^^^^
+1797 |                 pass
+1798 |         return True, 'ok'
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1808:16
+     |
+1806 |         try:
+1807 |             parsed = datetime.fromisoformat(normalized)
+1808 |         except Exception:
+     |                ^^^^^^^^^
+1809 |             return None
+1810 |         if parsed.tzinfo is None:
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1824:16
+     |
+1822 |             with open(path, 'r', encoding='utf-8') as f:
+1823 |                 buffered = list(deque(f, maxlen=max_lines))
+1824 |         except Exception as exc:
+     |                ^^^^^^^^^
+1825 |             logger.warning(
+1826 |                 'Could not read Hailo alerts file %s: %s', path, exc)
+     |
+
+S112 `try`-`except`-`continue` detected, consider logging the exception
+    --> src/trading_bot.py:1842:13
+     |
+1840 |               try:
+1841 |                   payload = json.loads(line)
+1842 | /             except Exception:
+1843 | |                 continue
+     | |________________________^
+1844 |
+1845 |               timestamp = self._parse_iso8601_utc(payload.get('timestamp'))
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1842:20
+     |
+1840 |             try:
+1841 |                 payload = json.loads(line)
+1842 |             except Exception:
+     |                    ^^^^^^^^^
+1843 |                 continue
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1856:20
+     |
+1854 |             try:
+1855 |                 score = float(payload.get('hailo_score', 0.0))
+1856 |             except Exception:
+     |                    ^^^^^^^^^
+1857 |                 score = 0.0
+1858 |             try:
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:1860:20
+     |
+1858 |             try:
+1859 |                 confidence = float(payload.get('confidence', 0.0))
+1860 |             except Exception:
+     |                    ^^^^^^^^^
+1861 |                 confidence = 0.0
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:2018:20
+     |
+2016 |                                     for coin, data in reversed(ordered_coins[-3:])
+2017 |                                 ]
+2018 |             except Exception:
+     |                    ^^^^^^^^^
+2019 |                 trades_recent = []
+2020 |                 recent_trade_summary = {
+     |
+
+C414 Unnecessary `list()` call within `sorted()`
+    --> src/trading_bot.py:2067:37
+     |
+2065 |                 'cash': float(self.portfolio.cash),
+2066 |                 'open_trades_count': len(self.portfolio.open_trades),
+2067 |                 'open_trade_coins': sorted(list(self.portfolio.open_trades.keys())),
+     |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2068 |                 'holding_coins': sorted(list(self.portfolio.holdings.keys())),
+2069 |             },
+     |
+help: Remove the inner `list()` call
+
+C414 Unnecessary `list()` call within `sorted()`
+    --> src/trading_bot.py:2068:34
+     |
+2066 |                 'open_trades_count': len(self.portfolio.open_trades),
+2067 |                 'open_trade_coins': sorted(list(self.portfolio.open_trades.keys())),
+2068 |                 'holding_coins': sorted(list(self.portfolio.holdings.keys())),
+     |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2069 |             },
+2070 |             'recent_trade_summary': recent_trade_summary,
+     |
+help: Remove the inner `list()` call
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:2101:16
+     |
+2099 |             if isinstance(parsed, dict):
+2100 |                 return parsed
+2101 |         except Exception:
+     |                ^^^^^^^^^
+2102 |             return None
+2103 |         return None
+     |
+
+RUF046 Value being cast to `int` is already an integer
+    --> src/trading_bot.py:2161:21
+     |
+2159 |         if 'min_entry_score' in raw_changes:
+2160 |             try:
+2161 |                 v = int(round(float(raw_changes['min_entry_score'])))
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2162 |                 v = min(max(v, self.config.ai_copilot_min_entry_score_min),
+2163 |                         self.config.ai_copilot_min_entry_score_max)
+     |
+help: Remove unnecessary `int` call
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+    --> src/trading_bot.py:2165:13
+     |
+2163 |                           self.config.ai_copilot_min_entry_score_max)
+2164 |                   out['min_entry_score'] = v
+2165 | /             except Exception:
+2166 | |                 pass
+     | |____________________^
+2167 |
+2168 |           if 'reentry_cooldown_seconds' in raw_changes:
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:2165:20
+     |
+2163 |                         self.config.ai_copilot_min_entry_score_max)
+2164 |                 out['min_entry_score'] = v
+2165 |             except Exception:
+     |                    ^^^^^^^^^
+2166 |                 pass
+     |
+
+RUF046 Value being cast to `int` is already an integer
+    --> src/trading_bot.py:2170:21
+     |
+2168 |         if 'reentry_cooldown_seconds' in raw_changes:
+2169 |             try:
+2170 |                 v = int(round(float(raw_changes['reentry_cooldown_seconds'])))
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2171 |                 v = min(max(v, self.config.ai_copilot_reentry_cooldown_min),
+2172 |                         self.config.ai_copilot_reentry_cooldown_max)
+     |
+help: Remove unnecessary `int` call
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+    --> src/trading_bot.py:2174:13
+     |
+2172 |                           self.config.ai_copilot_reentry_cooldown_max)
+2173 |                   out['reentry_cooldown_seconds'] = v
+2174 | /             except Exception:
+2175 | |                 pass
+     | |____________________^
+2176 |
+2177 |           if 'tabular_buy_min_confidence' in raw_changes:
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:2174:20
+     |
+2172 |                         self.config.ai_copilot_reentry_cooldown_max)
+2173 |                 out['reentry_cooldown_seconds'] = v
+2174 |             except Exception:
+     |                    ^^^^^^^^^
+2175 |                 pass
+     |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+    --> src/trading_bot.py:2183:13
+     |
+2181 |                           self.config.ai_copilot_tabular_buy_conf_max)
+2182 |                   out['tabular_buy_min_confidence'] = round(v, 4)
+2183 | /             except Exception:
+2184 | |                 pass
+     | |____________________^
+2185 |
+2186 |           return out
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:2183:20
+     |
+2181 |                         self.config.ai_copilot_tabular_buy_conf_max)
+2182 |                 out['tabular_buy_min_confidence'] = round(v, 4)
+2183 |             except Exception:
+     |                    ^^^^^^^^^
+2184 |                 pass
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:2369:16
+     |
+2367 |             self._write_ai_copilot_state(state, state_file)
+2368 |
+2369 |         except Exception as e:
+     |                ^^^^^^^^^
+2370 |             state['last_attempt_at'] = datetime.now(UTC).isoformat()
+2371 |             state['consecutive_errors'] = int(
+     |
+
+DTZ005 `datetime.datetime.now()` called without a `tz` argument
+    --> src/trading_bot.py:2435:13
+     |
+2433 |             100 if buy_price > 0 else 0.0
+2434 |         hold_seconds = (
+2435 |             datetime.now() - entry_trade.get('timestamp', datetime.now())).total_seconds()
+     |             ^^^^^^^^^^^^^^
+2436 |
+2437 |         self.performance['sells'] += 1
+     |
+help: Pass a `datetime.timezone` object to the `tz` parameter
+
+DTZ005 `datetime.datetime.now()` called without a `tz` argument
+    --> src/trading_bot.py:2435:59
+     |
+2433 |             100 if buy_price > 0 else 0.0
+2434 |         hold_seconds = (
+2435 |             datetime.now() - entry_trade.get('timestamp', datetime.now())).total_seconds()
+     |                                                           ^^^^^^^^^^^^^^
+2436 |
+2437 |         self.performance['sells'] += 1
+     |
+help: Pass a `datetime.timezone` object to the `tz` parameter
+
+RUF046 Value being cast to `int` is already an integer
+    --> src/trading_bot.py:2512:21
+     |
+2510 |             regime = 'mid_vol'
+2511 |
+2512 |         effective = int(round(base * mult))
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^
+2513 |         effective = min(max(effective, minimum), maximum)
+2514 |         reason = f'{regime},atr_pct={atr_pct:.4f},mult={mult:.2f}'
+     |
+help: Remove unnecessary `int` call
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:2622:16
+     |
+2620 |             self.config.simulate_data = True
+2621 |             return None
+2622 |         except Exception as e:
+     |                ^^^^^^^^^
+2623 |             logger.error(
+2624 |                 f"Unexpected error during exchange initialisation: {e}. Enabling simulation mode.")
+     |
+
+C414 Unnecessary `list()` call within `sorted()`
+    --> src/trading_bot.py:2639:30
+     |
+2637 |                     self.all_coins.append(market['base'])
+2638 |             # Unique coin list
+2639 |             self.all_coins = sorted(list(set(self.all_coins)))
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2640 |             logger.info(
+2641 |                 f"Loaded {len(self.all_symbols)} trading pairs and {len(self.all_coins)} coins with {self.config.base_currency}.")
+     |
+help: Remove the inner `list()` call
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:2642:16
+     |
+2640 |             logger.info(
+2641 |                 f"Loaded {len(self.all_symbols)} trading pairs and {len(self.all_coins)} coins with {self.config.base_currency}.")
+2642 |         except Exception as e:
+     |                ^^^^^^^^^
+2643 |             logger.error(f"Error loading market information: {e}")
+2644 |             self.all_symbols = [
+     |
+
+SIM102 Use a single `if` statement instead of nested `if` statements
+    --> src/trading_bot.py:2686:13
+     |
+2684 |           if self.config.simulate_data or self.exchange is None:
+2685 |               # For simulate_data mode: initialize dry-run cash once, then respect persistence
+2686 | /             if self.portfolio.cash == 0.0 and not self.portfolio.holdings:
+2687 | |                 # Try to load from persistent state first
+2688 | |                 if not self.portfolio.load_state():
+     | |___________________________________________________^
+2689 |                       # No state file, initialize with default dry-run capital
+2690 |                       self.portfolio.cash = 1000.0
+     |
+help: Combine `if` statements using `and`
+
+DTZ005 `datetime.datetime.now()` called without a `tz` argument
+    --> src/trading_bot.py:2694:42
+     |
+2692 |                     logger.info(
+2693 |                         f"Simulated starting capital: {self.portfolio.cash:.2f} {self.config.base_currency}")
+2694 |             self.portfolio.last_update = datetime.now()
+     |                                          ^^^^^^^^^^^^^^
+2695 |             return
+     |
+help: Pass a `datetime.timezone` object to the `tz` parameter
+
+DTZ005 `datetime.datetime.now()` called without a `tz` argument
+    --> src/trading_bot.py:2707:46
+     |
+2705 |             if self.portfolio.load_state():
+2706 |                 # Restore from file and mark as initialized
+2707 |                 self.portfolio.last_update = datetime.now()
+     |                                              ^^^^^^^^^^^^^^
+2708 |                 return
+2709 |             # No persistent state, load initial balance from exchange
+     |
+help: Pass a `datetime.timezone` object to the `tz` parameter
+
+DTZ005 `datetime.datetime.now()` called without a `tz` argument
+    --> src/trading_bot.py:2717:46
+     |
+2715 | …     if not self.portfolio.holdings:
+2716 | …         self.portfolio.initial_portfolio_value = self.portfolio.cash
+2717 | …     self.portfolio.last_update = datetime.now()
+     |                                    ^^^^^^^^^^^^^^
+2718 | …     logger.info(
+2719 | …         f"Portfolio initialized from exchange (dry-run mode). Cash: {self.portfolio.cash:.2f} {self.config.base_currency}, Holding…
+     |
+help: Pass a `datetime.timezone` object to the `tz` parameter
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:2720:20
+     |
+2718 | …         logger.info(
+2719 | …             f"Portfolio initialized from exchange (dry-run mode). Cash: {self.portfolio.cash:.2f} {self.config.base_currency}, Hol…
+2720 | …     except Exception as e:
+     |              ^^^^^^^^^
+2721 | …         logger.warning(
+2722 | …             f"Failed to load initial balance from exchange in dry-run mode: {e}")
+     |
+
+DTZ005 `datetime.datetime.now()` called without a `tz` argument
+    --> src/trading_bot.py:2731:42
+     |
+2729 | …     self.portfolio.cash, self.portfolio.holdings = _extract_cash_and_holdings(
+2730 | …         free_balances)
+2731 | …     self.portfolio.last_update = datetime.now()
+     |                                    ^^^^^^^^^^^^^^
+2732 | …     logger.info(
+2733 | …         f"Portfolio balance updated. Cash: {self.portfolio.cash:.2f} {self.config.base_currency}, Holdings: {self.portfolio.holdin…
+     |
+help: Pass a `datetime.timezone` object to the `tz` parameter
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:2737:16
+     |
+2735 |             logger.error(
+2736 |                 f"Error fetching/updating account balance: {e}")
+2737 |         except Exception as e:
+     |                ^^^^^^^^^
+2738 |             logger.error(
+2739 |                 f"Unexpected error fetching/updating account balance: {e}")
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:2786:24
+     |
+2784 |                         if wait > 0:
+2785 |                             time.sleep(wait)
+2786 |                 except Exception as e:
+     |                        ^^^^^^^^^
+2787 |                     if attempt >= retries:
+2788 |                         logger.error(
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:3018:20
+     |
+3016 |                 if wait > 0:
+3017 |                     time.sleep(wait)
+3018 |             except Exception as e:
+     |                    ^^^^^^^^^
+3019 |                 elapsed = time.monotonic() - started_at
+3020 |                 if attempt >= retries:
+     |
+
+SIM102 Use a single `if` statement instead of nested `if` statements
+    --> src/trading_bot.py:3237:13
+     |
+3235 |           if self.config.entry_sharp_pump_filter_enabled:
+3236 |               ret_1 = coin_data.get('ret_1')
+3237 | /             if ret_1 is not None and not np.isnan(ret_1):
+3238 | |                 if float(ret_1) > self.config.entry_max_ret_1:
+     | |______________________________________________________________^
+3239 |                       return False, f"sharp_pump_ret_1 ({float(ret_1):.4f} > {self.config.entry_max_ret_1:.4f})"
+     |
+help: Combine `if` statements using `and`
+
+SIM102 Use a single `if` statement instead of nested `if` statements
+    --> src/trading_bot.py:3241:13
+     |
+3239 |                       return False, f"sharp_pump_ret_1 ({float(ret_1):.4f} > {self.config.entry_max_ret_1:.4f})"
+3240 |
+3241 | /             if ret_3 is not None and not np.isnan(ret_3):
+3242 | |                 if float(ret_3) > self.config.entry_max_ret_3:
+     | |______________________________________________________________^
+3243 |                       return False, f"sharp_pump_ret_3 ({float(ret_3):.4f} > {self.config.entry_max_ret_3:.4f})"
+     |
+help: Combine `if` statements using `and`
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:3787:20
+     |
+3785 |                         elif recommendation in ['SELL', 'WEAK SELL']:
+3786 |                             score = max(score - int(ml_confidence * 10), 5)
+3787 |             except Exception as e:
+     |                    ^^^^^^^^^
+3788 |                 logger.warning(f"ML prediction for {coin} failed: {e}")
+     |
+
+SIM102 Use a single `if` statement instead of nested `if` statements
+    --> src/trading_bot.py:3896:17
+     |
+3894 |                   # Safety filter: block new entries even on rules-BUYs
+3895 |                   # if CatBoost sees a high-probability sell signal.
+3896 | /                 if self.config.tabular_block_on_sell and tab_sell_proba >= self.config.tabular_sell_block_min_proba:
+3897 | |                     if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'HOLD (Down-Trend)', 'BUY', 'STRONG BUY']:
+     | |_______________________________________________________________________________________________________________^
+3898 |                           recommendation = 'WEAK SELL'
+3899 |                           score = min(score, 25)
+     |
+help: Combine `if` statements using `and`
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:3936:20
+     |
+3934 |                         elif recommendation in ['SELL', 'WEAK SELL']:
+3935 |                             score = max(score - int(tab_confidence * 8), 3)
+3936 |             except Exception as e:
+     |                    ^^^^^^^^^
+3937 |                 logger.warning(
+3938 |                     f"CatBoost prediction for {coin} failed: {e}")
+     |
+
+RUF013 PEP 484 prohibits implicit `Optional`
+    --> src/trading_bot.py:4028:14
+     |
+4026 |         price: float,
+4027 |         amount_in_base_currency: float,
+4028 |         atr: float = None,
+     |              ^^^^^
+4029 |         signal_source: str = 'rules',
+4030 |         signal_confidence: float | None = None,
+     |
+help: Convert to `T | None`
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:4231:16
+     |
+4229 |                 f"Error executing trade ({action} {coin}): {e}")
+4230 |             return False
+4231 |         except Exception as e:
+     |                ^^^^^^^^^
+4232 |             logger.error(
+4233 |                 f"Unexpected error executing trade ({action} {coin}): {e}")
+     |
+
+FURB162 Unnecessary timezone replacement with zero offset
+    --> src/trading_bot.py:4247:67
+     |
+4245 |             if isinstance(partial_tp_timestamp, str):
+4246 |                 try:
+4247 |                     partial_tp_timestamp = datetime.fromisoformat(partial_tp_timestamp.replace('Z', '+00:00'))
+     |                                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+4248 |                 except Exception:
+4249 |                     partial_tp_timestamp = None
+     |
+help: Remove `.replace()` call
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:4248:24
+     |
+4246 |                 try:
+4247 |                     partial_tp_timestamp = datetime.fromisoformat(partial_tp_timestamp.replace('Z', '+00:00'))
+4248 |                 except Exception:
+     |                        ^^^^^^^^^
+4249 |                     partial_tp_timestamp = None
+4250 |             # Convert string timestamp to datetime if needed
+     |
+
+FURB162 Unnecessary timezone replacement with zero offset
+    --> src/trading_bot.py:4253:67
+     |
+4251 |             if isinstance(partial_tp_timestamp, str):
+4252 |                 try:
+4253 |                     partial_tp_timestamp = datetime.fromisoformat(partial_tp_timestamp.replace('Z', '+00:00'))
+     |                                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+4254 |                 except Exception:
+4255 |                     partial_tp_timestamp = None
+     |
+help: Remove `.replace()` call
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:4254:24
+     |
+4252 |                 try:
+4253 |                     partial_tp_timestamp = datetime.fromisoformat(partial_tp_timestamp.replace('Z', '+00:00'))
+4254 |                 except Exception:
+     |                        ^^^^^^^^^
+4255 |                     partial_tp_timestamp = None
+4256 |             current_price_data = current_market_data.get(coin)
+     |
+
+DTZ005 `datetime.datetime.now()` called without a `tz` argument
+    --> src/trading_bot.py:4263:29
+     |
+4261 |             current_price = current_price_data['price']
+4262 |             pnl_pct = (current_price - buy_price) / buy_price * 100
+4263 |             hold_seconds = (datetime.now() -
+     |                             ^^^^^^^^^^^^^^
+4264 |                             trade_info['timestamp']).total_seconds()
+4265 |             max_hold_seconds = self.config.coin_max_hold_seconds.get(
+     |
+help: Pass a `datetime.timezone` object to the `tz` parameter
+
+SIM102 Use a single `if` statement instead of nested `if` statements
+    --> src/trading_bot.py:4298:21
+     |
+4296 |                       logger.info(
+4297 |                           f"{partial_reason} → Teilverkauf {coin} @ {current_price:.4f}")
+4298 | /                     if self._execute_trade(
+4299 | |                         coin,
+4300 | |                         "sell",
+4301 | |                         current_price,
+4302 | |                         partial_amount_coin * current_price,
+4303 | |                         atr=atr,
+4304 | |                         reason=partial_reason,
+4305 | |                     ):
+4306 | |                         if coin in self.portfolio.open_trades:
+     | |______________________________________________________________^
+4307 |                               self.portfolio.open_trades[coin]['partial_tp_taken'] = True
+4308 |                               self.portfolio.open_trades[coin]['partial_tp_timestamp'] = datetime.now(
+     |
+help: Combine `if` statements using `and`
+
+DTZ005 `datetime.datetime.now()` called without a `tz` argument
+    --> src/trading_bot.py:4308:88
+     |
+4306 |                           if coin in self.portfolio.open_trades:
+4307 |                               self.portfolio.open_trades[coin]['partial_tp_taken'] = True
+4308 |                               self.portfolio.open_trades[coin]['partial_tp_timestamp'] = datetime.now(
+     |  ________________________________________________________________________________________^
+4309 | |                             )
+     | |_____________________________^
+4310 |                               if self.config.dry_run:
+4311 |                                   self.portfolio.save_state()
+     |
+help: Pass a `datetime.timezone` object to the `tz` parameter
+
+DTZ005 `datetime.datetime.now()` called without a `tz` argument
+    --> src/trading_bot.py:4315:21
+     |
+4313 |             if partial_tp_taken and partial_tp_timestamp:
+4314 |                 partial_tp_elapsed_seconds = (
+4315 |                     datetime.now() - partial_tp_timestamp).total_seconds()
+     |                     ^^^^^^^^^^^^^^
+4316 |                 if (
+4317 |                     self.config.partial_take_profit_remainder_max_hold_seconds > 0
+     |
+help: Pass a `datetime.timezone` object to the `tz` parameter
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:4457:20
+     |
+4455 |             try:
+4456 |                 restored = self.portfolio.load_state()
+4457 |             except Exception:
+     |                    ^^^^^^^^^
+4458 |                 restored = False
+4459 |             if not restored:
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+    --> src/trading_bot.py:4467:16
+     |
+4465 |                     logger.warning(
+4466 |                         f"Could not write initial portfolio snapshot to {self.portfolio.state_file}")
+4467 |         except Exception as exc:
+     |                ^^^^^^^^^
+4468 |             logger.warning(f"Failed to initialize portfolio snapshot: {exc}")
+     |
+
+DTZ005 `datetime.datetime.now()` called without a `tz` argument
+    --> src/trading_bot.py:4474:57
+     |
+4472 |                 self.iteration += 1
+4473 |                 logger.info(
+4474 |                     f"\n🕒 Iteration {self.iteration} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+     |                                                          ^^^^^^^^^^^^^^
+4475 |
+4476 |                 # Step 1: Update balance and portfolio
+     |
+help: Pass a `datetime.timezone` object to the `tz` parameter
+
+B023 Function definition does not bind loop variable `dynamic_excluded_entry_pairs`
+    --> src/trading_bot.py:4533:63
+     |
+4531 |                     source = str(data.get('signal_source',
+4532 |                                  'rules')).strip().lower()
+4533 |                     return (str(coin).upper(), source) not in dynamic_excluded_entry_pairs
+     |                                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+4534 |
+4535 |                 downtrend_filter_results = {
+     |
+
+BLE001 Do not catch blind exception: `Exception`
+  --> src/utils/secret_manager.py:44:16
+   |
+42 |             # Verify connection
+43 |             self._client.sys.read_healthy_status()
+44 |         except Exception as e:
+   |                ^^^^^^^^^
+45 |             raise RuntimeError(f"Failed to initialize Vault client: {e}")
+   |
+
+BLE001 Do not catch blind exception: `Exception`
+  --> src/utils/secret_manager.py:58:16
+   |
+56 |             )
+57 |             return secret_data['data']['data'].get('value')
+58 |         except Exception as e:
+   |                ^^^^^^^^^
+59 |             print(f"Failed to retrieve secret {key}: {e}")
+60 |             return None
+   |
+
+RUF013 PEP 484 prohibits implicit `Optional`
+  --> src/utils/secret_manager.py:65:33
+   |
+63 |     """Development/testing implementation."""
+64 |     
+65 |     def __init__(self, secrets: dict[str, str] = None):
+   |                                 ^^^^^^^^^^^^^^
+66 |         self.secrets = secrets or {}
+   |
+help: Convert to `T | None`
+
+BLE001 Do not catch blind exception: `Exception`
+  --> test_config.py:25:8
+   |
+23 |     print(f"Trading amount: {config.trading.trade_amount}")
+24 |     
+25 | except Exception as e:
+   |        ^^^^^^^^^
+26 |     print(f"Error loading configuration: {e}")
+27 |     import traceback
+   |
+
+SIM117 Use a single `with` statement with multiple contexts instead of nested `with` statements
+   --> tests/test_fetch_research_signal.py:99:9
+    |
+ 97 |           mock_response.__exit__ = MagicMock(return_value=False)
+ 98 |
+ 99 | /         with patch("urllib.request.urlopen", return_value=mock_response):
+100 | |             with self.assertRaises(ValueError):
+    | |_______________________________________________^
+101 |                   self.mod._fetch_fng()
+    |
+help: Combine `with` statements
+
+BLE001 Do not catch blind exception: `Exception`
+  --> tests/test_get_account_balance.py:54:16
+   |
+52 |         try:
+53 |             base64.b64decode(signature)
+54 |         except Exception:
+   |                ^^^^^^^^^
+55 |             pytest.fail("Signature is not valid base64")
+   |
+
+BLE001 Do not catch blind exception: `Exception`
+  --> tests/test_get_account_balance.py:89:16
+   |
+87 |         try:
+88 |             base64.b64decode(signature)
+89 |         except Exception:
+   |                ^^^^^^^^^
+90 |             pytest.fail("Signature is not valid base64")
+   |
+
+RUF012 Mutable default value for class attribute
+  --> tests/test_hailo_inference.py:10:20
+   |
+ 9 | class _FakeHailoRunner:
+10 |     output_names = ["anomaly_score", "confidence"]
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+11 |
+12 |     def infer(self, model_input: np.ndarray):
+   |
+help: Consider initializing in `__init__` or annotating with `typing.ClassVar`
+
+Found 328 errors.
+No fixes available (13 hidden fixes can be enabled with the `--unsafe-fixes` option).

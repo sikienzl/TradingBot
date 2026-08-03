@@ -261,7 +261,7 @@ def main() -> None:
     except FileNotFoundError:
         print(f"File not found: {args.file}")
         return
-    except Exception as exc:
+    except (OSError, pd.errors.ParserError, pd.errors.EmptyDataError) as exc:
         print(f"Error while reading: {exc}")
         return
 

@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
@@ -168,7 +168,7 @@ class GPT5StrategistService:
         - Technical indicators
         """
         context = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "portfolio": {
                 # TODO: Fetch from trading bot service
                 "open_positions": [],
@@ -276,7 +276,7 @@ class GPT5StrategistService:
                         self.service_metrics.observe_event("api_call_error")
                         return {"decision": "ERROR", "reason": f"API error: {resp.status}"}
 
-        except Exception as e:
+        except (TimeoutError, aiohttp.ClientError) as e:
             logger.error(f"GPT-5 call failed: {e}")
             self.service_metrics.observe_event("api_call_exception")
             return {"decision": "ERROR", "reason": f"Exception: {e!s}"}
@@ -295,7 +295,7 @@ class GPT5StrategistService:
                 logger.warning("No JSON found in response")
                 return {"decision": "VETO", "reason": "Parsing error"}
 
-        except Exception as e:
+        except (KeyError, IndexError, ValueError, TypeError, json.JSONDecodeError) as e:
             logger.error(f"Response parsing error: {e}")
             return {"decision": "ERROR", "reason": f"Parse error: {e!s}"}
 
@@ -327,7 +327,7 @@ class GPT5StrategistService:
         elif decision == "VETO":
             self.metrics["decisions_veto"] += 1
 
-        self.metrics["last_decision"] = datetime.utcnow().isoformat()
+        self.metrics["last_decision"] = datetime.now(UTC).isoformat()
 
     def get_metrics(self) -> dict:
         """Get service metrics for Prometheus"""
@@ -364,7 +364,7 @@ async def main():
     # Optional startup self-check in shadow mode.
     if os.getenv("GPT5_STARTUP_SELFTEST", "false").lower() == "true":
         alert = AnomalyAlert(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
             hailo_score=92.5,
             window_size=100,
             signal_type="breakout",

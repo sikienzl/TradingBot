@@ -541,7 +541,7 @@ def main() -> None:
         if api_usage:
             ai_copilot.update(api_usage)
             ai_copilot["available"] = True
-    except Exception:
+    except (OSError, ValueError, urllib.error.URLError):
         pass
 
     ai_copilot["model"] = ai_copilot.get("model") or _read_env_value(

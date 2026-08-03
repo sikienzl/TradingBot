@@ -58,10 +58,9 @@ def _extract_max_drawdown_pct(path: str) -> float | None:
             for line in f:
                 if "Max DD (% of start):" in line:
                     try:
-                        pct_str = line.split(
-                            ":", 1)[1].strip().replace("%", "")
+                        pct_str = line.split(":", 1)[1].strip().replace("%", "")
                         return float(pct_str)
-                    except Exception:
+                    except (ValueError, IndexError):
                         return None
     except OSError:
         return None

@@ -166,7 +166,7 @@ def _load_json(path: str) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, dict):
-        raise ValueError("Research payload must be a JSON object")
+        raise TypeError("Research payload must be a JSON object")
     return data
 
 

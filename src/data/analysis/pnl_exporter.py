@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 try:
     import ccxt
-except Exception:  # pragma: no cover - optional dependency in test shells
+except (ImportError, ModuleNotFoundError):  # pragma: no cover - optional dependency in test shells
     ccxt = None
 
 JOURNAL_PATH = '/opt/trading_2/trade_journal.csv'
@@ -166,7 +166,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                         if key.strip() != env_key:
                             continue
                         return value.strip().strip('"').strip("'")
-        except Exception:
+        except OSError:
             pass
         return ''
 
@@ -241,7 +241,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             try:
                 response = self._kraken_private_request(
                     path, payload, api_key, api_secret)
-            except Exception:
+            except (urllib.error.URLError, OSError):
                 continue
             errors = response.get('error', []) if isinstance(
                 response, dict) else []
