@@ -80,18 +80,18 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-import sys
-missing = []
-for mod in ('pandas','pydantic','dotenv'):
-    try:
-        __import__(mod)
-    except Exception:
-        missing.append(mod)
-if missing:
-    print('Missing python packages:', ','.join(missing), file=sys.stderr)
-    sys.exit(1)
-print('Python deps OK')
-PY
+          import sys
+          missing = []
+          for mod in ('pandas','pydantic','dotenv'):
+              try:
+                  __import__(mod)
+              except Exception:
+                  missing.append(mod)
+          if missing:
+              print('Missing python packages:', ','.join(missing), file=sys.stderr)
+              sys.exit(1)
+          print('Python deps OK')
+          PY
 
       - name: Resolve scorecard parameters
         id: params
