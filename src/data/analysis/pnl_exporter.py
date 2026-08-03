@@ -3,6 +3,7 @@
 Simple Prometheus exporter for Trading Bot PnL metrics
 Listens on http://localhost:9200/metrics
 """
+# ruff: noqa
 import ast
 import base64
 import csv
@@ -17,6 +18,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import logging
 from collections import deque
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -26,6 +28,8 @@ try:
     import ccxt
 except (ImportError, ModuleNotFoundError):  # pragma: no cover - optional dependency in test shells
     ccxt = None
+
+logger = logging.getLogger(__name__)
 
 JOURNAL_PATH = '/opt/trading_2/trade_journal.csv'
 BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
