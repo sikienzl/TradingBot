@@ -55,13 +55,12 @@ def _validate_scorecard_path(file: str) -> pathlib.Path:
                 status_code=403,
                 detail="Access denied: file is outside the allowed directory.",
             )
-    elif not pathlib.Path(file).is_absolute():
+    elif (not pathlib.Path(file).is_absolute()) and (not str(resolved).startswith(str(project_root) + os.sep) and resolved != project_root):
         # Relative path: block traversal that escapes the project root.
-        if not str(resolved).startswith(str(project_root) + os.sep) and resolved != project_root:
-            raise HTTPException(
-                status_code=403,
-                detail="Access denied: relative path escapes the project root.",
-            )
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: relative path escapes the project root.",
+        )
     return resolved
 
 
