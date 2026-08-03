@@ -76,6 +76,23 @@ jobs:
           # Install minimal set required by the scorecard (avoid heavy packages like catboost)
           run_if_rtk python -m pip install numpy pandas pydantic python-dotenv
 
+      - name: Verify Python dependencies
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+import sys
+missing = []
+for mod in ('pandas','pydantic','dotenv'):
+    try:
+        __import__(mod)
+    except Exception:
+        missing.append(mod)
+if missing:
+    print('Missing python packages:', ','.join(missing), file=sys.stderr)
+    sys.exit(1)
+print('Python deps OK')
+PY
+
       - name: Resolve scorecard parameters
         id: params
         shell: bash
