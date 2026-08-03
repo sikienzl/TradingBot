@@ -223,7 +223,7 @@ def _fetch_fng() -> dict[str, Any]:
         raise ValueError("Fear & Greed API returned empty data array")
     entry = data[0]
     if not isinstance(entry, dict):
-        raise ValueError("Fear & Greed API entry is not an object")
+        raise TypeError("Fear & Greed API entry is not an object")
     return entry
 
 
