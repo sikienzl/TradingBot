@@ -29,7 +29,7 @@ BASE_FEATURE_COLUMNS: List[str] = [
     "volume",
 ]
 
-LABEL_MAP = {"verkaufen": 0, "halten": 1, "kaufen": 2}
+LABEL_MAP = {"sell": 0, "hold": 1, "buy": 2}
 INV_LABEL_MAP = {v: k for k, v in LABEL_MAP.items()}
 
 
@@ -87,9 +87,9 @@ def create_profit_labels(
 
     out["label"] = np.where(
         out["future_net_return"] >= buy_threshold,
-        "kaufen",
+        "buy",
         np.where(out["future_net_return"] <=
-                 sell_threshold, "verkaufen", "halten"),
+                 sell_threshold, "sell", "hold"),
     )
 
     return out

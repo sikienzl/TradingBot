@@ -96,48 +96,48 @@ def prepare_training_data(input_file="full_crypto_data.csv", output_file="traini
 
 
 def diagnose_data(input_file="full_crypto_data.csv"):
-    """Diagnosefunktion zur Analyse der Datenstruktur"""
+    """Diagnostic function for analyzing the data structure"""
     if not os.path.exists(input_file):
-        print(f"❌ Datei {input_file} nicht gefunden")
+        print(f"❌ File {input_file} not found")
         return
 
-    print(f"📄 Analysiere {input_file}...")
-    df = pd.read_csv(input_file, nrows=100)  # Erste 100 Zeilen analysieren
+    print(f"📄 Analyzing {input_file}...")
+    df = pd.read_csv(input_file, nrows=100)  # Analyze first 100 rows
 
-    print("\n📋 Grundinformationen:")
-    print(f"- Zeilen: {len(df)}")
-    print(f"- Spalten: {len(df.columns)}")
-    print(f"- Zeitrahmen: {df['timestamp'].min()} bis {df['timestamp'].max()}")
+    print("\n📋 Basic information:")
+    print(f"- Rows: {len(df)}")
+    print(f"- Columns: {len(df.columns)}")
+    print(f"- Timeframe: {df['timestamp'].min()} to {df['timestamp'].max()}")
 
-    print("\n🔍 Spaltenübersicht:")
+    print("\n🔍 Column overview:")
     for col in df.columns:
         dtype = df[col].dtype
         sample = df[col].dropna(
         ).iloc[0] if not df[col].dropna().empty else "N/A"
         na_count = df[col].isna().sum()
-        print(f"- {col}: {dtype} (Beispiel: {sample}, NaN: {na_count})")
+        print(f"- {col}: {dtype} (example: {sample}, NaN: {na_count})")
 
-    print("\n💡 Empfehlungen:")
+    print("\n💡 Recommendations:")
     if 'symbol' in df.columns:
-        print("✅ 'symbol'-Spalte gefunden - kann für 'coin' verwendet werden")
+        print("✅ 'symbol' column found - can be used for 'coin'")
     else:
-        print("⚠️ Keine Währungsspaltte (symbol/pair) gefunden")
+        print("⚠️ No currency column (symbol/pair) found")
 
     numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'rsi', 'macd']
     for col in numeric_cols:
         if col in df.columns:
             na_percent = df[col].isna().mean() * 100
             if na_percent > 30:
-                print(f"⚠️ {col} hat {na_percent:.1f}% NaN-Werte")
+                print(f"⚠️ {col} has {na_percent:.1f}% NaN values")
 
 
 if __name__ == "__main__":
-    # Zuerst Diagnose durchführen
+    # First run diagnostics
     diagnose_data()
 
-    # Dann Daten vorbereiten
+    # Then prepare the data
     success = prepare_training_data()
     if success:
-        print("✅ Datenvorbereitung abgeschlossen.")
+        print("✅ Data preparation completed.")
     else:
-        print("❌ Datenvorbereitung fehlgeschlagen.")
+        print("❌ Data preparation failed.")

@@ -9,3 +9,7 @@ if str(ROOT) not in sys.path:
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+
+ANALYSIS = SRC / "data" / "analysis"
+if str(ANALYSIS) not in sys.path:
+    sys.path.insert(0, str(ANALYSIS))

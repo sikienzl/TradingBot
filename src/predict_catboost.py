@@ -6,13 +6,26 @@ import pandas as pd
 from catboost import CatBoostClassifier
 
 
+_DE_TO_EN_DECISION = {
+    "verkaufen": "sell",
+    "halten": "hold",
+    "kaufen": "buy",
+    "sell": "sell",
+    "hold": "hold",
+    "buy": "buy",
+}
+
+
 class CatBoostTradingPredictor:
-    def __init__(self, model_dir: str = "./model/catboost_trading_model"):
+    def __init__(self, model_dir: str = "./model/catboost_trading_model", research_signal_path: str | None = None):
         self.model_dir = model_dir
+        self.research_signal_path = research_signal_path
         self.model = CatBoostClassifier()
         self.features = []
         self.label_map = {"verkaufen": 0, "halten": 1, "kaufen": 2}
         self.inv_label_map = {v: k for k, v in self.label_map.items()}
+        self.recommended_confidence_threshold = 0.45
+        self.margin_threshold = 0.03
         self._load()
 
     def _load(self) -> None:
@@ -30,7 +43,7 @@ class CatBoostTradingPredictor:
 
     def predict(self, row_df: pd.DataFrame, confidence_threshold: float = 0.45) -> Dict:
         if row_df.empty:
-            return {"decision": "halten", "confidence": 0.0, "proba": {}}
+            return {"decision": "hold", "confidence": 0.0, "proba": {}}
 
         x = row_df.copy()
         # Add fallback features if they are missing in live input.
@@ -52,14 +65,15 @@ class CatBoostTradingPredictor:
         proba = self.model.predict_proba(x)[0]
         pred_idx = int(np.argmax(proba))
         confidence = float(np.max(proba))
-        decision = self.inv_label_map.get(pred_idx, "hold")
+        decision = _DE_TO_EN_DECISION.get(
+            self.inv_label_map.get(pred_idx, "hold"), "hold")
 
         # Conservative guard: only trade with sufficient confidence
         if confidence < confidence_threshold:
             decision = "hold"
 
         proba_dict = {
-            self.inv_label_map.get(i, str(i)): float(p)
+            _DE_TO_EN_DECISION.get(self.inv_label_map.get(i, str(i)), str(i)): float(p)
             for i, p in enumerate(proba)
         }
 
@@ -68,3 +82,16 @@ class CatBoostTradingPredictor:
             "confidence": confidence,
             "proba": proba_dict,
         }
+
+    def predict_from_features(
+        self,
+        features: Dict[str, float],
+        confidence_threshold: float | None = None,
+    ) -> Dict:
+        threshold = (
+            confidence_threshold
+            if confidence_threshold is not None
+            else self.recommended_confidence_threshold
+        )
+        row_df = pd.DataFrame([features])
+        return self.predict(row_df, confidence_threshold=threshold)
