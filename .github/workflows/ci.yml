@@ -1,10 +1,9 @@
 name: CI
 
 on:
-  push:
-    branches: [main, master]
-  pull_request:
-  workflow_dispatch:
+  push: {}
+  pull_request: {}
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -42,8 +41,9 @@ jobs:
 
       - name: Install quality tools
         run: |
+          run_if_rtk() { if command -v rtk >/dev/null 2>&1; then rtk "$@"; else "$@"; fi }
           python -m pip install --upgrade pip
-          pip install ruff
+          run_if_rtk python -m pip install ruff
 
       - name: Syntax check (py_compile)
         shell: bash
@@ -125,8 +125,9 @@ jobs:
 
       - name: Install test dependencies
         run: |
+          run_if_rtk() { if command -v rtk >/dev/null 2>&1; then rtk "$@"; else "$@"; fi }
           python -m pip install --upgrade pip
-          pip install pytest numpy pandas scikit-learn catboost ccxt python-dotenv pydantic fastapi uvicorn httpx
+          run_if_rtk python -m pip install pytest numpy pandas scikit-learn catboost ccxt python-dotenv pydantic fastapi uvicorn httpx
 
       - name: Verify module imports
         env:
@@ -206,8 +207,9 @@ jobs:
 
       - name: Build wheel & sdist
         run: |
+          run_if_rtk() { if command -v rtk >/dev/null 2>&1; then rtk "$@"; else "$@"; fi }
           python -m pip install --upgrade pip build hatchling hatch-vcs
-          python -m build --wheel --sdist --outdir dist/
+          run_if_rtk python -m build --wheel --sdist --outdir dist/
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4

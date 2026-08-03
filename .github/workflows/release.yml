@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*'
+  pull_request:
+    types: [closed]
   workflow_dispatch:
     inputs:
       version:
@@ -34,17 +36,43 @@ jobs:
       - name: Resolve release metadata
         id: version
         run: |
+          # Determine VERSION for different triggers: workflow_dispatch, tag push, or merged PR with release note
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             INPUT_VERSION="${{ github.event.inputs.version }}"
             [[ "$INPUT_VERSION" == v* ]] || INPUT_VERSION="v${INPUT_VERSION}"
             echo "VERSION=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
             echo "PRERELEASE=${{ github.event.inputs.prerelease }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            # Only proceed when the PR was merged and a release note file was added
+            if [[ "${{ github.event.pull_request.merged }}" != "true" ]]; then
+              echo "VERSION=" >> "$GITHUB_OUTPUT"
+              echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"
+            else
+              MERGE_COMMIT=${GITHUB_SHA}
+              # Ensure full history is available
+              git fetch --prune --unshallow || true
+              files=$(git show --pretty="" --name-only "${MERGE_COMMIT}" 2>/dev/null || true)
+              release_note=$(printf "%s\n" "$files" | grep -E '^release_notes/v[0-9].*\.txt' | head -n1 || true)
+              if [[ -z "$release_note" ]]; then
+                echo "VERSION=" >> "$GITHUB_OUTPUT"
+                echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"
+              else
+                version=$(basename "$release_note" .txt)
+                [[ "$version" == v* ]] || version="v$version"
+                echo "VERSION=${version}" >> "$GITHUB_OUTPUT"
+                echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"
+                # copy release note into workspace for upload
+                cp "$release_note" "release-notes-${version}.txt" || true
+                echo "NOTES_FILE=release-notes-${version}.txt" >> "$GITHUB_ENV"
+              fi
+            fi
           else
             echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
             echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Stage runtime files
+        if: env.VERSION != ''
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           PKG="trading-bot-pi-${VERSION}"
@@ -139,6 +167,7 @@ jobs:
           echo "PKG=${PKG}" >> "$GITHUB_ENV"
 
       - name: Generate release notes
+        if: env.VERSION != ''
         id: notes
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
@@ -281,15 +310,18 @@ jobs:
           echo "NOTES_FILE=release-notes-${VERSION}.txt" >> "$GITHUB_ENV"
 
       - name: Build Python wheel
+        if: env.VERSION != ''
         run: |
+          run_if_rtk() { if command -v rtk >/dev/null 2>&1; then rtk "$@"; else "$@"; fi }
           python -m pip install --upgrade pip build hatchling hatch-vcs
-          python -m build --wheel --sdist --outdir dist/
+          run_if_rtk python -m build --wheel --sdist --outdir dist/
           WHL=$(ls dist/*.whl | head -1)
           SDIST=$(ls dist/*.tar.gz | head -1)
           echo "WHL=${WHL}" >> "$GITHUB_ENV"
           echo "SDIST=${SDIST}" >> "$GITHUB_ENV"
 
       - name: Publish GitHub Release
+        if: env.VERSION != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.VERSION }}
