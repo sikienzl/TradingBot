@@ -220,10 +220,10 @@ def _fetch_fng() -> dict[str, Any]:
     payload = _fetch_json(FNG_URL)
     data = payload.get("data", [])
     if not data:
-        raise TypeError("Fear & Greed API returned empty data array")
+        raise ValueError("Fear & Greed API returned empty data array")
     entry = data[0]
     if not isinstance(entry, dict):
-        raise TypeError("Fear & Greed API entry is not an object")
+        raise ValueError("Fear & Greed API entry is not an object")
     return entry
 
 
