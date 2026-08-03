@@ -6,6 +6,7 @@ This module handles fetching cryptocurrency market data from various sources.
 
 import logging
 import time
+import urllib.error
 
 import ccxt
 import pandas as pd
@@ -107,13 +108,14 @@ class AdvancedDataFetcher(CryptoDataFetcher):
             fetch_function: Function to fetch sentiment data
             
         Raises:
-            ValueError: If source_name is empty or fetch_function is not callable
+            ValueError: If source_name is empty
+            TypeError: If fetch_function is not callable
         """
         if not source_name:
             raise ValueError("Source name cannot be empty")
             
         if not callable(fetch_function):
-            raise ValueError("Fetch function must be callable")
+            raise TypeError("Fetch function must be callable")
             
         self.sentiment_sources.append((source_name, fetch_function))
         self.logger.info(f"Added sentiment source: {source_name}")
@@ -151,7 +153,7 @@ class AdvancedDataFetcher(CryptoDataFetcher):
             try:
                 data = fetch_func(symbol)
                 sentiment_data[source_name] = data
-            except Exception as e:
+            except (urllib.error.URLError, OSError, ValueError, TypeError, TimeoutError) as e:
                 self.logger.error(f"Failed to fetch sentiment from {source_name}: {e}")
                 sentiment_data[source_name] = None
                 errors.append(str(e))
