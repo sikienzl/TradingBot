@@ -28,7 +28,7 @@ class CryptoDataFetcher:
             })
             exchange.load_markets()
             return exchange
-        except Exception as e:
+        except (AttributeError, OSError) as e:
             print(f"❌ Exchange initialization failed: {e!s}")
             return None
 
@@ -42,17 +42,19 @@ class CryptoDataFetcher:
 
     def fetch_ohlcv_with_retry(self, exchange, symbol, max_retries=3):
         """Attempts to fetch OHLCV data multiple times"""
+        last_exc = None
         for attempt in range(max_retries):
             try:
                 ohlcv = exchange.fetch_ohlcv(
                     symbol, self.timeframe, limit=self.days)
                 return ohlcv
-            except Exception:
+            except (OSError, ValueError, TimeoutError) as e:
+                last_exc = e
                 wait_time = (attempt + 1) * 5
                 print(
                     f"Attempt {attempt + 1}/{max_retries} for {symbol} failed. Waiting {wait_time}s...", end="\r")
                 time.sleep(wait_time)
-        self.error_log.append((symbol, str(e)))
+        self.error_log.append((symbol, str(last_exc) if last_exc is not None else ""))
         return None
 
     def calculate_indicators(self, df):
@@ -78,7 +80,7 @@ class CryptoDataFetcher:
             df['bb_upper'], df['bb_middle'], df['bb_lower'] = talib.BBANDS(
                 df['close'])
             return True
-        except Exception as e:
+        except (ValueError, TypeError, OSError) as e:
             print(f"Indicator calculation failed: {e!s}")
             return False
 
@@ -128,9 +130,7 @@ class CryptoDataFetcher:
     def save_to_csv(self, filename="crypto_data.csv"):
         """Saves all data to a CSV file"""
         try:
-            all_dfs = []
-            for df in self.data.values():
-                all_dfs.append(df)
+            all_dfs = list(self.data.values())
 
             if not all_dfs:
                 print("No data available to save")
@@ -140,7 +140,7 @@ class CryptoDataFetcher:
             combined.to_csv(filename, index=False)
             print(f"Data successfully saved to {filename}")
             return True
-        except Exception as e:
+        except (OSError, ValueError) as e:
             print(f"Error while saving: {e!s}")
             return False
 
@@ -154,7 +154,7 @@ class CryptoDataFetcher:
             conn.close()
             print(f"Data successfully saved to {filename}")
             return True
-        except Exception as e:
+        except (sqlite3.DatabaseError, OSError, ValueError) as e:
             print(f"Error while saving to SQLite: {e!s}")
             return False
 
