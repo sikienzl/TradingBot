@@ -46,9 +46,9 @@ def _evaluate_verdict(
     if metrics.profit_factor < 1.0:
         reasons.append(
             f"Profit factor below 1.0: {metrics.profit_factor:.4f} (Hard-Fail)")
-    if metrics.max_drawdown_pct > thresholds.max_allowed_drawdown_pct * 1.5:
+    if metrics.max_drawdown_pct > thresholds.max_drawdown_pct * 1.5:
         reasons.append(
-            f"Max drawdown significantly too high: {metrics.max_drawdown_pct:.2f}% > {thresholds.max_allowed_drawdown_pct * 1.5:.2f}% (Hard-Fail)"
+            f"Max drawdown significantly too high: {metrics.max_drawdown_pct:.2f}% > {thresholds.max_drawdown_pct * 1.5:.2f}% (Hard-Fail)"
         )
 
     if reasons:
@@ -67,9 +67,9 @@ def _evaluate_verdict(
     if metrics.avg_pnl < thresholds.min_avg_pnl:
         soft_fails.append(
             f"Avg PnL/trade too low: {metrics.avg_pnl:.6f} < {thresholds.min_avg_pnl:.6f}")
-    if metrics.max_drawdown_pct > thresholds.max_allowed_drawdown_pct:
+    if metrics.max_drawdown_pct > thresholds.max_drawdown_pct:
         soft_fails.append(
-            f"Max drawdown too high: {metrics.max_drawdown_pct:.2f}% > {thresholds.max_allowed_drawdown_pct:.2f}%")
+            f"Max drawdown too high: {metrics.max_drawdown_pct:.2f}% > {thresholds.max_drawdown_pct:.2f}%")
 
     if metrics.recent_closed_trades > 0 and metrics.recent_realized_pnl < thresholds.min_recent_realized_pnl:
         soft_fails.append(

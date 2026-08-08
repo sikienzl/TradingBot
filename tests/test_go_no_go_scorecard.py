@@ -1,12 +1,15 @@
 import pandas as pd
+import pytest
 
 from src.go_no_go_scorecard import (
     ScorecardResult,
+    ScorecardVerdict,
     _compute_metrics,
     _evaluate_verdict,
     _max_drawdown_base,
     _safe_float,
 )
+from src.api_models import ScorecardMetrics
 
 
 class TestSafeFloat:
@@ -104,7 +107,7 @@ class TestEvaluateVerdict:
         )
         
         result = _evaluate_verdict(metrics=metrics, thresholds=thresholds)
-        assert result.verdict == "GO"
+        assert result.verdict == ScorecardVerdict.GO
         assert "All defined scorecard criteria met" in result.reasons[0]
 
     def test_verdict_hard_fail_too_few_trades(self):
@@ -133,8 +136,240 @@ class TestEvaluateVerdict:
         )
         
         result = _evaluate_verdict(metrics=metrics, thresholds=thresholds)
-        assert result.verdict == "NO-GO"
+        assert result.verdict == ScorecardVerdict.NO_GO
         assert any("Too few closed trades" in r for r in result.reasons)
+
+    def test_verdict_hard_fail_negative_pnl(self):
+        """Test NO-GO for hard fail: negative PnL."""
+        metrics = ScorecardMetrics(
+            closed_trades=300,
+            realized_pnl=-50.0,
+            win_rate=55.0,
+            profit_factor=2.5,
+            avg_pnl=1.67,
+            max_drawdown_pct=5.0,
+        )
+        thresholds = ScorecardThresholds(
+            min_closed_trades=200,
+            min_win_rate=45.0,
+            min_profit_factor=1.2,
+            min_avg_pnl=1.0,
+            max_drawdown_pct=10.0,
+            recent_trades_window=100,
+            min_recent_realized_pnl=0.0,
+            min_recent_win_rate=45.0,
+            min_catboost_vs_rules_pnl_delta=-0.05,
+            min_source_trades_for_delta=50,
+            starting_capital=20.0,
+            lookback_days=30,
+        )
+        
+        result = _evaluate_verdict(metrics=metrics, thresholds=thresholds)
+        assert result.verdict == ScorecardVerdict.NO_GO
+        assert any("Realized PnL not positive" in r for r in result.reasons)
+
+    def test_verdict_hard_fail_low_profit_factor(self):
+        """Test NO-GO for hard fail: profit factor below 1.0."""
+        metrics = ScorecardMetrics(
+            closed_trades=300,
+            realized_pnl=500.0,
+            win_rate=55.0,
+            profit_factor=0.8,
+            avg_pnl=1.67,
+            max_drawdown_pct=5.0,
+        )
+        thresholds = ScorecardThresholds(
+            min_closed_trades=200,
+            min_win_rate=45.0,
+            min_profit_factor=1.2,
+            min_avg_pnl=1.0,
+            max_drawdown_pct=10.0,
+            recent_trades_window=100,
+            min_recent_realized_pnl=0.0,
+            min_recent_win_rate=45.0,
+            min_catboost_vs_rules_pnl_delta=-0.05,
+            min_source_trades_for_delta=50,
+            starting_capital=20.0,
+            lookback_days=30,
+        )
+        
+        result = _evaluate_verdict(metrics=metrics, thresholds=thresholds)
+        assert result.verdict == ScorecardVerdict.NO_GO
+        assert any("Profit factor below 1.0" in r for r in result.reasons)
+
+    def test_verdict_hard_fail_high_drawdown(self):
+        """Test NO-GO for hard fail: max drawdown too high."""
+        metrics = ScorecardMetrics(
+            closed_trades=300,
+            realized_pnl=500.0,
+            win_rate=55.0,
+            profit_factor=2.5,
+            avg_pnl=1.67,
+            max_drawdown_pct=15.0,  # This exceeds the threshold
+        )
+        thresholds = ScorecardThresholds(
+            min_closed_trades=200,
+            min_win_rate=45.0,
+            min_profit_factor=1.2,
+            min_avg_pnl=1.0,
+            max_drawdown_pct=10.0,
+            recent_trades_window=100,
+            min_recent_realized_pnl=0.0,
+            min_recent_win_rate=45.0,
+            min_catboost_vs_rules_pnl_delta=-0.05,
+            min_source_trades_for_delta=50,
+            starting_capital=20.0,
+            lookback_days=30,
+        )
+        
+        result = _evaluate_verdict(metrics=metrics, thresholds=thresholds)
+        assert result.verdict == ScorecardVerdict.NO_GO
+        assert any("Max drawdown significantly too high" in r for r in result.reasons)
+
+    def test_verdict_hold_low_trade_count(self):
+        """Test HOLD verdict when trade count is low but other criteria met."""
+        metrics = ScorecardMetrics(
+            closed_trades=150,  # Below threshold of 200
+            realized_pnl=500.0,
+            win_rate=55.0,
+            profit_factor=2.5,
+            avg_pnl=1.67,
+            max_drawdown_pct=5.0,
+        )
+        thresholds = ScorecardThresholds(
+            min_closed_trades=200,
+            min_win_rate=45.0,
+            min_profit_factor=1.2,
+            min_avg_pnl=1.0,
+            max_drawdown_pct=10.0,
+            recent_trades_window=100,
+            min_recent_realized_pnl=0.0,
+            min_recent_win_rate=45.0,
+            min_catboost_vs_rules_pnl_delta=-0.05,
+            min_source_trades_for_delta=50,
+            starting_capital=20.0,
+            lookback_days=30,
+        )
+        
+        result = _evaluate_verdict(metrics=metrics, thresholds=thresholds)
+        assert result.verdict == ScorecardVerdict.HOLD
+        assert any("Trade count still too low" in r for r in result.reasons)
+
+    def test_verdict_hold_low_win_rate(self):
+        """Test HOLD verdict when win rate is too low."""
+        metrics = ScorecardMetrics(
+            closed_trades=300,
+            realized_pnl=500.0,
+            win_rate=40.0,  # Below threshold of 45.0
+            profit_factor=2.5,
+            avg_pnl=1.67,
+            max_drawdown_pct=5.0,
+        )
+        thresholds = ScorecardThresholds(
+            min_closed_trades=200,
+            min_win_rate=45.0,
+            min_profit_factor=1.2,
+            min_avg_pnl=1.0,
+            max_drawdown_pct=10.0,
+            recent_trades_window=100,
+            min_recent_realized_pnl=0.0,
+            min_recent_win_rate=45.0,
+            min_catboost_vs_rules_pnl_delta=-0.05,
+            min_source_trades_for_delta=50,
+            starting_capital=20.0,
+            lookback_days=30,
+        )
+        
+        result = _evaluate_verdict(metrics=metrics, thresholds=thresholds)
+        assert result.verdict == ScorecardVerdict.HOLD
+        assert any("Win rate too low" in r for r in result.reasons)
+
+    def test_verdict_hold_low_profit_factor(self):
+        """Test HOLD verdict when profit factor is too low."""
+        metrics = ScorecardMetrics(
+            closed_trades=300,
+            realized_pnl=500.0,
+            win_rate=55.0,
+            profit_factor=1.0,  # Below threshold of 1.2
+            avg_pnl=1.67,
+            max_drawdown_pct=5.0,
+        )
+        thresholds = ScorecardThresholds(
+            min_closed_trades=200,
+            min_win_rate=45.0,
+            min_profit_factor=1.2,
+            min_avg_pnl=1.0,
+            max_drawdown_pct=10.0,
+            recent_trades_window=100,
+            min_recent_realized_pnl=0.0,
+            min_recent_win_rate=45.0,
+            min_catboost_vs_rules_pnl_delta=-0.05,
+            min_source_trades_for_delta=50,
+            starting_capital=20.0,
+            lookback_days=30,
+        )
+        
+        result = _evaluate_verdict(metrics=metrics, thresholds=thresholds)
+        assert result.verdict == ScorecardVerdict.HOLD
+        assert any("Profit factor too low" in r for r in result.reasons)
+
+    def test_verdict_hold_low_avg_pnl(self):
+        """Test HOLD verdict when average PnL is too low."""
+        metrics = ScorecardMetrics(
+            closed_trades=300,
+            realized_pnl=500.0,
+            win_rate=55.0,
+            profit_factor=2.5,
+            avg_pnl=0.5,  # Below threshold of 1.0
+            max_drawdown_pct=5.0,
+        )
+        thresholds = ScorecardThresholds(
+            min_closed_trades=200,
+            min_win_rate=45.0,
+            min_profit_factor=1.2,
+            min_avg_pnl=1.0,
+            max_drawdown_pct=10.0,
+            recent_trades_window=100,
+            min_recent_realized_pnl=0.0,
+            min_recent_win_rate=45.0,
+            min_catboost_vs_rules_pnl_delta=-0.05,
+            min_source_trades_for_delta=50,
+            starting_capital=20.0,
+            lookback_days=30,
+        )
+        
+        result = _evaluate_verdict(metrics=metrics, thresholds=thresholds)
+        assert result.verdict == ScorecardVerdict.HOLD
+        assert any("Avg PnL/trade too low" in r for r in result.reasons)
+
+    def test_verdict_hold_high_drawdown(self):
+        """Test HOLD verdict when max drawdown is high but not hard-fail level."""
+        metrics = ScorecardMetrics(
+            closed_trades=300,
+            realized_pnl=500.0,
+            win_rate=55.0,
+            profit_factor=2.5,
+            avg_pnl=1.67,
+            max_drawdown_pct=12.0,  # This is above threshold but not hard-fail level
+        )
+        thresholds = ScorecardThresholds(
+            min_closed_trades=200,
+            min_win_rate=45.0,
+            min_profit_factor=1.2,
+            min_avg_pnl=1.0,
+            max_drawdown_pct=10.0,
+            recent_trades_window=100,
+            min_recent_realized_pnl=0.0,
+            min_recent_win_rate=45.0,
+            min_catboost_vs_rules_pnl_delta=-0.05,
+            min_source_trades_for_delta=50,
+            starting_capital=20.0,
+            lookback_days=30,
+        )
+        
+        result = _evaluate_verdict(metrics=metrics, thresholds=thresholds)
+        assert result.verdict == ScorecardVerdict.HOLD
+        assert any("Max drawdown too high" in r for r in result.reasons)
 
     def test_verdict_hard_fail_negative_pnl(self):
         """Test NO-GO for hard fail: negative PnL."""
