@@ -138,7 +138,7 @@ def print_summary_report(days: int = 7) -> None:
 
     try:
         rows = get_trade_summary(days)
-    except Exception as exc:
+    except (RuntimeError, OSError) as exc:
         print(f"[ERROR] Could not fetch trade summary: {exc}")
         return
 
