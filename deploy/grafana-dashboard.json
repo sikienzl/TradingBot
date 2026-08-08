@@ -117,7 +117,7 @@
       "type": "stat",
       "targets": [
         {
-          "expr": "trading_hybrid_edge_filter_last_value{name=\"last_inference_ms\"}",
+          "expr": "trading_hybrid_edge_filter_last_value{name=\"last_inference_seconds\"}",
           "legendFormat": "Latency",
           "refId": "A"
         }
