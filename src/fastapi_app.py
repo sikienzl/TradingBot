@@ -9,7 +9,14 @@ from src.api_models import (
     ResearchSignalFeatures,
     ResearchSignalPayload,
     ScorecardResponse,
+    TradingDecision,
 )
+
+_EN_TO_DECISION: dict[str, TradingDecision] = {
+    "buy": TradingDecision.BUY,
+    "sell": TradingDecision.SELL,
+    "hold": TradingDecision.HOLD,
+}
 from src.go_no_go_scorecard import ScorecardDataError, evaluate_scorecard
 from src.predict_catboost import CatBoostTradingPredictor
 from src.research_signal import (
@@ -100,8 +107,10 @@ def predict_catboost_signal(payload: CatBoostPredictionRequest) -> CatBoostPredi
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    decision = _EN_TO_DECISION.get(prediction.pop("decision", "hold"), TradingDecision.HOLD)
     return CatBoostPredictionResponse(
         model_dir=payload.model_dir,
+        decision=decision,
         **prediction,
     )
 
