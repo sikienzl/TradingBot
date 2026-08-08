@@ -1,6 +1,6 @@
 import pandas as pd
-import pytest
 
+from src.api_models import ScorecardMetrics, ScorecardThresholds
 from src.go_no_go_scorecard import (
     ScorecardResult,
     ScorecardVerdict,
@@ -9,7 +9,6 @@ from src.go_no_go_scorecard import (
     _max_drawdown_base,
     _safe_float,
 )
-from src.api_models import ScorecardMetrics, ScorecardThresholds
 
 
 class TestSafeFloat:
@@ -90,6 +89,9 @@ class TestEvaluateVerdict:
             rules_closed_trades=130,
             rules_realized_pnl=1.5,
             catboost_vs_rules_pnl_delta=0.5,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -119,6 +121,17 @@ class TestEvaluateVerdict:
             profit_factor=2.5,
             avg_pnl=1.67,
             max_drawdown_pct=5.0,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -148,6 +161,17 @@ class TestEvaluateVerdict:
             profit_factor=2.5,
             avg_pnl=1.67,
             max_drawdown_pct=5.0,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -177,6 +201,17 @@ class TestEvaluateVerdict:
             profit_factor=0.8,
             avg_pnl=1.67,
             max_drawdown_pct=5.0,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -205,7 +240,18 @@ class TestEvaluateVerdict:
             win_rate=55.0,
             profit_factor=2.5,
             avg_pnl=1.67,
-            max_drawdown_pct=15.0,  # This exceeds the threshold
+            max_drawdown_pct=16.0,  # This exceeds the hard-fail threshold (> 10.0 * 1.5 = 15.0)
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -235,6 +281,17 @@ class TestEvaluateVerdict:
             profit_factor=2.5,
             avg_pnl=1.67,
             max_drawdown_pct=5.0,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -264,6 +321,17 @@ class TestEvaluateVerdict:
             profit_factor=2.5,
             avg_pnl=1.67,
             max_drawdown_pct=5.0,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -293,6 +361,17 @@ class TestEvaluateVerdict:
             profit_factor=1.0,  # Below threshold of 1.2
             avg_pnl=1.67,
             max_drawdown_pct=5.0,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -322,6 +401,17 @@ class TestEvaluateVerdict:
             profit_factor=2.5,
             avg_pnl=0.5,  # Below threshold of 1.0
             max_drawdown_pct=5.0,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -351,6 +441,17 @@ class TestEvaluateVerdict:
             profit_factor=2.5,
             avg_pnl=1.67,
             max_drawdown_pct=12.0,  # This is above threshold but not hard-fail level
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -371,8 +472,8 @@ class TestEvaluateVerdict:
         assert result.verdict == ScorecardVerdict.HOLD
         assert any("Max drawdown too high" in r for r in result.reasons)
 
-    def test_verdict_hard_fail_negative_pnl(self):
-        """Test NO-GO for hard fail: negative PnL."""
+    def test_verdict_hard_fail_negative_pnl_large_loss(self):
+        """Test NO-GO for hard fail: negative PnL with large loss."""
         metrics = ScorecardMetrics(
             closed_trades=300,
             realized_pnl=-100.0,
@@ -380,6 +481,17 @@ class TestEvaluateVerdict:
             profit_factor=2.5,
             avg_pnl=1.67,
             max_drawdown_pct=5.0,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -409,6 +521,17 @@ class TestEvaluateVerdict:
             profit_factor=0.8,
             avg_pnl=1.67,
             max_drawdown_pct=5.0,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -438,6 +561,17 @@ class TestEvaluateVerdict:
             profit_factor=2.5,
             avg_pnl=1.67,
             max_drawdown_pct=25.0,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -467,6 +601,17 @@ class TestEvaluateVerdict:
             profit_factor=2.5,
             avg_pnl=1.67,
             max_drawdown_pct=5.0,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -496,6 +641,17 @@ class TestEvaluateVerdict:
             profit_factor=2.5,
             avg_pnl=1.67,
             max_drawdown_pct=5.0,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -525,6 +681,17 @@ class TestEvaluateVerdict:
             profit_factor=1.1,
             avg_pnl=1.67,
             max_drawdown_pct=5.0,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -554,6 +721,17 @@ class TestEvaluateVerdict:
             profit_factor=2.5,
             avg_pnl=1.67,
             max_drawdown_pct=12.0,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -586,6 +764,14 @@ class TestEvaluateVerdict:
             recent_closed_trades=100,
             recent_realized_pnl=-0.2,
             recent_win_rate=55.0,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -620,6 +806,12 @@ class TestEvaluateVerdict:
             rules_closed_trades=140,
             rules_realized_pnl=0.4,
             catboost_vs_rules_pnl_delta=-0.7,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
@@ -649,6 +841,17 @@ class TestEvaluateVerdict:
             profit_factor=1.1,
             avg_pnl=0.5,
             max_drawdown_pct=12.0,
+            gross_profit=500.0,
+            gross_loss=100.0,
+            max_drawdown_base=-1.0,
+            recent_closed_trades=100,
+            recent_realized_pnl=50.0,
+            recent_win_rate=55.0,
+            catboost_closed_trades=120,
+            catboost_realized_pnl=2.0,
+            rules_closed_trades=130,
+            rules_realized_pnl=1.5,
+            catboost_vs_rules_pnl_delta=0.5,
         )
         thresholds = ScorecardThresholds(
             min_closed_trades=200,
