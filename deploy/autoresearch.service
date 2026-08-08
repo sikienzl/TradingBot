@@ -4,11 +4,11 @@ After=network.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/siegfried/python3/trading_2
-# Load environment file (project .env). Adjust path as needed.
-EnvironmentFile=/home/siegfried/python3/trading_2/.env
-# Ensure python path is explicit
-ExecStart=/usr/bin/env bash -lc "source /home/siegfried/python3/trading_2/.env && /usr/bin/python3 -m src.autoresearch.cli --strategy example-search --news data/sample_news.json"
+WorkingDirectory=/opt/trading_2
+# Load environment file (project .env) from deployed path
+EnvironmentFile=/opt/trading_2/.env
+# Ensure python path is explicit; use project path
+ExecStart=/usr/bin/env bash -lc "source /opt/trading_2/.env && /usr/bin/python3 -m src.autoresearch.cli --strategy example-search --news /opt/trading_2/data/sample_news.json"
 User=siegfried
 
 [Install]
