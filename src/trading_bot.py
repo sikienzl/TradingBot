@@ -3108,11 +3108,11 @@ class CryptoTradingBot:
         tab_decision: str,
         tab_confidence: float,
     ) -> Tuple[bool, str]:
-        if tab_decision == 'kaufen' and not self.config.tabular_allow_buy_entries:
+        if tab_decision == 'buy' and not self.config.tabular_allow_buy_entries:
             return False, 'buy_entries_disabled'
 
         required_confidence = self.config.tabular_buy_min_confidence
-        if tab_decision == 'verkaufen':
+        if tab_decision == 'sell':
             required_confidence = self.config.tabular_min_confidence
 
         if tab_confidence < required_confidence:
@@ -3121,8 +3121,8 @@ class CryptoTradingBot:
         if not self.config.tabular_source_gate_enabled:
             return True, 'gate_disabled'
 
-        tab_bias = 1 if tab_decision == 'kaufen' else - \
-            1 if tab_decision == 'verkaufen' else 0
+        tab_bias = 1 if tab_decision == 'buy' else - \
+            1 if tab_decision == 'sell' else 0
         rule_bias = self._recommendation_bias(rule_recommendation)
 
         if tab_bias == 0:
@@ -3733,13 +3733,13 @@ class CryptoTradingBot:
                 if ml_confidence >= self.config.ml_min_confidence:
                     signal_source = 'llm'
                     signal_confidence = ml_confidence
-                    if ml_decision == 'kaufen':
+                    if ml_decision == 'buy':
                         if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'HOLD (Down-Trend)']:
                             recommendation = 'BUY'
                             score = max(score, 70)
                         elif recommendation in ['BUY', 'STRONG BUY']:
                             score = min(score + int(ml_confidence * 15), 95)
-                    elif ml_decision == 'verkaufen':
+                    elif ml_decision == 'sell':
                         if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'BUY', 'STRONG BUY']:
                             recommendation = 'WEAK SELL'
                             score = min(score, 30)
@@ -3842,12 +3842,12 @@ class CryptoTradingBot:
 
                 tab_result = self.tabular_predictor.predict(
                     row_data, confidence_threshold=self.config.tabular_min_confidence)
-                tab_decision = tab_result.get('decision', 'halten')
+                tab_decision = tab_result.get('decision', 'hold')
                 tab_confidence = float(tab_result.get('confidence', 0.0))
                 tab_proba = tab_result.get('proba', {})
-                tab_sell_proba = float(tab_proba.get('verkaufen', 0.0))
-                tab_hold_proba = float(tab_proba.get('halten', 0.0))
-                tab_buy_proba = float(tab_proba.get('kaufen', 0.0))
+                tab_sell_proba = float(tab_proba.get('sell', 0.0))
+                tab_hold_proba = float(tab_proba.get('hold', 0.0))
+                tab_buy_proba = float(tab_proba.get('buy', 0.0))
                 logger.info(
                     f"  📊 CatBoost for {coin}: {tab_decision.upper()} "
                     f"(Confidence: {tab_confidence*100:.0f}%, Proba: {tab_proba})")
@@ -3871,7 +3871,7 @@ class CryptoTradingBot:
                     tab_decision=tab_decision,
                     tab_confidence=tab_confidence,
                 )
-                required_confidence = self.config.tabular_buy_min_confidence if tab_decision == 'kaufen' else self.config.tabular_min_confidence
+                required_confidence = self.config.tabular_buy_min_confidence if tab_decision == 'buy' else self.config.tabular_min_confidence
                 if tab_confidence >= required_confidence and not should_apply:
                     logger.info(
                         f"  🚧 CatBoost gated for {coin}: {gate_reason} "
@@ -3882,13 +3882,13 @@ class CryptoTradingBot:
                 if should_apply:
                     signal_source = 'catboost'
                     signal_confidence = tab_confidence
-                    if tab_decision == 'kaufen':
+                    if tab_decision == 'buy':
                         if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'HOLD (Down-Trend)']:
                             recommendation = 'BUY'
                             score = max(score, 72)
                         elif recommendation in ['BUY', 'STRONG BUY']:
                             score = min(score + int(tab_confidence * 12), 97)
-                    elif tab_decision == 'verkaufen':
+                    elif tab_decision == 'sell':
                         if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'BUY', 'STRONG BUY']:
                             recommendation = 'WEAK SELL'
                             score = min(score, 28)
@@ -4905,13 +4905,13 @@ class Backtester:
             price=row["close"]
             signal=strategy_func(row, **kwargs)
 
-            if signal == "kaufen" and cash > 0:
+            if signal == "buy" and cash > 0:
                 amount=cash / price
                 holdings[coin]=holdings.get(coin, 0) + amount
                 self.trades.append(
                     (row["timestamp"], coin, "buy", price, amount))
                 cash=0
-            elif signal == "verkaufen" and holdings.get(coin, 0) > 0:
+            elif signal == "sell" and holdings.get(coin, 0) > 0:
                 amount=holdings[coin]
                 cash += amount * price
                 self.trades.append(
@@ -4951,10 +4951,10 @@ def simple_strategy(row, rsi_buy=30, rsi_sell=70):
     # Example strategy: RSI-based buy/sell signals
     if "rsi" in row:
         if row["rsi"] < rsi_buy:
-            return "kaufen"
+            return "buy"
         if row["rsi"] > rsi_sell:
-            return "verkaufen"
-    return "halten"
+            return "sell"
+    return "hold"
 
 
 if __name__ == "__main__":

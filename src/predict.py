@@ -117,7 +117,7 @@ Answer only with one word (buy/sell/hold):"""
             )
             # Extract decisions – only evaluate the newly generated part,
             # ignoring case and punctuation
-            valid_decisions = {"kaufen", "verkaufen", "halten"}
+            valid_decisions = {"buy", "sell", "hold"}
             votes = []
             for r in responses:
                 # Only look at the newly generated part (after the prompt)
@@ -131,14 +131,14 @@ Answer only with one word (buy/sell/hold):"""
                     continue
                 # 2nd attempt: search anywhere in the text (priority: more specific first)
                 found = None
-                for keyword in ("verkaufen", "kaufen", "halten"):
+                for keyword in ("sell", "buy", "hold"):
                     if keyword in generated:
                         found = keyword
                         break
                 if found:
                     votes.append(found)
             if not votes:
-                return {'decision': 'halten', 'confidence': 0.0, 'llm_votes': {}, 'rule': self.rule_based_decision(data)}
+                return {'decision': 'hold', 'confidence': 0.0, 'llm_votes': {}, 'rule': self.rule_based_decision(data)}
             # Majority vote and confidence
             from collections import Counter
             vote_counts = Counter(votes)
@@ -150,7 +150,7 @@ Answer only with one word (buy/sell/hold):"""
             if decision == rule_decision and confidence >= confidence_threshold:
                 final_decision = decision
             else:
-                final_decision = 'halten'
+                final_decision = 'hold'
             return {
                 'decision': final_decision,
                 'confidence': confidence,
@@ -159,7 +159,7 @@ Answer only with one word (buy/sell/hold):"""
             }
         except Exception as e:
             print(f"Prediction error: {e!s}")
-            return {'decision': 'halten', 'confidence': 0.0, 'llm_votes': {}, 'rule': 'halten'}
+            return {'decision': 'hold', 'confidence': 0.0, 'llm_votes': {}, 'rule': 'hold'}
 
 
 # Example usage

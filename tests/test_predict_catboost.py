@@ -14,8 +14,8 @@ def test_catboost_predict_holds_when_confidence_too_low():
     predictor = CatBoostTradingPredictor.__new__(CatBoostTradingPredictor)
     predictor.model = _FakeModel()
     predictor.features = ["rsi", "macd", "ret_1"]
-    predictor.label_map = {"verkaufen": 0, "halten": 1, "kaufen": 2}
-    predictor.inv_label_map = {0: "verkaufen", 1: "halten", 2: "kaufen"}
+    predictor.label_map = {"sell": 0, "hold": 1, "buy": 2}
+    predictor.inv_label_map = {0: "sell", 1: "hold", 2: "buy"}
     predictor.recommended_confidence_threshold = 0.45
     predictor.margin_threshold = 0.03
 

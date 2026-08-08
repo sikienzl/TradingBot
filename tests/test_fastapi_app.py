@@ -110,7 +110,7 @@ def test_catboost_predict_endpoint_returns_typed_prediction(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["model_dir"] == "./model/catboost_trading_model"
-    assert body["decision"] == "kaufen"
+    assert body["decision"] == "buy"
     assert body["proba"]["buy"] == 0.72
 
 

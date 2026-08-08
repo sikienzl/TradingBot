@@ -14,7 +14,7 @@ class CatBoostTradingPredictor:
         self.research_signal_path = research_signal_path
         self.model = CatBoostClassifier()
         self.features = []
-        self.label_map = {"verkaufen": 0, "halten": 1, "kaufen": 2}
+        self.label_map = {"sell": 0, "hold": 1, "buy": 2}
         self.inv_label_map = {v: k for k, v in self.label_map.items()}
         self.recommended_confidence_threshold = 0.45
         self.margin_threshold = 0.03
@@ -52,7 +52,7 @@ class CatBoostTradingPredictor:
 
         if row_df.empty:
             return {
-                "decision": "halten",
+                "decision": "hold",
                 "confidence": 0.0,
                 "proba": {},
                 "threshold_used": threshold,
@@ -82,14 +82,14 @@ class CatBoostTradingPredictor:
         proba = self.model.predict_proba(x)[0]
         pred_idx = int(np.argmax(proba))
         confidence = float(np.max(proba))
-        decision = self.inv_label_map.get(pred_idx, "halten")
+        decision = self.inv_label_map.get(pred_idx, "hold")
         sorted_proba = np.sort(proba)
         margin = float(sorted_proba[-1] - sorted_proba[-2]
                        ) if len(sorted_proba) >= 2 else 1.0
 
         # Conservative guard: only trade with sufficient confidence
         if confidence < threshold or margin < self.margin_threshold:
-            decision = "halten"
+            decision = "hold"
 
         proba_dict = {
             self.inv_label_map.get(i, str(i)): float(p)

@@ -30,8 +30,8 @@ def load_and_preprocess_data(filepath="crypto_data.csv"):
 
     # Create labels based on future price movement
     df["future_return"] = df["close"].pct_change(3).shift(-3)  # 3-day return
-    df["label"] = np.where(df["future_return"] > 0.02, "kaufen",
-                          np.where(df["future_return"] < -0.02, "verkaufen", "halten"))
+    df["label"] = np.where(df["future_return"] > 0.02, "buy",
+                          np.where(df["future_return"] < -0.02, "sell", "hold"))
     df = df.dropna()
 
     # Convert timestamp back to milliseconds (for consistency)

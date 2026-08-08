@@ -33,7 +33,7 @@ BASE_FEATURE_COLUMNS: list[str] = [
     "volume",
 ]
 
-LABEL_MAP = {"verkaufen": 0, "halten": 1, "kaufen": 2}
+LABEL_MAP = {"sell": 0, "hold": 1, "buy": 2}
 INV_LABEL_MAP = {v: k for k, v in LABEL_MAP.items()}
 
 
@@ -60,7 +60,7 @@ def compute_class_weights(y: np.ndarray, n_classes: int = 3) -> list[float]:
 def tune_confidence_threshold(
     y_true: np.ndarray,
     proba: np.ndarray,
-    hold_label: int = LABEL_MAP["halten"],
+    hold_label: int = LABEL_MAP["hold"],
     threshold_min: float = 0.40,
     threshold_max: float = 0.80,
     threshold_step: float = 0.01,
@@ -149,9 +149,9 @@ def create_profit_labels(
 
     out["label"] = np.where(
         out["future_net_return"] >= buy_threshold,
-        "kaufen",
+        "buy",
         np.where(out["future_net_return"] <=
-                 sell_threshold, "verkaufen", "halten"),
+                 sell_threshold, "sell", "hold"),
     )
 
     return out
@@ -303,7 +303,7 @@ def train_model(
     recommended_conf_threshold, threshold_stats = tune_confidence_threshold(
         y_true=y_val,
         proba=val_proba,
-        hold_label=LABEL_MAP["halten"],
+        hold_label=LABEL_MAP["hold"],
         threshold_min=0.40,
         threshold_max=0.80,
         threshold_step=0.01,

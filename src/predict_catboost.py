@@ -5,9 +5,9 @@ import pandas as pd
 from catboost import CatBoostClassifier
 
 _DE_TO_EN_DECISION = {
-    "verkaufen": "sell",
-    "halten": "hold",
-    "kaufen": "buy",
+    "sell": "sell",
+    "hold": "hold",
+    "buy": "buy",
     "sell": "sell",
     "hold": "hold",
     "buy": "buy",
@@ -20,7 +20,7 @@ class CatBoostTradingPredictor:
         self.research_signal_path = research_signal_path
         self.model = CatBoostClassifier()
         self.features = []
-        self.label_map = {"verkaufen": 0, "halten": 1, "kaufen": 2}
+        self.label_map = {"sell": 0, "hold": 1, "buy": 2}
         self.inv_label_map = {v: k for k, v in self.label_map.items()}
         self.recommended_confidence_threshold = 0.45
         self.margin_threshold = 0.03
