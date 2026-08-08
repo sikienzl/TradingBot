@@ -9,7 +9,7 @@ WorkingDirectory=/home/siegfried/python3/trading_2
 EnvironmentFile=/home/siegfried/python3/trading_2/.env
 # Ensure python path is explicit
 ExecStart=/usr/bin/env bash -lc "source /home/siegfried/python3/trading_2/.env && /usr/bin/python3 -m src.autoresearch.cli --strategy example-search --news data/sample_news.json"
-User=%i
+User=siegfried
 
 [Install]
 WantedBy=multi-user.target
