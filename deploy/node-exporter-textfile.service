@@ -6,8 +6,9 @@ Requires=scorecard-status.service
 [Service]
 Type=oneshot
 User=root
-# Symlink our prom file into the system Node Exporter textfile directory
+# Symlink prom files into the system Node Exporter textfile directory
 ExecStart=/bin/ln -sfn /opt/trading_2/results/scorecards/textfile/trading_scorecard.prom /var/lib/prometheus/node-exporter/trading_scorecard.prom
+ExecStart=/bin/ln -sfn /opt/trading_2/results/scorecards/textfile/autoresearch_signal.prom /var/lib/prometheus/node-exporter/autoresearch_signal.prom
 RemainAfterExit=yes
 
 [Install]
