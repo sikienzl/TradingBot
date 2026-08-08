@@ -4,15 +4,6 @@ import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier
 
-_DE_TO_EN_DECISION = {
-    "sell": "sell",
-    "hold": "hold",
-    "buy": "buy",
-    "sell": "sell",
-    "hold": "hold",
-    "buy": "buy",
-}
-
 
 class CatBoostTradingPredictor:
     def __init__(self, model_dir: str = "./model/catboost_trading_model", research_signal_path: str | None = None):
@@ -63,15 +54,14 @@ class CatBoostTradingPredictor:
         proba = self.model.predict_proba(x)[0]
         pred_idx = int(np.argmax(proba))
         confidence = float(np.max(proba))
-        decision = _DE_TO_EN_DECISION.get(
-            self.inv_label_map.get(pred_idx, "hold"), "hold")
+        decision = self.inv_label_map.get(pred_idx, "hold")
 
         # Conservative guard: only trade with sufficient confidence
         if confidence < confidence_threshold:
             decision = "hold"
 
         proba_dict = {
-            _DE_TO_EN_DECISION.get(self.inv_label_map.get(i, str(i)), str(i)): float(p)
+            self.inv_label_map.get(i, str(i)): float(p)
             for i, p in enumerate(proba)
         }
 
