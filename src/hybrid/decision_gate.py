@@ -48,32 +48,6 @@ class HybridDecisionGate:
             "HYBRID_GATE_ENABLED", "true").lower() == "true"
         self.use_historical = os.getenv(
             "HYBRID_GATE_USE_HISTORICAL_DATA", "true").lower() == "true"
-        
-    def process_alert(self, alert: AnomalyAlert) -> dict[str, Any] | None:
-        """
-        Process an anomaly alert from Hailo-8.
-        
-        Args:
-            alert: AnomalyAlert object from Hailo-8
-            
-        Returns:
-            Decision dictionary or None if no action required
-        """
-        logger.info(f"Processing anomaly alert for {alert.coin}")
-        
-        # If not enabled, just return the alert
-        if not self.enabled:
-            return {"action": "continue", "reason": "Hybrid gate disabled"}
-        
-        # Check if alert is critical
-        if alert.is_critical():
-            return {
-                "action": "call_gpt5",
-                "reason": f"High anomaly score ({alert.hailo_score:.2f})",
-                "alert": alert
-            }
-        else:
-            return {"action": "continue", "reason": "Below threshold"}
         self.emit_metrics = os.getenv(
             "HYBRID_GATE_EMIT_METRICS", "true").lower() == "true"
         self.gpt5_calls_today = 0
@@ -81,6 +55,29 @@ class HybridDecisionGate:
             os.getenv("HYBRID_GATE_SKIP_AFTER_DAILY_CALLS", "50"))
 
         logger.info(f"HybridDecisionGate initialized: enabled={self.enabled}")
+
+    def process_alert(self, alert: AnomalyAlert) -> dict[str, Any] | None:
+        """
+        Process an anomaly alert from Hailo-8.
+
+        Args:
+            alert: AnomalyAlert object from Hailo-8
+
+        Returns:
+            Decision dictionary or None if no action required
+        """
+        logger.info(f"Processing anomaly alert for {alert.coin}")
+
+        if not self.enabled:
+            return {"action": "continue", "reason": "Hybrid gate disabled"}
+
+        if alert.is_critical():
+            return {
+                "action": "call_gpt5",
+                "reason": f"High anomaly score ({alert.hailo_score:.2f})",
+                "alert": alert
+            }
+        return {"action": "continue", "reason": "Below threshold"}
 
     async def evaluate(self, alert: AnomalyAlert) -> dict[str, Any] | None:
         """
