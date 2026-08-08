@@ -24,6 +24,7 @@ import logging
 import os
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -71,7 +72,6 @@ def _download_with_progress(url: str, dest: Path, timeout: int) -> None:
             sys.stdout.write(f"\r  {pct:5.1f}%  {mb:.1f}/{total_mb:.1f} MB")
         sys.stdout.flush()
 
-    req = urllib.request.Request(url, headers={"User-Agent": "TradingBot/1.0 model-downloader"})
     # urllib does not accept a single timeout kwarg in urlretrieve; use opener
     opener = urllib.request.build_opener()
     opener.addheaders = [("User-Agent", "TradingBot/1.0 model-downloader")]
@@ -139,7 +139,7 @@ def download_model(
         try:
             _download_with_progress(url, tmp_path, timeout)
             break
-        except Exception as exc:
+        except (OSError, urllib.error.URLError, ValueError) as exc:
             logger.warning("Download attempt %d failed: %s", attempt, exc)
             if tmp_path.exists():
                 tmp_path.unlink()

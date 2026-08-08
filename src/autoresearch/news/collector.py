@@ -121,7 +121,7 @@ def collect_from_cryptopanic(
         try:
             resp = requests.get(url, params=params, timeout=15)
             resp.raise_for_status()
-        except Exception:
+        except (requests.RequestException, OSError):
             break
 
         try:
