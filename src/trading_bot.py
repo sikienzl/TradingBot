@@ -1245,7 +1245,10 @@ class CryptoTradingBot:
         self.ml_predictor = None
         if self.config.use_ml_model:
             try:
-                from src.predict import TradingModelPredictor
+                try:
+                    from src.predict import TradingModelPredictor
+                except ModuleNotFoundError:
+                    from predict import TradingModelPredictor  # type: ignore[no-redef]
                 self.ml_predictor = TradingModelPredictor(
                     self.config.model_path)
                 logger.info(
@@ -1257,7 +1260,10 @@ class CryptoTradingBot:
         self.tabular_predictor = None
         if self.config.use_tabular_model:
             try:
-                from src.predict_catboost import CatBoostTradingPredictor
+                try:
+                    from src.predict_catboost import CatBoostTradingPredictor
+                except ModuleNotFoundError:
+                    from predict_catboost import CatBoostTradingPredictor  # type: ignore[no-redef]
                 self.tabular_predictor = CatBoostTradingPredictor(
                     self.config.tabular_model_path,
                     research_signal_path=self.config.tabular_research_signal_path,
@@ -4833,8 +4839,12 @@ class CryptoTradingBot:
                         ):
                             # lazy import to avoid hard dependency unless enabled
                             try:
-                                from src.autoresearch.runner import AutoResearchRunner
-                                from src.autoresearch.storage import FileStorage
+                                try:
+                                    from src.autoresearch.runner import AutoResearchRunner
+                                    from src.autoresearch.storage import FileStorage
+                                except ModuleNotFoundError:
+                                    from autoresearch.runner import AutoResearchRunner  # type: ignore[no-redef]
+                                    from autoresearch.storage import FileStorage  # type: ignore[no-redef]
                             except Exception:
                                 logger.exception("AutoResearch modules not available")
                             else:
@@ -5461,7 +5471,10 @@ if __name__ == "__main__":
         bot=CryptoTradingBot(config)
         # Start lightweight health / metrics endpoint (port TRADING_BOT_METRICS_PORT, default 9204)
         try:
-            from src.utils.health_endpoint import start_health_server
+            try:
+                from src.utils.health_endpoint import start_health_server
+            except ModuleNotFoundError:
+                from utils.health_endpoint import start_health_server  # type: ignore[no-redef]
             start_health_server()
         except Exception as _he:
             logger.warning("Health endpoint not started: %s", _he)
