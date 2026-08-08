@@ -108,9 +108,10 @@ class HybridDecisionGate:
 
         # Lazy-import to avoid circular dependency; GPT5StrategistService lives in cloud layer
         try:
-            from src.cloud.strategist_service import (
-                GPT5StrategistService,
-            )
+            try:
+                from src.cloud.strategist_service import GPT5StrategistService  # noqa: PLC0415
+            except ModuleNotFoundError:
+                from cloud.strategist_service import GPT5StrategistService  # type: ignore[no-redef]  # noqa: PLC0415
             strategist = GPT5StrategistService()
             decision = await strategist.process_anomaly_alert(alert)
             self.gpt5_calls_today += 1
