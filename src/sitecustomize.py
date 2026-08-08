@@ -1,4 +1,8 @@
-import os, sys, json, traceback
+import json
+import os
+import sys
+import traceback
+
 try:
     p = '/opt/trading_2/logs/sitecustomize_start.jsonl'
     os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -10,5 +14,5 @@ try:
     }
     with open(p, 'a') as f:
         f.write(json.dumps(data) + '\n')
-except Exception:
+except Exception:  # noqa: BLE001
     sys.stderr.write('sitecustomize dump failed:\n' + traceback.format_exc())
