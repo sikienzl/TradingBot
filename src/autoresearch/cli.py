@@ -7,7 +7,7 @@ import numpy as np
 from .runner import AutoResearchRunner
 from .search import grid_search
 from .storage import FileStorage
-from .writer import make_canonical, write_canonical
+from .writer import make_canonical, write_canonical, write_prom
 
 
 def main(argv=None):
@@ -38,19 +38,25 @@ def main(argv=None):
         canonical = make_canonical(best.get("signals", {}))
         from .bridge import is_fresh, neutral_payload
         # if fallback-neutral flag set, write neutral and exit
+        prom_path = os.environ.get("AUTORESEARCH_PROM_PATH", "results/scorecards/textfile/autoresearch_signal.prom")
         if args.fallback_neutral:
-            write_canonical(out_path, neutral_payload())
+            _fb = neutral_payload()
+            write_canonical(out_path, _fb)
+            write_prom(prom_path, _fb)
             print("Wrote neutral fallback to", out_path)
             return
         # otherwise validate freshness according to env
         if not is_fresh(canonical, int(os.environ.get("AUTORESEARCH_MAX_AGE_MINUTES", "180"))):
             if os.environ.get("AUTORESEARCH_WRITE_NEUTRAL_FALLBACK", "true").lower() == "true":
-                write_canonical(out_path, neutral_payload())
+                _fb = neutral_payload()
+                write_canonical(out_path, _fb)
+                write_prom(prom_path, _fb)
                 print("Canonical payload not fresh; wrote neutral fallback to", out_path)
                 return
             else:
                 raise SystemExit("Canonical payload too old and fallback disabled")
         write_canonical(out_path, canonical)
+        write_prom(prom_path, canonical)
         print("Wrote canonical signal to", out_path)
         return
 
@@ -60,20 +66,26 @@ def main(argv=None):
     out_path = os.environ.get("AUTORESEARCH_OUTPUT_PATH", args.out)
     canonical = make_canonical(res.get("signals", {}))
     from .bridge import is_fresh, neutral_payload
+    prom_path = os.environ.get("AUTORESEARCH_PROM_PATH", "results/scorecards/textfile/autoresearch_signal.prom")
     # if fallback-neutral flag set, write neutral and exit
     if args.fallback_neutral:
-        write_canonical(out_path, neutral_payload())
+        _fb = neutral_payload()
+        write_canonical(out_path, _fb)
+        write_prom(prom_path, _fb)
         print("Wrote neutral fallback to", out_path)
         return
     max_age = int(os.environ.get("AUTORESEARCH_MAX_AGE_MINUTES", "180"))
     if not is_fresh(canonical, max_age):
         if os.environ.get("AUTORESEARCH_WRITE_NEUTRAL_FALLBACK", "true").lower() == "true":
-            write_canonical(out_path, neutral_payload())
+            _fb = neutral_payload()
+            write_canonical(out_path, _fb)
+            write_prom(prom_path, _fb)
             print("Canonical payload not fresh; wrote neutral fallback to", out_path)
             return
         else:
             raise SystemExit("Canonical payload too old and fallback disabled")
     write_canonical(out_path, canonical)
+    write_prom(prom_path, canonical)
     print("Wrote canonical signal to", out_path)
 
 

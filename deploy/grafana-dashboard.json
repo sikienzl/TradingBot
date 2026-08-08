@@ -149,22 +149,22 @@
           "mode": "multi"
         }
       },
-      "title": "Hybrid Event Rates",
+      "title": "Hybrid Service Status",
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum by (event_type) (rate(trading_hybrid_edge_filter_events_total[5m]))",
-          "legendFormat": "edge {{event_type}}",
+          "expr": "trading_hybrid_edge_filter_up",
+          "legendFormat": "Edge Filter",
           "refId": "A"
         },
         {
-          "expr": "sum by (event_type) (rate(trading_hybrid_strategist_events_total[5m]))",
-          "legendFormat": "strategist {{event_type}}",
+          "expr": "trading_hybrid_strategist_up",
+          "legendFormat": "Strategist",
           "refId": "B"
         },
         {
-          "expr": "sum by (event_type) (rate(trading_hybrid_market_relay_events_total[5m]))",
-          "legendFormat": "relay {{event_type}}",
+          "expr": "trading_hybrid_market_relay_up",
+          "legendFormat": "Market Relay",
           "refId": "C"
         }
       ]
@@ -2506,7 +2506,7 @@
       "type": "table",
       "targets": [
         {
-          "expr": "trading_ai_copilot_shadow_suggestion_value",
+          "expr": "(trading_ai_copilot_shadow_suggestion_value) or vector(0)",
           "format": "table",
           "instant": true,
           "legendFormat": "{{parameter}}",
@@ -2514,7 +2514,7 @@
           "refId": "A"
         },
         {
-          "expr": "trading_ai_copilot_shadow_suggestion_confidence",
+          "expr": "(trading_ai_copilot_shadow_suggestion_confidence) or vector(0)",
           "format": "table",
           "instant": true,
           "legendFormat": "{{parameter}}",
@@ -2522,7 +2522,7 @@
           "refId": "B"
         },
         {
-          "expr": "trading_ai_copilot_shadow_suggestion_age_minutes",
+          "expr": "(trading_ai_copilot_shadow_suggestion_age_minutes) or vector(0)",
           "format": "table",
           "instant": true,
           "legendFormat": "{{parameter}}",
@@ -3441,6 +3441,239 @@
           "refId": "C"
         }
       ]
+    },
+    {
+      "id": 106,
+      "type": "row",
+      "title": "AutoResearch Signal",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 200
+      },
+      "panels": []
+    },
+    {
+      "id": 107,
+      "type": "stat",
+      "title": "AutoResearch Sentiment",
+      "description": "1=buy, 0=hold, -1=sell",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 201
+      },
+      "targets": [
+        {
+          "expr": "trading_autoresearch_sentiment",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": -1
+              },
+              {
+                "color": "yellow",
+                "value": -0.1
+              },
+              {
+                "color": "green",
+                "value": 0.5
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "BUY"
+                },
+                "0": {
+                  "text": "HOLD"
+                },
+                "-1": {
+                  "text": "SELL"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 108,
+      "type": "stat",
+      "title": "AutoResearch Confidence",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 201
+      },
+      "targets": [
+        {
+          "expr": "trading_autoresearch_confidence",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 0.4
+              },
+              {
+                "color": "green",
+                "value": 0.7
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 109,
+      "type": "stat",
+      "title": "AutoResearch Regime",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 201
+      },
+      "targets": [
+        {
+          "expr": "trading_autoresearch_regime",
+          "legendFormat": "{{regime}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
+      "id": 110,
+      "type": "stat",
+      "title": "Signal Age",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 201
+      },
+      "targets": [
+        {
+          "expr": "trading_autoresearch_signal_age_seconds",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 600
+              },
+              {
+                "color": "red",
+                "value": 1800
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 111,
+      "type": "timeseries",
+      "title": "AutoResearch Signal History",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 205
+      },
+      "targets": [
+        {
+          "expr": "trading_autoresearch_sentiment",
+          "legendFormat": "Sentiment",
+          "refId": "A"
+        },
+        {
+          "expr": "trading_autoresearch_confidence",
+          "legendFormat": "Confidence",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
     }
   ],
   "refresh": "30s",
