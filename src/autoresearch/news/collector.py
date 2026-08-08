@@ -78,6 +78,75 @@ def collect(path: str) -> list[dict]:
         return []
 
 
+def collect_from_cryptopanic(
+    api_key: str,
+    currencies: list[str] | None = None,
+    kind: str = "news",
+    filter_: str = "hot",
+    max_pages: int = 1,
+) -> list[dict]:
+    """
+    Fetch live news from CryptoPanic API (https://cryptopanic.com/api/).
+
+    Args:
+        api_key:    CryptoPanic auth token (free tier available).
+        currencies: List of ticker symbols to filter, e.g. ["BTC", "ETH"].
+                    None fetches all currencies.
+        kind:       "news", "media", or "all".
+        filter_:    "rising", "hot", "bullish", "bearish", "important", "saved", "lol".
+        max_pages:  Number of result pages to fetch (each page ≈ 20 items).
+
+    Returns:
+        List of records with keys: ts, title, summary, link, currencies, source.
+    """
+    if not requests:
+        return []
+
+    base_url = "https://cryptopanic.com/api/v1/posts/"
+    params: dict = {
+        "auth_token": api_key,
+        "kind": kind,
+        "filter": filter_,
+        "public": "true",
+    }
+    if currencies:
+        params["currencies"] = ",".join(currencies)
+
+    results: list[dict] = []
+    url: str | None = base_url
+
+    for _ in range(max(1, max_pages)):
+        if not url:
+            break
+        try:
+            resp = requests.get(url, params=params, timeout=15)
+            resp.raise_for_status()
+        except Exception:
+            break
+
+        try:
+            data = resp.json()
+        except (ValueError, TypeError):
+            break
+
+        for item in data.get("results", []):
+            rec: dict = {
+                "ts": item.get("published_at") or item.get("created_at"),
+                "title": item.get("title"),
+                "summary": item.get("title"),  # CryptoPanic has no body in free tier
+                "link": item.get("url"),
+                "currencies": [c.get("code") for c in item.get("currencies", [])],
+                "source": item.get("source", {}).get("title"),
+            }
+            results.append(rec)
+
+        # Pagination: CryptoPanic provides a `next` URL
+        url = data.get("next")
+        params = {}  # next URL already contains query params
+
+    return results
+
+
 def collect_from_url(url: str) -> list[dict]:
     """Fetch a URL and attempt to parse JSON; fall back to RSS if appropriate."""
     if not requests:

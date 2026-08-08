@@ -24,6 +24,7 @@ from src.hybrid.grpc_bridge import (
 from src.hybrid.monitoring import ServiceMetrics
 from src.hybrid.transport import EdgeAlertPayload, MarketSnapshotPayload, TransportAck
 from src.kraken_websocket_v2 import Tick, kraken_websocket_session
+from src.utils.bloom_filter import BloomFilter
 
 logger = logging.getLogger(__name__)
 
@@ -86,9 +87,19 @@ class HailoEdgeFilterService:
             "ticks_processed": 0,
             "anomalies_detected": 0,
             "alerts_forwarded": 0,
+            "alerts_deduplicated": 0,
             "inference_time_ms": 0.0,
             "last_update": None,
         }
+
+        # Bloom filter: suppress duplicate alerts (same coin+signal within window).
+        # Cleared every HAILO8_BLOOM_RESET_TICKS ticks (default 1000 ≈ 100s at 10 fps).
+        self._alert_bloom: BloomFilter = BloomFilter(
+            capacity=int(os.getenv("HAILO8_BLOOM_CAPACITY", "2000")),
+            error_rate=float(os.getenv("HAILO8_BLOOM_ERROR_RATE", "0.005")),
+        )
+        self._bloom_reset_ticks: int = int(
+            os.getenv("HAILO8_BLOOM_RESET_TICKS", "1000"))
 
         logger.info("🚀 HailoEdgeFilterService initialized")
 
@@ -134,6 +145,23 @@ class HailoEdgeFilterService:
                 self.service_metrics.set_value(
                     "anomalies_detected", self.metrics["anomalies_detected"]
                 )
+
+                # Bloom-filter deduplication: suppress repeated alerts for the
+                # same coin + signal_type within the current reset window.
+                score_bucket = int(alert_dict["anomaly_score"] // 5) * 5
+                bloom_key = f"{symbol}:{alert_dict['signal_type']}:{score_bucket}"
+                if bloom_key in self._alert_bloom:
+                    self.metrics["alerts_deduplicated"] += 1
+                    logger.debug(
+                        "Bloom filter suppressed duplicate alert: %s", bloom_key)
+                    return None
+                self._alert_bloom.add(bloom_key)
+
+                # Periodically reset the bloom filter to allow new alerts after
+                # the suppression window expires.
+                if self.metrics["ticks_processed"] % self._bloom_reset_ticks == 0:
+                    self._alert_bloom.clear()
+                    logger.debug("Bloom filter reset after %d ticks", self._bloom_reset_ticks)
 
                 # Create AnomalyAlert for hybrid gate
                 anomaly_alert = AnomalyAlert(

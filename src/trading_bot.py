@@ -1269,6 +1269,9 @@ class CryptoTradingBot:
 
         if self.config.use_tabular_model:
             self._maybe_auto_tune_tabular_confidence()
+            self._maybe_auto_tune_policy_params()
+
+        self._maybe_apply_capital_step_up()
 
     def _init_trade_journal(self):
         """Creates the journal file with header if it does not yet exist."""
@@ -1631,6 +1634,320 @@ class CryptoTradingBot:
         else:
             logger.info(
                 f"ℹ️ AUTO_TUNE disabled. Recommended TABULAR_MIN_CONFIDENCE: {recommended:.2f}")
+
+    # ------------------------------------------------------------------
+    # Policy-based auto-tuning with Python Reflection (getattr/setattr)
+    # ------------------------------------------------------------------
+
+    #: Mapping from tuning_policy.json parameter name → BotConfig attribute name.
+    #: Python reflection (getattr/setattr) is used to read/write these at runtime.
+    _POLICY_PARAM_TO_CONFIG_ATTR: Dict[str, str] = {
+        "MAX_HOLD_SECONDS":              "max_hold_seconds",
+        "REENTRY_COOLDOWN_MAX_SECONDS":  "reentry_cooldown_max_seconds",
+        "ENTRY_MIN_RET_3":               "entry_min_ret_3",
+        "MIN_ENTRY_SCORE":               "min_entry_score",
+        "TABULAR_BUY_MIN_CONFIDENCE":    "tabular_buy_min_confidence",
+    }
+
+    def _maybe_auto_tune_policy_params(self) -> None:
+        """
+        Policy-driven multi-parameter auto-tuning using Python reflection.
+
+        Reads tuning_policy.json, determines the active phase, then for each
+        enabled parameter sweeps candidate values against the trade journal and
+        applies the best value via setattr(self.config, attr, value).
+
+        Only runs when AUTO_TUNE_TABULAR_CONFIDENCE=true (reuses existing flag).
+        """
+        if not self.config.auto_tune_tabular_confidence:
+            return
+
+        policy_path = os.getenv("TUNING_POLICY_PATH", "tuning_policy.json")
+        if not os.path.exists(policy_path):
+            logger.debug("No tuning_policy.json found at %s — skipping policy tune.", policy_path)
+            return
+
+        try:
+            with open(policy_path, encoding="utf-8") as fh:
+                policy: Dict = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Could not load tuning_policy.json: %s", exc)
+            return
+
+        state = self._read_auto_tune_state()
+
+        # Respect cooldown
+        if self._cooldown_remaining_minutes(state) > 0:
+            return
+
+        # Check safety brakes
+        sc_ok, _ = self._check_scorecard_verdict()
+        if not sc_ok:
+            logger.info("🔒 Policy auto-tune skipped: scorecard NO-GO active.")
+            return
+
+        # Determine active phase (phase_1 → phase_2 after enough successful cycles)
+        successful_cycles = int(state.get("successful_cycles", 0))
+        phase1_threshold = int(
+            policy.get("activation_plan", {})
+            .get("phase_1", {})
+            .get("required_successful_cycles_before_next_phase", 2)
+        )
+        if successful_cycles >= phase1_threshold:
+            active_phase = policy.get("activation_plan", {}).get("phase_2", {})
+        else:
+            active_phase = policy.get("activation_plan", {}).get("phase_1", {})
+        enabled_params: list[str] = active_phase.get("enabled_parameters", [])
+
+        if not enabled_params:
+            return
+
+        path = self.config.performance_log_file
+        if not os.path.exists(path):
+            return
+        try:
+            df = pd.read_csv(path)
+        except Exception as exc:
+            logger.warning("Policy tune: cannot read journal: %s", exc)
+            return
+
+        sells = df[df.get("action", pd.Series(dtype=str)) == "sell"].copy() if "action" in df.columns else pd.DataFrame()
+        if sells.empty:
+            return
+        sells = sells.tail(max(1, self.config.auto_tune_lookback_trades))
+
+        tunable: list[Dict] = policy.get("tunable_parameters", [])
+        param_map = {p["name"]: p for p in tunable}
+
+        applied_count = 0
+        max_per_cycle = int(
+            policy.get("optimization_cycle", {}).get("max_parameter_changes_per_cycle", 1)
+        )
+
+        new_state = dict(state)
+
+        for param_name in enabled_params:
+            if applied_count >= max_per_cycle:
+                break
+            if param_name not in param_map:
+                continue
+            if param_name not in self._POLICY_PARAM_TO_CONFIG_ATTR:
+                continue
+
+            pdef = param_map[param_name]
+            attr = self._POLICY_PARAM_TO_CONFIG_ATTR[param_name]
+            dtype = pdef.get("type", "float")
+
+            # --- Python reflection: read current value from config ---
+            current = getattr(self.config, attr, None)
+            if current is None:
+                logger.debug("Policy tune: config has no attr '%s' — skipping %s", attr, param_name)
+                continue
+
+            p_min = float(pdef.get("min", current))
+            p_max = float(pdef.get("max", current))
+            p_step = max(float(pdef.get("step", 1)), 1e-9)
+
+            candidates = list(np.arange(p_min, p_max + p_step * 0.5, p_step))
+            if not candidates:
+                continue
+
+            best_val = self._evaluate_policy_candidates(
+                param_name, attr, candidates, sells, dtype
+            )
+
+            if best_val is None or abs(float(best_val) - float(current)) < 1e-9:
+                continue
+
+            max_delta = float(self.config.auto_tune_max_delta or 0)
+            if max_delta > 0:
+                best_val = min(max(float(best_val), float(current) - max_delta),
+                               float(current) + max_delta)
+
+            best_val = float(min(max(float(best_val), p_min), p_max))
+            if dtype == "int":
+                best_val = int(round(best_val))
+
+            # --- Python reflection: write new value to config ---
+            setattr(self.config, attr, best_val)
+            logger.info(
+                "✅ Policy auto-tune [%s] %s → %s (attr: config.%s)",
+                param_name, current, best_val, attr,
+            )
+            new_state[f"last_applied_{param_name}"] = best_val
+            applied_count += 1
+
+        if applied_count > 0:
+            new_state["last_applied_at"] = datetime.now(timezone.utc).isoformat()
+            new_state["successful_cycles"] = successful_cycles + 1
+            self._write_auto_tune_state(new_state)
+
+    def _evaluate_policy_candidates(
+        self,
+        param_name: str,
+        attr: str,
+        candidates: list,
+        sells: "pd.DataFrame",
+        dtype: str,
+    ) -> Optional[float]:
+        """
+        Evaluate candidate values for *param_name* against the trade journal.
+
+        Strategy per parameter type:
+        - Threshold-style (CONFIDENCE, SCORE): sweep + pick highest PnL slice.
+        - Time-style (HOLD, COOLDOWN): use hold_seconds heuristic.
+        - ENTRY_MIN_RET_3: correlate with pnl_base direction.
+        """
+        if "pnl_base" not in sells.columns:
+            return None
+        sells = sells.copy()
+        sells["pnl_base"] = pd.to_numeric(sells["pnl_base"], errors="coerce")
+        sells = sells.dropna(subset=["pnl_base"])
+        if sells.empty:
+            return None
+
+        if param_name in ("TABULAR_BUY_MIN_CONFIDENCE", "MIN_ENTRY_SCORE"):
+            # Journal column to filter on
+            col = "signal_confidence" if param_name == "TABULAR_BUY_MIN_CONFIDENCE" else "signal_confidence"
+            if col not in sells.columns:
+                return None
+            sells[col] = pd.to_numeric(sells[col], errors="coerce")
+            sells = sells.dropna(subset=[col])
+            best: Optional[float] = None
+            best_pnl = float("-inf")
+            for val in candidates:
+                subset = sells[sells[col] >= float(val)]
+                if len(subset) < self.config.auto_tune_min_trades:
+                    continue
+                pnl = float(subset["pnl_base"].sum())
+                if pnl > best_pnl:
+                    best_pnl = pnl
+                    best = float(val)
+            return best
+
+        elif param_name == "MAX_HOLD_SECONDS":
+            # Prefer the hold_seconds value at which winning trades peak.
+            if "hold_seconds" not in sells.columns:
+                return None
+            sells["hold_seconds"] = pd.to_numeric(sells["hold_seconds"], errors="coerce")
+            wins = sells[sells["pnl_base"] > 0].dropna(subset=["hold_seconds"])
+            if wins.empty:
+                return None
+            median_win_hold = float(wins["hold_seconds"].median())
+            # Pick the candidate closest to median winning hold time
+            return min(candidates, key=lambda v: abs(float(v) - median_win_hold))
+
+        elif param_name == "REENTRY_COOLDOWN_MAX_SECONDS":
+            # If recent win_rate < 50%, increase cooldown; otherwise decrease.
+            win_rate = float((sells["pnl_base"] > 0).mean())
+            current = float(getattr(self.config, attr, candidates[len(candidates) // 2]))
+            if win_rate < 0.5:
+                # push toward higher end
+                better = [c for c in candidates if float(c) > current]
+                return float(better[0]) if better else None
+            else:
+                better = [c for c in candidates if float(c) < current]
+                return float(better[-1]) if better else None
+
+        elif param_name == "ENTRY_MIN_RET_3":
+            # Pick the threshold with best average PnL across all trades
+            # (no specific journal column for ret_3; use overall PnL as proxy)
+            current = float(getattr(self.config, attr, candidates[0]))
+            if float(sells["pnl_base"].mean()) >= 0:
+                # Performing well — tighten filter (less negative = more selective)
+                better = [c for c in candidates if float(c) > current]
+                return float(better[0]) if better else None
+            else:
+                # Performing poorly — relax filter
+                better = [c for c in candidates if float(c) < current]
+                return float(better[-1]) if better else None
+
+        return None
+
+    def _maybe_apply_capital_step_up(self) -> None:
+        """
+        Apply the capital step-up ladder from tuning_policy.json.
+
+        Reads the weekly scorecard verdict and maintains a GO-streak counter
+        in auto_tune_state.json. When the streak meets the policy criteria,
+        trade_amount is stepped up to the next rung of the ladder. On NO-GO
+        after a step-up, it is downgraded one rung.
+        """
+        policy_path = os.getenv("TUNING_POLICY_PATH", "tuning_policy.json")
+        if not os.path.exists(policy_path):
+            return
+        try:
+            with open(policy_path, encoding="utf-8") as fh:
+                policy: Dict = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return
+
+        step_cfg = policy.get("capital_step_up", {})
+        if not step_cfg.get("enabled", False):
+            return
+
+        ladder: list[float] = [float(v) for v in step_cfg.get("ladder", [])]
+        if not ladder:
+            return
+
+        criteria = step_cfg.get("criteria", {})
+        required_streak = int(criteria.get("required_go_streak", 3))
+        min_pf = float(criteria.get("min_profit_factor", 1.25))
+        max_dd = float(criteria.get("max_drawdown_pct", 2.0))
+        on_no_go = step_cfg.get("on_no_go_after_step_up", "downgrade_one_step")
+
+        state = self._read_auto_tune_state()
+        go_streak = int(state.get("go_streak", 0))
+        current_ladder_idx = int(state.get("capital_ladder_idx", 0))
+
+        # Read latest scorecard verdict
+        sc_path = self.config.scorecard_verdict_path
+        verdict = "UNKNOWN"
+        profit_factor = 0.0
+        max_drawdown_pct = 0.0
+        try:
+            with open(sc_path, encoding="utf-8") as fh:
+                sc_data = json.load(fh)
+            verdict = sc_data.get("verdict", "UNKNOWN").upper().replace("-", "_")
+            metrics = sc_data.get("metrics", {})
+            profit_factor = float(metrics.get("profit_factor", 0.0))
+            max_drawdown_pct = float(metrics.get("max_drawdown_pct", 0.0))
+        except (FileNotFoundError, OSError, json.JSONDecodeError, KeyError):
+            return  # No scorecard available yet
+
+        if verdict == "GO":
+            go_streak += 1
+        else:
+            if verdict == "NO_GO" and on_no_go == "downgrade_one_step":
+                if current_ladder_idx > 0:
+                    current_ladder_idx -= 1
+                    new_amount = ladder[current_ladder_idx]
+                    self.config.trade_amount = new_amount
+                    logger.warning(
+                        "⬇️  Capital step-DOWN on NO-GO: TRADE_AMOUNT → %.2f EUR (rung %d)",
+                        new_amount, current_ladder_idx,
+                    )
+            go_streak = 0
+
+        # Attempt step-up
+        if (
+            go_streak >= required_streak
+            and profit_factor >= min_pf
+            and max_drawdown_pct <= max_dd
+            and current_ladder_idx + 1 < len(ladder)
+        ):
+            current_ladder_idx += 1
+            new_amount = ladder[current_ladder_idx]
+            self.config.trade_amount = new_amount
+            go_streak = 0  # Reset streak after step-up
+            logger.info(
+                "⬆️  Capital step-UP: TRADE_AMOUNT → %.2f EUR (rung %d, streak=%d, PF=%.2f, DD=%.2f%%)",
+                new_amount, current_ladder_idx, required_streak, profit_factor, max_drawdown_pct,
+            )
+
+        state["go_streak"] = go_streak
+        state["capital_ladder_idx"] = current_ladder_idx
+        self._write_auto_tune_state(state)
 
     def _read_ai_copilot_state(self, path: Optional[str] = None) -> Dict:
         path = path or self.config.ai_copilot_state_file
