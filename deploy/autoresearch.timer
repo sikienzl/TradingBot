@@ -1,0 +1,11 @@
+[Unit]
+Description=Run AutoResearch periodically
+
+[Timer]
+# Run 5 minutes after boot and every 5 minutes thereafter by default
+OnBootSec=5min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
