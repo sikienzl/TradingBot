@@ -1213,6 +1213,8 @@ class CryptoTradingBot:
         self.last_sell_timestamps_utc: Dict[str, datetime] = {}
         self.consecutive_losses: int = 0
         self.buy_pause_until_utc: Optional[datetime] = None
+        # autoresearch hook state
+        self._autoresearch_last_run: Optional[datetime] = None
         self.exchange = self._initialize_exchange()
         self._simulation_cache_iteration: Optional[int] = None
         self._simulation_ohlcv_cache: Dict[Tuple[int,
@@ -4424,6 +4426,46 @@ class CryptoTradingBot:
                     current_market_data,
                     extra_coins=list(self.portfolio.open_trades.keys())
                 )
+
+                # Optional: run AutoResearch if enabled via env var
+                try:
+                    if os.environ.get("AUTORESEARCH_ACTIVE", "false").lower() == "true":
+                        interval = int(os.environ.get("AUTORESEARCH_INTERVAL_SEC", "300"))
+                        now = datetime.now(timezone.utc)
+                        if (
+                            self._autoresearch_last_run is None
+                            or (now - self._autoresearch_last_run).total_seconds() >= interval
+                        ):
+                            # lazy import to avoid hard dependency unless enabled
+                            try:
+                                from src.autoresearch.runner import AutoResearchRunner
+                                from src.autoresearch.storage import FileStorage
+                            except Exception:
+                                logger.exception("AutoResearch modules not available")
+                            else:
+                                try:
+                                    storage = FileStorage(os.environ.get("AUTORESEARCH_OUTPUT_PATH", "results/autoresearch_results.json"))
+                                    runner = AutoResearchRunner(storage)
+                                    strategy = os.environ.get("AUTORESEARCH_STRATEGY", "example")
+                                    params = {}
+                                    news_path = os.environ.get("AUTORESEARCH_NEWS_PATH")
+                                    if news_path:
+                                        params["news_path"] = news_path
+                                        params["bucket_minutes"] = int(os.environ.get("AUTORESEARCH_BUCKET_MINUTES", "5"))
+                                    # pass market data as pandas DataFrame if available
+                                    market_df = None
+                                    try:
+                                        import pandas as pd
+                                        # build DataFrame from current_market_data if it has timestamps
+                                        market_df = pd.DataFrame({k: v for k, v in current_market_data.items()})
+                                    except Exception:
+                                        market_df = None
+                                    runner.run_experiment(strategy, params, market_df)
+                                    self._autoresearch_last_run = now
+                                except Exception:
+                                    logger.exception("AutoResearch run failed")
+                except Exception:
+                    logger.exception("AutoResearch scheduling check failed")
 
                 occupied_positions = set(self.portfolio.open_trades.keys()) | set(
                     self.portfolio.holdings.keys())
