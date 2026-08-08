@@ -1,0 +1,29 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: trading-bot-staging
+
+resources:
+  - ../../base/namespace.yaml
+  - ../../base/service-account.yaml
+  - ../../base/configmap-hybrid.yaml
+
+commonLabels:
+  environment: staging
+
+# Staging: single replica to save resources
+replicas:
+  - name: hailo-worker
+    count: 1
+  - name: cloud-strategist
+    count: 1
+
+patches:
+  - path: resource-limits-staging.yaml
+
+configMapGenerator:
+  - name: trading-env-staging
+    literals:
+      - DRY_RUN=true
+      - LOG_LEVEL=DEBUG
+      - HAILO8_ANOMALY_THRESHOLD=70

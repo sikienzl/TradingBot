@@ -1,0 +1,18 @@
+---
+# PVC for persisting the ONNX model between pod restarts.
+# Uses local-path provisioner; adjust storageClassName for your cluster.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: onnx-model-storage
+  namespace: trading-bot
+  labels:
+    app: trading-bot
+    component: hailo-worker
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi

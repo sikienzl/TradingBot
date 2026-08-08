@@ -106,13 +106,18 @@ class HybridDecisionGate:
             f"🚨 ANOMALY ALERT: score={alert.hailo_score}, coin={alert.coin}, type={alert.signal_type}")
         logger.info("Triggering GPT-5 Chief Strategist evaluation...")
 
-        # TODO: Call GPT-5 with alert context
-        # gpt5_decision = await self.call_gpt5_strategist(alert)
-        # self.gpt5_calls_today += 1
-        # return gpt5_decision
-
-        # Placeholder
-        return {"decision": "PENDING", "reason": "GPT-5 module not yet implemented"}
+        # Lazy-import to avoid circular dependency; GPT5StrategistService lives in cloud layer
+        try:
+            from src.cloud.strategist_service import (
+                GPT5StrategistService,
+            )
+            strategist = GPT5StrategistService()
+            decision = await strategist.process_anomaly_alert(alert)
+            self.gpt5_calls_today += 1
+            return decision
+        except Exception as exc:
+            logger.error("GPT-5 strategist call failed: %s", exc)
+            return {"decision": "VETO", "reason": f"Strategist error: {exc}"}
 
     def reset_daily_counter(self):
         """Reset call counter at midnight"""

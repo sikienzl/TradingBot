@@ -54,3 +54,75 @@ groups:
         annotations:
           summary: "Portfolio return percent changed"
           description: "`trading_portfolio_return_pct` changed in the last 5 minutes — review dashboard for returns and unrealized PnL."
+
+      # ── New alert rules ───────────────────────────────────────────────────────
+
+      - alert: TradingCircuitBreakerActive
+        expr: trading_portfolio_snapshot_age_seconds > 300
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Price staleness circuit breaker is active"
+          description: >-
+            `trading_portfolio_snapshot_age_seconds` > 300 s — the bot's price
+            staleness guard is blocking all new buys. Check exchange connectivity.
+
+      - alert: TradingNoGoVerdict
+        expr: trading_scorecard_final_exit_code == 3
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scorecard is NO-GO — new buys blocked"
+          description: >-
+            Weekly scorecard verdict is NO-GO (exit_code=3) for > 5 minutes.
+            All new position entries are suppressed until a GO verdict is issued.
+
+      - alert: TradingHighDrawdown
+        expr: trading_max_drawdown_pct > 2.0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Max drawdown exceeded 2%"
+          description: >-
+            `trading_max_drawdown_pct` is {{ $value | printf "%.2f" }}% which
+            exceeds the 2% alert threshold. Review open positions and risk config.
+
+      - alert: GPT5BudgetWarning
+        expr: >-
+          (trading_ai_copilot_monthly_spend_usd /
+           trading_ai_copilot_monthly_budget_usd) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPT-5 monthly spend above 80% of budget"
+          description: >-
+            GPT-5 strategist has spent {{ $value | humanizePercentage }} of the
+            monthly budget. Approaching cap — reduce call frequency or increase
+            budget via GPT5_MONTHLY_BUDGET_USD env var.
+
+      - alert: TradingBotDown
+        expr: trading_bot_up == 0 or absent(trading_bot_up)
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Trading bot is down"
+          description: >-
+            `trading_bot_up` is 0 or missing for > 3 minutes.
+            The health endpoint at :9204 is not reachable or bot crashed.
+
+      - alert: TradingBotHeartbeatStale
+        expr: (time() - trading_bot_last_heartbeat_seconds) > 120
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Trading bot heartbeat is stale"
+          description: >-
+            No heartbeat from the trading bot main loop for > 120 s.
+            The process may be hung or deadlocked.
+

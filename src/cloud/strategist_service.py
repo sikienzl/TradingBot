@@ -205,29 +205,127 @@ class GPT5StrategistService:
 
     async def _get_macro_context(self, alert: AnomalyAlert) -> dict[str, Any]:
         """
-        Fetch macro context for anomaly.
-
-        Includes:
-        - Current market regime (trend, volatility, regime)
-        - Portfolio state (open positions, risk metrics)
-        - Recent news/events
-        - Technical indicators
+        Build macro context for GPT-5 from live sources:
+        - Portfolio snapshot (PnL exporter metrics file)
+        - Market regime derived from recent tick buffer in alert
+        - RSI and volatility computed from alert's market_context ticks
+        - Scorecard verdict
         """
-        context = {
+        context: dict[str, Any] = {
             "timestamp": datetime.now(UTC).isoformat(),
-            "portfolio": {
-                # TODO: Fetch from trading bot service
-                "open_positions": [],
-                "total_pnl": 0.0,
-                "drawdown": 0.0,
-            },
-            "market_regime": "unknown",  # TODO: Fetch from market detection service
-            "technical": {
-                "rsi": 50,  # TODO: Compute from recent ticks
-                "volatility": 0.0,  # TODO: Compute from recent ticks
-            },
+            "portfolio": self._fetch_portfolio_context(),
+            "market_regime": self._infer_market_regime(alert),
+            "technical": self._compute_technicals(alert),
+            "scorecard_verdict": self._fetch_scorecard_verdict(),
         }
         return context
+
+    def _fetch_portfolio_context(self) -> dict[str, Any]:
+        """Read portfolio metrics from the PnL exporter metrics file."""
+        snapshot_path = os.getenv(
+            "SCORECARD_VERDICT_PATH",
+            "/opt/trading_2/results/scorecards/latest_status.json",
+        )
+        portfolio: dict[str, Any] = {
+            "open_positions": 0,
+            "total_pnl": 0.0,
+            "drawdown": 0.0,
+            "cash_eur": 0.0,
+            "portfolio_value_eur": 0.0,
+        }
+        # Try scorecard metrics (most reliable persisted source)
+        try:
+            import json as _json
+            import pathlib
+            sc = _json.loads(pathlib.Path(snapshot_path).read_text())
+            m = sc.get("metrics", {})
+            portfolio["total_pnl"] = float(m.get("realized_pnl", 0.0))
+            portfolio["drawdown"] = float(m.get("max_drawdown_pct", 0.0))
+        except (OSError, KeyError, ValueError):
+            pass
+        return portfolio
+
+    def _infer_market_regime(self, alert: AnomalyAlert) -> str:
+        """
+        Derive a simple market regime from the alert's market_context tick buffer.
+
+        Uses the mid-price slope over the window:
+          slope > +0.05%/tick → bull, < -0.05%/tick → bear, else sideways
+        """
+        ctx = alert.market_context or {}
+        prices = ctx.get("mid_prices") or ctx.get("prices") or []
+        if len(prices) < 5:
+            return "unknown"
+        import statistics
+        try:
+            mids = [float(p) for p in prices[-20:]]
+            slope_pct = (mids[-1] - mids[0]) / max(mids[0], 1e-9) * 100
+            if slope_pct > 0.05:
+                return "bull"
+            if slope_pct < -0.05:
+                return "bear"
+            return "sideways"
+        except (TypeError, ZeroDivisionError, statistics.StatisticsError):
+            return "unknown"
+
+    def _compute_technicals(self, alert: AnomalyAlert) -> dict[str, float]:
+        """
+        Compute RSI-14 and realised volatility from alert tick buffer.
+        Falls back to neutral values if insufficient data.
+        """
+        ctx = alert.market_context or {}
+        prices = ctx.get("mid_prices") or ctx.get("prices") or []
+        technicals: dict[str, float] = {"rsi": 50.0, "volatility": 0.0}
+
+        if len(prices) < 2:
+            return technicals
+
+        try:
+            import math
+            mids = [float(p) for p in prices]
+            changes = [mids[i] - mids[i - 1] for i in range(1, len(mids))]
+
+            # RSI-14
+            window = min(14, len(changes))
+            gains = [max(c, 0) for c in changes[-window:]]
+            losses = [abs(min(c, 0)) for c in changes[-window:]]
+            avg_gain = sum(gains) / window
+            avg_loss = sum(losses) / window
+            if avg_loss == 0:
+                technicals["rsi"] = 100.0
+            else:
+                rs = avg_gain / avg_loss
+                technicals["rsi"] = round(100 - 100 / (1 + rs), 2)
+
+            # Annualised volatility (std of log returns * sqrt(annualisation factor))
+            log_rets = [
+                math.log(mids[i] / mids[i - 1])
+                for i in range(1, len(mids))
+                if mids[i - 1] > 0 and mids[i] > 0
+            ]
+            if len(log_rets) >= 2:
+                mean = sum(log_rets) / len(log_rets)
+                variance = sum((r - mean) ** 2 for r in log_rets) / (len(log_rets) - 1)
+                technicals["volatility"] = round(math.sqrt(variance) * math.sqrt(86400), 4)
+
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+
+        return technicals
+
+    def _fetch_scorecard_verdict(self) -> str:
+        """Read the latest scorecard verdict string."""
+        path = os.getenv(
+            "SCORECARD_VERDICT_PATH",
+            "/opt/trading_2/results/scorecards/latest_status.json",
+        )
+        try:
+            import json as _json
+            import pathlib
+            sc = _json.loads(pathlib.Path(path).read_text())
+            return sc.get("verdict", "UNKNOWN")
+        except (OSError, KeyError, ValueError):
+            return "UNKNOWN"
 
     def _build_gpt5_prompt(self, alert: AnomalyAlert, macro_context: dict) -> str:
         """

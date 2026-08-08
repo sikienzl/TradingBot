@@ -8,7 +8,7 @@ from .news.align import align_buckets_to_prices
 from .news.bucketize import bucketize
 from .news.collector import collect
 from .news.sentiment import aggregate_news_scores
-from .strategies import example_strategy
+from .strategies import auto_generator, example_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +18,11 @@ class AutoResearchRunner:
         self.storage = storage
 
     def run_experiment(self, strategy_name: str, params: dict[str, Any], market_data):
-        # for now support only example_strategy
+        # for now support only example_strategy and auto_generator
         if strategy_name == "example":
             strat = example_strategy.create(params)
+        elif strategy_name in ("auto", "auto_generator"):
+            strat = auto_generator.create(params)
         else:
             raise ValueError("unknown strategy")
 

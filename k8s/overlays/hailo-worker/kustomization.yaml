@@ -5,6 +5,7 @@ kind: Kustomization
 resources:
   - ../../base
   - pvc-nvme.yaml
+  - pvc-onnx-model.yaml
   - daemonset-hailo.yaml
   - service-hailo.yaml
 

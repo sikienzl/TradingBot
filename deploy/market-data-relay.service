@@ -1,0 +1,20 @@
+[Unit]
+Description=Trading Bot – Hybrid Market Data Relay (Node 1 → Hailo Edge)
+After=network-online.target trading-bot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trading
+Group=trading
+WorkingDirectory=/opt/trading_2
+EnvironmentFile=/opt/trading_2/.env
+Environment=PYTHONPATH=/opt/trading_2
+ExecStart=/opt/trading_2/.venv/bin/python3 -m src.hybrid.market_data_relay
+Restart=on-failure
+RestartSec=15s
+StandardOutput=append:/opt/trading_2/logs/market_data_relay.log
+StandardError=append:/opt/trading_2/logs/market_data_relay.log
+
+[Install]
+WantedBy=multi-user.target

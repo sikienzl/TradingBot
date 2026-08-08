@@ -23,6 +23,27 @@ spec:
     spec:
       serviceAccountName: trading-bot-sa
 
+      # Download ONNX model on first pod start (or when PVC is empty).
+      initContainers:
+        - name: model-downloader
+          image: trading-hailo:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - /app/scripts/download_onnx_model.py
+          envFrom:
+            - configMapRef:
+                name: trading-bot-hybrid-config
+            - secretRef:
+                name: trading-bot-credentials
+                optional: true
+          env:
+            - name: HAILO8_MODEL_PATH
+              value: /models/hailo_model.hef
+          volumeMounts:
+            - name: onnx-model-storage
+              mountPath: /models
+
       nodeSelector:
         trading-role: "hailo-worker"
 
@@ -90,6 +111,8 @@ spec:
             memory: 768Mi
         
         volumeMounts:
+          - name: onnx-model-storage
+            mountPath: /models
           - name: nvme-tick-storage
             mountPath: /mnt/nvme
           - name: logs
@@ -117,6 +140,9 @@ spec:
               - SYS_PTRACE  # For Hailo hardware
       
       volumes:
+        - name: onnx-model-storage
+          persistentVolumeClaim:
+            claimName: onnx-model-storage
         - name: nvme-tick-storage
           persistentVolumeClaim:
             claimName: nvme-tick-storage
