@@ -59,16 +59,10 @@ class GPT5StrategistService:
         # Hybrid gate
         self.hybrid_gate = HybridDecisionGate()
 
-        # Metrics
-        self.metrics = {
-            "calls_today": 0,
-            "calls_total": 0,
-            "tokens_used": 0,
-            "spend_usd": 0.0,
-            "decisions_go": 0,
-            "decisions_veto": 0,
-            "last_decision": None,
-        }
+        # Persistent spend/call tracking — survives restarts
+        self._spend_state_path = os.getenv(
+            "GPT5_SPEND_STATE_PATH", "./data/gpt5_spend_state.json")
+        self.metrics = self._load_spend_state()
 
         if not self.api_key or self.shadow_mode:
             logger.warning(
@@ -80,6 +74,52 @@ class GPT5StrategistService:
                         self.model, self.api_endpoint)
 
         logger.info("🧠 GPT5StrategistService initialized")
+
+    def _load_spend_state(self) -> dict:
+        """Load persisted spend/call counters from disk. Returns defaults on first run."""
+        defaults: dict = {
+            "calls_today": 0,
+            "calls_total": 0,
+            "tokens_used": 0,
+            "spend_usd": 0.0,
+            "spend_month_usd": 0.0,
+            "decisions_go": 0,
+            "decisions_veto": 0,
+            "last_decision": None,
+            "state_date": datetime.now(UTC).date().isoformat(),
+            "state_month": datetime.now(UTC).strftime("%Y-%m"),
+        }
+        try:
+            import pathlib
+            p = pathlib.Path(self._spend_state_path)
+            if p.exists():
+                saved = json.loads(p.read_text())
+                # Reset daily counter if date has changed
+                if saved.get("state_date") != datetime.now(UTC).date().isoformat():
+                    saved["calls_today"] = 0
+                    saved["state_date"] = datetime.now(UTC).date().isoformat()
+                # Reset monthly spend if month has changed
+                if saved.get("state_month") != datetime.now(UTC).strftime("%Y-%m"):
+                    saved["spend_month_usd"] = 0.0
+                    saved["state_month"] = datetime.now(UTC).strftime("%Y-%m")
+                defaults.update(saved)
+                logger.info(
+                    "💾 GPT5 spend state restored: calls_today=%d, spend_usd=%.4f, total=%d",
+                    defaults["calls_today"], defaults["spend_usd"], defaults["calls_total"],
+                )
+        except (OSError, json.JSONDecodeError, KeyError) as exc:
+            logger.warning("Could not load GPT5 spend state: %s — starting fresh.", exc)
+        return defaults
+
+    def _save_spend_state(self) -> None:
+        """Persist current spend/call counters to disk."""
+        import pathlib
+        try:
+            p = pathlib.Path(self._spend_state_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(self.metrics, indent=2, default=str))
+        except OSError as exc:
+            logger.warning("Could not persist GPT5 spend state: %s", exc)
 
     async def process_anomaly_alert(self, alert: AnomalyAlert) -> dict[str, Any]:
         """
@@ -128,6 +168,7 @@ class GPT5StrategistService:
 
         # Track metrics
         self._update_metrics(gpt5_response)
+        self._save_spend_state()
         self.service_metrics.observe_event(
             "gpt5_decision", time.perf_counter() - started)
         self.service_metrics.publish_mapping(
@@ -326,6 +367,7 @@ class GPT5StrategistService:
 
         cost = gpt5_response.get("cost_usd", 0.0)
         self.metrics["spend_usd"] += cost
+        self.metrics["spend_month_usd"] = self.metrics.get("spend_month_usd", 0.0) + cost
 
         decision = gpt5_response.get("decision", "")
         if decision == "GO":
@@ -355,7 +397,9 @@ async def _daily_counter_reset_task(service: "GPT5StrategistService") -> None:
         )
         await asyncio.sleep(wait_seconds)
         service.metrics["calls_today"] = 0
+        service.metrics["state_date"] = tomorrow_midnight.date().isoformat()
         service.hybrid_gate.reset_daily_counter()
+        service._save_spend_state()
         logger.info("Daily GPT-5 call counter reset (new day: %s UTC)", tomorrow_midnight.date())
 
 

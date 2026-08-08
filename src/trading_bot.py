@@ -853,6 +853,9 @@ class BotConfig:
         # If verdict is NO-GO, new BUYs are blocked until the next scorecard run.
         self.scorecard_verdict_path = os.getenv(
             'SCORECARD_VERDICT_PATH', './results/scorecards/latest_status.json')
+        # Circuit breaker: max age of price data before new BUYs are paused (0 = disabled)
+        self.price_staleness_max_seconds = int(
+            os.getenv('PRICE_STALENESS_MAX_SECONDS', 300))
 
         # Optional external AI co-pilot (budget-limited, disabled by default)
         self.ai_copilot_enabled = _env_bool('AI_COPILOT_ENABLED', False)
@@ -1217,6 +1220,8 @@ class CryptoTradingBot:
         self.last_sell_timestamps_utc: Dict[str, datetime] = {}
         self.consecutive_losses: int = 0
         self.buy_pause_until_utc: Optional[datetime] = None
+        # Circuit breaker: track last successful price fetch
+        self._last_successful_price_at: Optional[datetime] = None
         # autoresearch hook state
         self._autoresearch_last_run: Optional[datetime] = None
         self.exchange = self._initialize_exchange()
@@ -2853,6 +2858,16 @@ class CryptoTradingBot:
     def _can_open_new_positions(self, portfolio_value: float) -> Tuple[bool, str]:
         now_utc = datetime.now(timezone.utc)
 
+        # Circuit breaker: block new entries when price data is stale
+        max_age = self.config.price_staleness_max_seconds
+        if max_age > 0 and self._last_successful_price_at is not None:
+            age = (now_utc - self._last_successful_price_at).total_seconds()
+            if age > max_age:
+                return False, (
+                    f"Circuit breaker: price data is {age:.0f}s old "
+                    f"(max {max_age}s) — Kraken feed may be stale"
+                )
+
         # Weekly scorecard gate — NO-GO blocks all new entries
         sc_ok, sc_reason = self._check_scorecard_verdict()
         if not sc_ok:
@@ -3115,6 +3130,9 @@ class CryptoTradingBot:
                         # Volume in base currency
                         'volume': ticker['quoteVolume']
                     }
+
+        if market_data:
+            self._last_successful_price_at = datetime.now(timezone.utc)
 
         return market_data
 
