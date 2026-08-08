@@ -849,6 +849,10 @@ class BotConfig:
             os.getenv('LOSS_STREAK_PAUSE_THRESHOLD', 0))
         self.loss_streak_pause_seconds = int(
             os.getenv('LOSS_STREAK_PAUSE_SECONDS', 0))
+        # Weekly Go/No-Go scorecard verdict file written by run_weekly_scorecard.sh
+        # If verdict is NO-GO, new BUYs are blocked until the next scorecard run.
+        self.scorecard_verdict_path = os.getenv(
+            'SCORECARD_VERDICT_PATH', './results/scorecards/latest_status.json')
 
         # Optional external AI co-pilot (budget-limited, disabled by default)
         self.ai_copilot_enabled = _env_bool('AI_COPILOT_ENABLED', False)
@@ -2507,8 +2511,35 @@ class CryptoTradingBot:
             logger.info(
                 f"🗓️ Daily-risk-anchor set: {portfolio_value:.2f} {self.config.base_currency} ({today_utc})")
 
+    def _check_scorecard_verdict(self) -> tuple[bool, str]:
+        """
+        Read the latest weekly scorecard verdict from disk.
+
+        Returns:
+            (buys_allowed, reason) — buys_allowed=False blocks new positions.
+        """
+        path = self.config.scorecard_verdict_path
+        try:
+            with open(path) as fh:
+                data = json.load(fh)
+            verdict = data.get("verdict", "").upper().replace("-", "_")
+            if verdict == "NO_GO":
+                reasons = data.get("reasons", [])
+                reason_str = "; ".join(reasons[:3]) if reasons else "see scorecard"
+                return False, f"Scorecard NO-GO: {reason_str}"
+        except FileNotFoundError:
+            pass  # No scorecard yet — allow trading
+        except (OSError, json.JSONDecodeError, KeyError) as exc:
+            logger.warning("Could not read scorecard verdict from %s: %s", path, exc)
+        return True, ""
+
     def _can_open_new_positions(self, portfolio_value: float) -> Tuple[bool, str]:
         now_utc = datetime.now(timezone.utc)
+
+        # Weekly scorecard gate — NO-GO blocks all new entries
+        sc_ok, sc_reason = self._check_scorecard_verdict()
+        if not sc_ok:
+            return False, sc_reason
 
         if self.buy_pause_until_utc and now_utc < self.buy_pause_until_utc:
             remaining = (self.buy_pause_until_utc - now_utc).total_seconds()

@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import aiohttp
@@ -70,9 +70,14 @@ class GPT5StrategistService:
             "last_decision": None,
         }
 
-        if not self.api_key:
+        if not self.api_key or self.shadow_mode:
             logger.warning(
-                "⚠️ GPT5_API_KEY not set. Service will run in mock mode.")
+                "⚠️  GPT5 SHADOW MODE active — no real API calls will be made. "
+                "Set GPT5_API_KEY and GPT5_SHADOW_MODE=false to enable live trading decisions."
+            )
+        else:
+            logger.info("✅ GPT5 LIVE MODE — real API calls enabled (model=%s, endpoint=%s)",
+                        self.model, self.api_endpoint)
 
         logger.info("🧠 GPT5StrategistService initialized")
 
@@ -236,16 +241,17 @@ class GPT5StrategistService:
         In production: actual API call with cost tracking.
         """
         if not self.api_key or self.shadow_mode:
-            logger.info("📋 Shadow mode: simulating GPT-5 response")
+            logger.info("📋 Shadow mode: simulating GPT-5 response (no real API call)")
             self.service_metrics.observe_event("shadow_call")
             return {
                 "decision": "GO",
                 "confidence": 0.85,
-                "reasoning": "Anomaly appears genuine based on context",
+                "reasoning": "[SHADOW] Anomaly appears genuine based on context",
                 "risk_level": 0.4,
-                "tokens_input": 500,
-                "tokens_output": 150,
-                "cost_usd": 0.02,
+                "position_size_pct": 1.0,
+                "tokens_input": 0,
+                "tokens_output": 0,
+                "cost_usd": 0.0,
             }
 
         try:
@@ -334,6 +340,25 @@ class GPT5StrategistService:
         return self.metrics
 
 
+async def _daily_counter_reset_task(service: "GPT5StrategistService") -> None:
+    """Reset call counters at midnight UTC every day."""
+    while True:
+        now = datetime.now(UTC)
+        tomorrow_midnight = (now + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        wait_seconds = (tomorrow_midnight - now).total_seconds()
+        logger.info(
+            "Daily counter reset scheduled in %.0f s (at %s UTC)",
+            wait_seconds,
+            tomorrow_midnight.isoformat(),
+        )
+        await asyncio.sleep(wait_seconds)
+        service.metrics["calls_today"] = 0
+        service.hybrid_gate.reset_daily_counter()
+        logger.info("Daily GPT-5 call counter reset (new day: %s UTC)", tomorrow_midnight.date())
+
+
 async def main():
     """Main entry point"""
     logging.basicConfig(
@@ -360,6 +385,9 @@ async def main():
             service.grpc_host,
             service.grpc_port,
         )
+
+    # Start daily counter reset background task
+    asyncio.create_task(_daily_counter_reset_task(service))
 
     # Optional startup self-check in shadow mode.
     if os.getenv("GPT5_STARTUP_SELFTEST", "false").lower() == "true":
