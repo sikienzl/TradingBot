@@ -2420,7 +2420,7 @@ class CryptoTradingBot:
                 'Authorization': f"Bearer {self.config.ai_copilot_api_key}",
                 'Content-Type': 'application/json',
                 'Accept': 'application/json',
-                'User-Agent': 'trading-bot/1.0 (+https://github.com/siegfried/trading_2)',
+                'User-Agent': 'Mozilla/5.0 (compatible; TradingBot/1.0)',
             },
             method='POST',
         )
