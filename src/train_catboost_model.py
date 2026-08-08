@@ -259,9 +259,9 @@ def train_model(
         )
         walk_forward_path = os.path.join(output_dir, "walk_forward_report.csv")
         walk_forward_df.to_csv(walk_forward_path, index=False)
-        print(f"Walk-Forward Report gespeichert: {walk_forward_path}")
+        print(f"Walk-Forward Report saved: {walk_forward_path}")
 
-    print(f"\nModell gespeichert: {model_path}")
+    print(f"\nModel saved: {model_path}")
 
 
 def main() -> None:

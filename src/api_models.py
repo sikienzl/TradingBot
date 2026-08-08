@@ -17,9 +17,9 @@ class MarketRegime(StrEnum):
 
 
 class TradingDecision(StrEnum):
-    SELL = "sell"
-    HOLD = "hold"
-    BUY = "buy"
+    SELL = "verkaufen"
+    HOLD = "halten"
+    BUY = "kaufen"
 
 
 class ResearchSignalFeatures(BaseModel):

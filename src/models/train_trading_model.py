@@ -247,10 +247,10 @@ if __name__ == "__main__":
             print("❌ Training ended with errors")
 
     except Exception as e:
-        print(f"\n❌ Fehler: {e!s}")
+        print(f"\n❌ Error: {e!s}")
         print("\n🔍 Troubleshooting tips:")
         print("1. Check if 'training_data.csv' exists")
         print("2. Make sure enough VRAM is available (min. 24GB recommended)")
-        print("3. Versuche: CUDA_VISIBLE_DEVICES=0 python3 train_trading_model.py")
+        print("3. Try: CUDA_VISIBLE_DEVICES=0 python3 train_trading_model.py")
         print("4. For smaller VRAM: reduce per_device_train_batch_size to 1")
         print("5. Check data quality with data_preparation.py")

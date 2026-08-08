@@ -230,11 +230,6 @@ def evaluate_scorecard(
         recent_trades_window=recent_trades_window,
     )
 
-    result = _evaluate_verdict(
-        metrics=metrics,
-        thresholds=thresholds,
-    )
-
     thresholds = _create_thresholds_from_args(
         min_closed_trades=min_closed_trades,
         min_win_rate=min_win_rate,
@@ -248,6 +243,11 @@ def evaluate_scorecard(
         min_source_trades_for_delta=min_source_trades_for_delta,
         starting_capital=starting_capital,
         lookback_days=lookback_days,
+    )
+
+    result = _evaluate_verdict(
+        metrics=metrics,
+        thresholds=thresholds,
     )
 
     return ScorecardResponse(

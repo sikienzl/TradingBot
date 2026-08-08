@@ -9,7 +9,7 @@ from src.go_no_go_scorecard import (
     _max_drawdown_base,
     _safe_float,
 )
-from src.api_models import ScorecardMetrics
+from src.api_models import ScorecardMetrics, ScorecardThresholds
 
 
 class TestSafeFloat:

@@ -1,39 +1,28 @@
-import csv
-import importlib
-import json
-import logging
-import math
 import os
-import re
-import shutil
 import sys
+import logging
+import csv
+import json
+import shutil
+import math
+import importlib
+from typing import Any, Dict, List, Optional, Set, Tuple
+import pandas as pd
 import time
-import urllib.error
-import urllib.request
-from collections import Counter, defaultdict, deque
-from datetime import UTC, datetime, timedelta
-from typing import Any
-
+from datetime import datetime, timedelta, timezone
 import ccxt
 import numpy as np
-import pandas as pd
 from dotenv import load_dotenv
+from collections import Counter, defaultdict, deque
+import urllib.request
+import urllib.error
+import re
+
 
 logger = logging.getLogger(__name__)
 
 
 _SAFE_IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
-
-
-def _parse_persisted_datetime(value: Any) -> Any:
-    """Converts persisted ISO timestamps back to datetime objects when possible."""
-    if not isinstance(value, str):
-        return value
-
-    try:
-        return datetime.fromisoformat(value.replace('Z', '+00:00'))
-    except ValueError:
-        return value
 
 
 def _compute_dynamic_lossmaker_entry_pairs(
@@ -44,7 +33,7 @@ def _compute_dynamic_lossmaker_entry_pairs(
     min_pnl_loss: float,
     min_max_hold_exit_ratio: float,
     max_avg_hold_seconds: float,
-) -> set[tuple[str, str]]:
+) -> Set[Tuple[str, str]]:
     """Returns recent coin/source pairs that should be temporarily suppressed."""
     if df.empty:
         return set()
@@ -84,7 +73,7 @@ def _compute_dynamic_lossmaker_entry_pairs(
         pd.Series(index=recent_window.index, dtype=object),
     ).fillna("").astype(str)
 
-    blocked_pairs: set[tuple[str, str]] = set()
+    blocked_pairs: Set[Tuple[str, str]] = set()
     for (coin, signal_source), group in recent_window.groupby(["coin", "signal_source"], dropna=False):
         if not coin or not signal_source:
             continue
@@ -127,7 +116,7 @@ def _compute_degraded_entry_sources(
     min_pnl_loss: float,
     max_profit_factor: float,
     max_avg_hold_seconds: float,
-) -> set[str]:
+) -> Set[str]:
     """Returns signal sources that recently underperform with short-hold churn."""
     if df.empty:
         return set()
@@ -161,7 +150,7 @@ def _compute_degraded_entry_sources(
         errors="coerce",
     ).fillna(0.0)
 
-    degraded_sources: set[str] = set()
+    degraded_sources: Set[str] = set()
     for source, group in recent_window.groupby("signal_source", dropna=False):
         if not source:
             continue
@@ -198,9 +187,9 @@ def _compute_recent_pnl_guard_state(
     min_trades: int,
     min_realized_pnl: float,
     max_profit_factor: float,
-) -> dict[str, Any]:
+) -> Dict[str, Any]:
     """Returns whether recent realized performance is weak enough to tighten entries."""
-    result: dict[str, Any] = {
+    result: Dict[str, Any] = {
         "active": False,
         "recent_trades": 0,
         "recent_realized_pnl": 0.0,
@@ -222,7 +211,7 @@ def _compute_recent_pnl_guard_state(
         return result
 
     pnl = pd.to_numeric(recent["pnl_base"], errors="coerce").fillna(0.0)
-    recent_trades = len(recent)
+    recent_trades = int(len(recent))
     recent_realized_pnl = float(pnl.sum())
     gross_profit = float(pnl[pnl > 0].sum())
     gross_loss = float(-pnl[pnl < 0].sum())
@@ -255,7 +244,7 @@ def configure_logging(log_file: str = 'trading_bot.log', level: int = logging.IN
 
     formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - %(message)s')
-    handlers: list[logging.Handler] = []
+    handlers: List[logging.Handler] = []
 
     try:
         file_handler = logging.FileHandler(log_file)
@@ -298,16 +287,16 @@ class Portfolio:
         self.base_currency = base_currency
         self.cash: float = 0.0  # Available balance in base currency
         # Holdings of other cryptocurrencies (Coin -> quantity)
-        self.holdings: dict[str, float] = {}
+        self.holdings: Dict[str, float] = {}
         # Offene Trades: {'BTC': {'buy_price': 30000, 'amount_coin': 0.001, 'amount_base': 30, 'timestamp': datetime}}
-        self.open_trades: dict[str, dict] = {}
-        self.last_update: datetime | None = None
-        self.initial_portfolio_value: float | None = None
+        self.open_trades: Dict[str, Dict] = {}
+        self.last_update: Optional[datetime] = None
+        self.initial_portfolio_value: Optional[float] = None
         # Persistency file for dry-run / simulation. Prefer explicit env override.
         self.state_file: str = os.getenv(
             'PORTFOLIO_STATE_PATH', '/opt/trading_2/.portfolio_state.json')
 
-    def save_state(self, filepath: str | None = None) -> bool:
+    def save_state(self, filepath: Optional[str] = None) -> bool:
         """Save portfolio state to JSON file (for dry-run persistency)."""
         try:
             state_file = filepath or self.state_file
@@ -330,35 +319,13 @@ class Portfolio:
             with open(state_file, 'w') as f:
                 json.dump(state, f, indent=2, default=lambda o: o.isoformat(
                 ) if isinstance(o, datetime) else str(o))
-            # Ensure the file has secure permissions and, when possible, correct ownership
-            try:
-                os.chmod(state_file, 0o640)
-            except Exception:
-                pass
-            try:
-                # Prefer shutil.chown where available (handles names)
-                try:
-                    shutil.chown(state_file, user='trading', group='trading')
-                except Exception:
-                    # Fallback to os.chown with numeric ids if possible
-                    try:
-                        import grp
-                        import pwd
-
-                        uid = pwd.getpwnam('trading').pw_uid
-                        gid = grp.getgrnam('trading').gr_gid
-                        os.chown(state_file, uid, gid)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
             logger.debug(f"Portfolio state saved to {state_file}")
             return True
         except Exception as e:
             logger.error(f"Failed to save portfolio state: {e}")
             return False
 
-    def load_state(self, filepath: str | None = None) -> bool:
+    def load_state(self, filepath: Optional[str] = None) -> bool:
         """Load portfolio state from JSON file (for dry-run persistency)."""
         try:
             state_file = filepath or self.state_file
@@ -370,36 +337,17 @@ class Portfolio:
             self.cash = float(state.get('cash', 0.0))
             self.holdings = {k: float(v)
                              for k, v in state.get('holdings', {}).items()}
-            # Normalize open_trades: older snapshots or manual files may store a
-            # list; the code expects a dict keyed by coin symbol. Coerce to dict.
-            raw_open_trades = state.get('open_trades', {})
-            if isinstance(raw_open_trades, dict):
-                self.open_trades = raw_open_trades
-            else:
-                try:
-                    # If it's a list of trade entries, convert to dict using coin field
-                    if isinstance(raw_open_trades, list):
-                        converted = {}
-                        for entry in raw_open_trades:
-                            coin_key = entry.get('coin') if isinstance(
-                                entry, dict) else None
-                            if coin_key:
-                                converted[coin_key] = entry
-                        self.open_trades = converted
-                    else:
-                        self.open_trades = {}
-                except Exception:
-                    self.open_trades = {}
+            self.open_trades = state.get('open_trades', {})
             initial_value = state.get('initial_portfolio_value')
             self.initial_portfolio_value = float(
                 initial_value) if initial_value not in (None, '') else None
             for trade in self.open_trades.values():
-                trade['timestamp'] = _parse_persisted_datetime(
-                    trade.get('timestamp'))
-                if isinstance(trade['timestamp'], str):
-                    trade['timestamp'] = datetime.now()
-                trade['partial_tp_timestamp'] = _parse_persisted_datetime(
-                    trade.get('partial_tp_timestamp'))
+                ts = trade.get('timestamp')
+                if isinstance(ts, str):
+                    try:
+                        trade['timestamp'] = datetime.fromisoformat(ts)
+                    except ValueError:
+                        trade['timestamp'] = datetime.now()
             logger.info(f"Portfolio state loaded from {state_file}")
             logger.info(f"  Cash: {self.cash:.2f} {self.base_currency}")
             logger.info(f"  Holdings: {self.holdings}")
@@ -411,7 +359,7 @@ class Portfolio:
             logger.error(f"Failed to load portfolio state: {e}")
             return False
 
-    def get_value(self, prices: dict[str, float]) -> float:
+    def get_value(self, prices: Dict[str, float]) -> float:
         """
         Berechnet den Gesamtwert des Portfolios basierend auf aktuellen Preisen.
         """
@@ -442,7 +390,7 @@ class Portfolio:
         amount_coin: float,
         amount_base: float,
         signal_source: str = "rules",
-        signal_confidence: float | None = None,
+        signal_confidence: Optional[float] = None,
         recommendation: str = "HOLD",
     ):
         """Adds a new trade to the open positions."""
@@ -487,26 +435,26 @@ class BotConfig:
                 return default
             return raw.strip().strip('"').strip("'")
 
-        def _env_str_any(names: list[str], default: str = "") -> str:
+        def _env_str_any(names: List[str], default: str = "") -> str:
             for name in names:
                 raw = os.getenv(name)
                 if raw is not None:
                     return raw.strip().strip('"').strip("'")
             return default
 
-        def _env_bool_any(names: list[str], default: bool) -> bool:
+        def _env_bool_any(names: List[str], default: bool) -> bool:
             for name in names:
                 raw = os.getenv(name)
                 if raw is not None:
                     return raw.strip().lower() in ("1", "true", "yes", "y", "on")
             return default
 
-        def _env_symbol_int_map(name: str, default: str = "") -> dict[str, int]:
+        def _env_symbol_int_map(name: str, default: str = "") -> Dict[str, int]:
             raw = _env_str(name, default)
             if not raw:
                 return {}
 
-            parsed: dict[str, int] = {}
+            parsed: Dict[str, int] = {}
             for item in raw.split(','):
                 token = item.strip()
                 if not token or ':' not in token:
@@ -522,12 +470,12 @@ class BotConfig:
                     continue
             return parsed
 
-        def _env_symbol_float_map(name: str, default: str = "") -> dict[str, float]:
+        def _env_symbol_float_map(name: str, default: str = "") -> Dict[str, float]:
             raw = _env_str(name, default)
             if not raw:
                 return {}
 
-            parsed: dict[str, float] = {}
+            parsed: Dict[str, float] = {}
             for item in raw.split(','):
                 token = item.strip()
                 if not token or ':' not in token:
@@ -543,12 +491,12 @@ class BotConfig:
                     continue
             return parsed
 
-        def _env_threshold_float_pairs(name: str, default: str = "") -> list[tuple[float, float]]:
+        def _env_threshold_float_pairs(name: str, default: str = "") -> List[Tuple[float, float]]:
             raw = _env_str(name, default)
             if not raw:
                 return []
 
-            parsed: list[tuple[float, float]] = []
+            parsed: List[Tuple[float, float]] = []
             for item in raw.split(','):
                 token = item.strip()
                 if not token or ':' not in token:
@@ -561,12 +509,12 @@ class BotConfig:
                     continue
             return sorted(parsed, key=lambda entry: entry[0])
 
-        def _env_threshold_int_pairs(name: str, default: str = "") -> list[tuple[float, int]]:
+        def _env_threshold_int_pairs(name: str, default: str = "") -> List[Tuple[float, int]]:
             raw = _env_str(name, default)
             if not raw:
                 return []
 
-            parsed: list[tuple[float, int]] = []
+            parsed: List[Tuple[float, int]] = []
             for item in raw.split(','):
                 token = item.strip()
                 if not token or ':' not in token:
@@ -731,18 +679,6 @@ class BotConfig:
             os.getenv('UPTREND_ENTRY_MIN_PROBA_EDGE', -0.05))
         self.uptrend_entry_min_proba_edge_by_coin = _env_symbol_float_map(
             'UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN', 'TRX:-0.13,ONDO:-0.055')
-        # Simulation override: when enabled, relax entry gates for backtests/simulations.
-        # Use SIMULATION_MODE=true in the environment to activate.
-        self.simulation_mode = _env_bool('SIMULATION_MODE', False)
-        if self.simulation_mode:
-            # Disable strict uptrend entry gating so simulations can exercise logic.
-            self.uptrend_entry_gate_enabled = False
-            # Allow any buy probability / RSI during simulation
-            self.uptrend_entry_min_buy_proba = 0.0
-            self.uptrend_entry_max_rsi = 999.0
-            # Enable fallback and force-fill to make simulation produce entries
-            self.enable_fallback_entry = True
-            self.force_fill_slots = True
         self.uptrend_rules_fast_exit_enabled = _env_bool(
             'UPTREND_RULES_FAST_EXIT_ENABLED', True)
         self.uptrend_rules_fast_exit_seconds = int(
@@ -780,7 +716,8 @@ class BotConfig:
                 'REENTRY_COOLDOWN_MAX_SECONDS',
                 max(1200, self.reentry_cooldown_seconds),
             ))
-        self.reentry_cooldown_max_seconds = max(self.reentry_cooldown_max_seconds, self.reentry_cooldown_min_seconds)
+        if self.reentry_cooldown_max_seconds < self.reentry_cooldown_min_seconds:
+            self.reentry_cooldown_max_seconds = self.reentry_cooldown_min_seconds
         self.reentry_volatility_low_atr_pct = float(
             os.getenv('REENTRY_VOLATILITY_LOW_ATR_PCT', 0.008))
         self.reentry_volatility_high_atr_pct = float(
@@ -991,8 +928,8 @@ class BotConfig:
         self.ai_copilot_benchmark_cost_output_per_mtok = float(
             os.getenv('AI_COPILOT_BENCHMARK_COST_OUTPUT_PER_MTOK', str(self.ai_copilot_cost_output_per_mtok)))
 
-    def analytics_db_connect_kwargs(self) -> dict[str, Any]:
-        kwargs: dict[str, Any] = {}
+    def analytics_db_connect_kwargs(self) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {}
         if self.analytics_db_url:
             kwargs['conninfo'] = self.analytics_db_url
         else:
@@ -1141,7 +1078,7 @@ class PostgresAnalyticsWriter:
                 '''
             )
 
-    def write_trade(self, row: dict[str, Any], base_currency: str) -> None:
+    def write_trade(self, row: Dict[str, Any], base_currency: str) -> None:
         if not self._ensure_connection():
             return
         trades_table = self._qualified_table('trade_events')
@@ -1163,7 +1100,7 @@ class PostgresAnalyticsWriter:
                     ''',
                     (
                         row.get('timestamp', datetime.now(
-                            UTC).isoformat()),
+                            timezone.utc).isoformat()),
                         int(row.get('iteration', 0)),
                         row.get('coin', ''),
                         row.get('action', ''),
@@ -1195,8 +1132,8 @@ class PostgresAnalyticsWriter:
         cash_value: float,
         base_currency: str,
         dry_run: bool,
-        holdings: dict[str, float],
-        open_trades: dict[str, dict[str, Any]],
+        holdings: Dict[str, float],
+        open_trades: Dict[str, Dict[str, Any]],
         analyzed_coins_count: int,
         buy_recommendations_count: int,
     ) -> None:
@@ -1224,7 +1161,7 @@ class PostgresAnalyticsWriter:
                     )
                     ''',
                     (
-                        datetime.now(UTC),
+                        datetime.now(timezone.utc),
                         iteration,
                         float(portfolio_value),
                         float(cash_value),
@@ -1272,21 +1209,21 @@ class CryptoTradingBot:
         }
         self.daily_anchor_date = None
         self.daily_anchor_value: float = 0.0
-        self.buy_timestamps_utc: list[datetime] = []
-        self.last_sell_timestamps_utc: dict[str, datetime] = {}
+        self.buy_timestamps_utc: List[datetime] = []
+        self.last_sell_timestamps_utc: Dict[str, datetime] = {}
         self.consecutive_losses: int = 0
-        self.buy_pause_until_utc: datetime | None = None
+        self.buy_pause_until_utc: Optional[datetime] = None
         self.exchange = self._initialize_exchange()
-        self._simulation_cache_iteration: int | None = None
-        self._simulation_ohlcv_cache: dict[tuple[int,
+        self._simulation_cache_iteration: Optional[int] = None
+        self._simulation_ohlcv_cache: Dict[Tuple[int,
                                                  str, str, int], pd.DataFrame] = {}
         # List of tradeable pairs (e.g. BTC/EUR)
-        self.all_symbols: list[str] = []
-        self.all_coins: list[str] = []   # List of base assets (e.g. BTC)
+        self.all_symbols: List[str] = []
+        self.all_coins: List[str] = []   # List of base assets (e.g. BTC)
         if not self.config.simulate_data and self.exchange:
             self._load_market_info()
 
-        # Ensure coins/symbols are always set in simulation mode
+        # Sicherstellen, dass im Simulationsmodus immer Coins/Symbole gesetzt sind
         if self.config.simulate_data:
             if not self.all_coins:
                 self.all_coins = ['BTC', 'ETH']
@@ -1339,7 +1276,7 @@ class CryptoTradingBot:
                 'signal_source', 'signal_confidence', 'recommendation', 'reason', 'dry_run'
             ])
 
-    def _append_trade_journal(self, row: dict):
+    def _append_trade_journal(self, row: Dict):
         if self.config.performance_log_enabled:
             with open(self.config.performance_log_file, 'a', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
@@ -1365,7 +1302,7 @@ class CryptoTradingBot:
     def _write_analytics_snapshot(
         self,
         portfolio_value: float,
-        market_analysis: dict[str, dict[str, Any]],
+        market_analysis: Dict[str, Dict[str, Any]],
     ) -> None:
         snapshot_every = max(1, int(self.config.analytics_db_snapshot_every))
         if self.iteration % snapshot_every != 0:
@@ -1386,7 +1323,7 @@ class CryptoTradingBot:
             buy_recommendations_count=buy_recommendations_count,
         )
 
-    def _recommend_tabular_threshold_from_journal(self) -> float | None:
+    def _recommend_tabular_threshold_from_journal(self) -> Optional[float]:
         """Recommends a confidence threshold based on historical sell trades."""
         path = self.config.performance_log_file
         if not os.path.exists(path):
@@ -1446,13 +1383,20 @@ class CryptoTradingBot:
             f"avg={best[3]:.6f}, win_rate={best[4]:.2f}%)")
         return float(best[0])
 
-    def _dynamic_excluded_coins(self) -> set[str]:
+    def _dynamic_excluded_coins(self) -> Set[str]:
         """Builds a temporary exclusion set from recent sell-side underperformance."""
         if not self.config.dynamic_lossmaker_exclusion_enabled:
             return set()
 
-        df = self._load_journal()
-        if df is None:
+        path = self.config.performance_log_file
+        if not self.config.performance_log_enabled or not os.path.exists(path):
+            return set()
+
+        try:
+            df = pd.read_csv(path)
+        except Exception as e:
+            logger.warning(
+                f"Journal could not be read for dynamic exclusions: {e}")
             return set()
 
         required_columns = {'action', 'coin', 'pnl_base', 'reason'}
@@ -1474,7 +1418,7 @@ class CryptoTradingBot:
         if sells.empty:
             return set()
 
-        dynamic_exclusions: set[str] = set()
+        dynamic_exclusions: Set[str] = set()
         for coin, group in sells.groupby('coin', dropna=True):
             if len(group) < self.config.dynamic_lossmaker_min_sells:
                 continue
@@ -1500,13 +1444,20 @@ class CryptoTradingBot:
 
         return dynamic_exclusions
 
-    def _dynamic_excluded_entry_pairs(self) -> set[tuple[str, str]]:
+    def _dynamic_excluded_entry_pairs(self) -> Set[Tuple[str, str]]:
         """Builds a temporary exclusion set for recent coin/source entry pairs."""
         if not self.config.dynamic_lossmaker_exclusion_enabled:
             return set()
 
-        df = self._load_journal()
-        if df is None:
+        path = self.config.performance_log_file
+        if not self.config.performance_log_enabled or not os.path.exists(path):
+            return set()
+
+        try:
+            df = pd.read_csv(path)
+        except Exception as e:
+            logger.warning(
+                f"Journal could not be read for dynamic entry pair exclusions: {e}")
             return set()
 
         blocked_pairs = _compute_dynamic_lossmaker_entry_pairs(
@@ -1523,13 +1474,20 @@ class CryptoTradingBot:
         )
         return blocked_pairs
 
-    def _degraded_entry_sources(self) -> set[str]:
+    def _degraded_entry_sources(self) -> Set[str]:
         """Builds a temporary blocklist for weak signal sources in fallback paths."""
         if not self.config.dynamic_lossmaker_exclusion_enabled:
             return set()
 
-        df = self._load_journal()
-        if df is None:
+        path = self.config.performance_log_file
+        if not self.config.performance_log_enabled or not os.path.exists(path):
+            return set()
+
+        try:
+            df = pd.read_csv(path)
+        except Exception as e:
+            logger.warning(
+                f"Journal could not be read for dynamic source exclusions: {e}")
             return set()
 
         return _compute_degraded_entry_sources(
@@ -1544,21 +1502,39 @@ class CryptoTradingBot:
             ),
         )
 
-    def _recent_pnl_guard_state(self) -> dict[str, Any]:
+    def _recent_pnl_guard_state(self) -> Dict[str, Any]:
         """Builds a recent realized-PnL guard state to tighten entries in weak phases."""
-        disabled_state = {
-            "active": False,
-            "recent_trades": 0,
-            "recent_realized_pnl": 0.0,
-            "recent_profit_factor": 999.0,
-            "reason": "disabled",
-        }
         if not self.config.recent_pnl_guard_enabled:
-            return disabled_state
+            return {
+                "active": False,
+                "recent_trades": 0,
+                "recent_realized_pnl": 0.0,
+                "recent_profit_factor": 999.0,
+                "reason": "disabled",
+            }
 
-        df = self._load_journal()
-        if df is None:
-            return {**disabled_state, "reason": "journal_unavailable"}
+        path = self.config.performance_log_file
+        if not self.config.performance_log_enabled or not os.path.exists(path):
+            return {
+                "active": False,
+                "recent_trades": 0,
+                "recent_realized_pnl": 0.0,
+                "recent_profit_factor": 999.0,
+                "reason": "journal_missing",
+            }
+
+        try:
+            df = pd.read_csv(path)
+        except Exception as e:
+            logger.warning(
+                f"Journal could not be read for recent PnL guard: {e}")
+            return {
+                "active": False,
+                "recent_trades": 0,
+                "recent_realized_pnl": 0.0,
+                "recent_profit_factor": 999.0,
+                "reason": "journal_read_error",
+            }
 
         return _compute_recent_pnl_guard_state(
             df,
@@ -1568,24 +1544,7 @@ class CryptoTradingBot:
             max_profit_factor=self.config.recent_pnl_guard_max_profit_factor,
         )
 
-    def _load_journal(self) -> pd.DataFrame | None:
-        """Load the performance journal CSV once, returning None if unavailable.
-
-        Centralises the repeated guard-check + CSV-read pattern that was
-        duplicated across _dynamic_excluded_coins, _dynamic_excluded_entry_pairs,
-        _degraded_entry_sources, and _recent_pnl_guard_state.
-        """
-        path = self.config.performance_log_file
-        if not self.config.performance_log_enabled or not os.path.exists(path):
-            return None
-        try:
-            return pd.read_csv(path)
-        except Exception as e:
-            logger.warning(
-                f"Journal could not be read: {e}")
-            return None
-
-    def _read_auto_tune_state(self) -> dict:
+    def _read_auto_tune_state(self) -> Dict:
         path = self.config.auto_tune_state_file
         if not path or not os.path.exists(path):
             return {}
@@ -1595,7 +1554,7 @@ class CryptoTradingBot:
         except Exception:
             return {}
 
-    def _write_auto_tune_state(self, state: dict):
+    def _write_auto_tune_state(self, state: Dict):
         path = self.config.auto_tune_state_file
         if not path:
             return
@@ -1606,7 +1565,7 @@ class CryptoTradingBot:
             logger.warning(
                 f"Auto-tune state could not be saved: {e}")
 
-    def _cooldown_remaining_minutes(self, state: dict) -> float:
+    def _cooldown_remaining_minutes(self, state: Dict) -> float:
         cooldown = max(0, self.config.auto_tune_cooldown_minutes)
         if cooldown <= 0:
             return 0.0
@@ -1617,10 +1576,10 @@ class CryptoTradingBot:
             last_dt = datetime.fromisoformat(last)
             # Backward-compatible: treat naive timestamps as UTC.
             if last_dt.tzinfo is None:
-                last_dt = last_dt.replace(tzinfo=UTC)
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
         except Exception:
             return 0.0
-        elapsed_minutes = (datetime.now(UTC) -
+        elapsed_minutes = (datetime.now(timezone.utc) -
                            last_dt).total_seconds() / 60.0
         return max(0.0, cooldown - elapsed_minutes)
 
@@ -1659,7 +1618,7 @@ class CryptoTradingBot:
                 f"(recommended {recommended:.2f}, max_delta {max_delta:.2f})")
 
             self._write_auto_tune_state({
-                'last_applied_at': datetime.now(UTC).isoformat(),
+                'last_applied_at': datetime.now(timezone.utc).isoformat(),
                 'last_recommended': recommended,
                 'last_applied': adjusted,
             })
@@ -1667,7 +1626,7 @@ class CryptoTradingBot:
             logger.info(
                 f"ℹ️ AUTO_TUNE disabled. Recommended TABULAR_MIN_CONFIDENCE: {recommended:.2f}")
 
-    def _read_ai_copilot_state(self, path: str | None = None) -> dict:
+    def _read_ai_copilot_state(self, path: Optional[str] = None) -> Dict:
         path = path or self.config.ai_copilot_state_file
         if not path:
             return {}
@@ -1692,7 +1651,7 @@ class CryptoTradingBot:
                 f'AI co-pilot state could not be loaded: {last_error}')
         return {}
 
-    def _write_ai_copilot_state(self, state: dict, path: str | None = None):
+    def _write_ai_copilot_state(self, state: Dict, path: Optional[str] = None):
         path = path or self.config.ai_copilot_state_file
         if not path:
             return
@@ -1717,14 +1676,14 @@ class CryptoTradingBot:
             logger.warning(f"AI co-pilot state could not be saved: {e}")
 
     def _current_month_key(self) -> str:
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         return f"{now.year:04d}-{now.month:02d}"
 
     def _current_day_key(self) -> str:
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         return f"{now.year:04d}-{now.month:02d}-{now.day:02d}"
 
-    def _normalize_ai_state(self, state: dict, monthly_call_cap: int, budget_cap_usd: float) -> dict:
+    def _normalize_ai_state(self, state: Dict, monthly_call_cap: int, budget_cap_usd: float) -> Dict:
         month_key = self._current_month_key()
         day_key = self._current_day_key()
         state['budget_cap_usd'] = float(budget_cap_usd)
@@ -1753,7 +1712,7 @@ class CryptoTradingBot:
 
     def _can_run_ai_copilot(
         self,
-        state: dict,
+        state: Dict,
         *,
         enabled: bool,
         model: str,
@@ -1763,7 +1722,7 @@ class CryptoTradingBot:
         max_calls_per_month: int,
         max_budget_usd_per_month: float,
         interval_minutes: int,
-    ) -> tuple[bool, str]:
+    ) -> Tuple[bool, str]:
         if not enabled:
             return False, 'disabled'
         if not model:
@@ -1788,8 +1747,8 @@ class CryptoTradingBot:
             try:
                 last_run = datetime.fromisoformat(last_run_raw)
                 if last_run.tzinfo is None:
-                    last_run = last_run.replace(tzinfo=UTC)
-                elapsed_min = (datetime.now(UTC) -
+                    last_run = last_run.replace(tzinfo=timezone.utc)
+                elapsed_min = (datetime.now(timezone.utc) -
                                last_run).total_seconds() / 60.0
                 if elapsed_min < interval_minutes:
                     return False, 'interval_not_reached'
@@ -1798,7 +1757,7 @@ class CryptoTradingBot:
         return True, 'ok'
 
     @staticmethod
-    def _parse_iso8601_utc(raw: Any) -> datetime | None:
+    def _parse_iso8601_utc(raw: Any) -> Optional[datetime]:
         text = str(raw or '').strip()
         if not text:
             return None
@@ -1808,16 +1767,16 @@ class CryptoTradingBot:
         except Exception:
             return None
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=UTC)
-        return parsed.astimezone(UTC)
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
 
-    def _read_recent_hailo_alerts(self) -> list[dict[str, Any]]:
+    def _read_recent_hailo_alerts(self) -> List[Dict[str, Any]]:
         path = self.config.ai_copilot_hailo_alerts_file
         if not path or not os.path.exists(path):
             return []
 
         max_lines = max(1, int(self.config.ai_copilot_hailo_max_lines_scan))
-        buffered: list[str] = []
+        buffered: List[str] = []
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 buffered = list(deque(f, maxlen=max_lines))
@@ -1826,13 +1785,13 @@ class CryptoTradingBot:
                 'Could not read Hailo alerts file %s: %s', path, exc)
             return []
 
-        now_utc = datetime.now(UTC)
+        now_utc = datetime.now(timezone.utc)
         max_age = max(
             0, int(self.config.ai_copilot_hailo_max_alert_age_seconds))
         min_score = float(self.config.ai_copilot_hailo_min_score)
         min_confidence = float(self.config.ai_copilot_hailo_min_confidence)
 
-        recent: list[dict[str, Any]] = []
+        recent: List[Dict[str, Any]] = []
         for raw_line in reversed(buffered):
             line = raw_line.strip()
             if not line:
@@ -1874,7 +1833,7 @@ class CryptoTradingBot:
 
         return recent
 
-    def _evaluate_ai_copilot_hailo_gate(self) -> tuple[bool, dict[str, Any]]:
+    def _evaluate_ai_copilot_hailo_gate(self) -> Tuple[bool, Dict[str, Any]]:
         if not self.config.ai_copilot_hailo_gate_enabled:
             return True, {
                 'enabled': False,
@@ -1909,9 +1868,9 @@ class CryptoTradingBot:
         }
         return allowed, details
 
-    def _ai_copilot_snapshot(self) -> dict[str, Any]:
+    def _ai_copilot_snapshot(self) -> Dict[str, Any]:
         trades_recent = []
-        recent_trade_summary: dict[str, Any] = {
+        recent_trade_summary: Dict[str, Any] = {
             'window_rows': 0,
             'recent_buy_count': 0,
             'recent_sell_count': 0,
@@ -1941,11 +1900,13 @@ class CryptoTradingBot:
                     if 'action' in recent_window.columns:
                         actions = recent_window['action'].fillna(
                             '').astype(str).str.lower()
-                        recent_trade_summary['window_rows'] = len(recent_window)
+                        recent_trade_summary['window_rows'] = int(
+                            len(recent_window))
                         recent_trade_summary['recent_buy_count'] = int(
                             (actions == 'buy').sum())
                         sells = recent_window.loc[actions == 'sell'].copy()
-                        recent_trade_summary['recent_sell_count'] = len(sells)
+                        recent_trade_summary['recent_sell_count'] = int(
+                            len(sells))
 
                         if not sells.empty:
                             pnl = pd.to_numeric(
@@ -1980,7 +1941,7 @@ class CryptoTradingBot:
                             )
 
                             if 'coin' in sells.columns:
-                                coin_summary: dict[str, Any] = {}
+                                coin_summary: Dict[str, Any] = {}
                                 for coin, group in sells.groupby('coin', dropna=True):
                                     coin_pnl = pd.to_numeric(
                                         group.get('pnl_base'), errors='coerce'
@@ -1988,7 +1949,7 @@ class CryptoTradingBot:
                                     coin_reasons = group.get('reason', pd.Series(
                                         dtype=object)).fillna('').astype(str)
                                     coin_summary[str(coin)] = {
-                                        'sell_count': len(group),
+                                        'sell_count': int(len(group)),
                                         'pnl_sum': round(float(coin_pnl.sum()), 6),
                                         'avg_pnl': round(float(coin_pnl.mean()), 6),
                                         'win_rate_pct': round(float((coin_pnl > 0).mean() * 100.0), 2),
@@ -2040,7 +2001,7 @@ class CryptoTradingBot:
             }
 
         return {
-            'timestamp_utc': datetime.now(UTC).isoformat(),
+            'timestamp_utc': datetime.now(timezone.utc).isoformat(),
             'iteration': int(self.iteration),
             'config': {
                 'min_entry_score': int(self.config.min_entry_score),
@@ -2063,7 +2024,7 @@ class CryptoTradingBot:
             },
             'portfolio': {
                 'cash': float(self.portfolio.cash),
-                'open_trades_count': len(self.portfolio.open_trades),
+                'open_trades_count': int(len(self.portfolio.open_trades)),
                 'open_trade_coins': sorted(list(self.portfolio.open_trades.keys())),
                 'holding_coins': sorted(list(self.portfolio.holdings.keys())),
             },
@@ -2087,7 +2048,7 @@ class CryptoTradingBot:
             },
         }
 
-    def _extract_json_object(self, text: str) -> dict[str, Any] | None:
+    def _extract_json_object(self, text: str) -> Optional[Dict[str, Any]]:
         if not text:
             return None
         start = text.find('{')
@@ -2102,7 +2063,7 @@ class CryptoTradingBot:
             return None
         return None
 
-    def _call_ai_copilot(self, snapshot: dict[str, Any], *, model: str, temperature: float, max_output_tokens: int) -> tuple[dict[str, Any] | None, int, int]:
+    def _call_ai_copilot(self, snapshot: Dict[str, Any], *, model: str, temperature: float, max_output_tokens: int) -> Tuple[Optional[Dict[str, Any]], int, int]:
         system_prompt = (
             "You are a conservative trading bot co-pilot. "
             "Return ONLY JSON with keys: proposed_changes (object), reason (string), confidence (0..1), risk_level (low|medium|high). "
@@ -2151,10 +2112,10 @@ class CryptoTradingBot:
         result = self._extract_json_object(content)
         return result, prompt_tokens, completion_tokens
 
-    def _clamp_ai_changes(self, raw_changes: dict[str, Any]) -> dict[str, Any]:
+    def _clamp_ai_changes(self, raw_changes: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(raw_changes, dict):
             return {}
-        out: dict[str, Any] = {}
+        out: Dict[str, Any] = {}
 
         if 'min_entry_score' in raw_changes:
             try:
@@ -2185,8 +2146,8 @@ class CryptoTradingBot:
 
         return out
 
-    def _apply_ai_changes(self, changes: dict[str, Any]) -> dict[str, tuple[Any, Any]]:
-        applied: dict[str, tuple[Any, Any]] = {}
+    def _apply_ai_changes(self, changes: Dict[str, Any]) -> Dict[str, Tuple[Any, Any]]:
+        applied: Dict[str, Tuple[Any, Any]] = {}
 
         if 'min_entry_score' in changes:
             old = self.config.min_entry_score
@@ -2213,7 +2174,7 @@ class CryptoTradingBot:
 
     def _maybe_run_ai_copilot_variant(
         self,
-        snapshot: dict[str, Any],
+        snapshot: Dict[str, Any],
         *,
         label: str,
         state_file: str,
@@ -2293,14 +2254,14 @@ class CryptoTradingBot:
                 logger.warning(
                     f"{label} call ignored due to monthly budget cap: projected {projected:.4f} USD")
                 state['last_attempt_at'] = datetime.now(
-                    UTC).isoformat()
+                    timezone.utc).isoformat()
                 self._write_ai_copilot_state(state, state_file)
                 return
 
             state['monthly_calls'] = int(state.get('monthly_calls', 0)) + 1
             state['daily_calls'] = int(state.get('daily_calls', 0)) + 1
             state['monthly_spend_usd'] = projected
-            state['last_run_at'] = datetime.now(UTC).isoformat()
+            state['last_run_at'] = datetime.now(timezone.utc).isoformat()
             state['last_attempt_at'] = state['last_run_at']
             state['last_prompt_tokens'] = prompt_tokens
             state['last_completion_tokens'] = completion_tokens
@@ -2356,7 +2317,7 @@ class CryptoTradingBot:
                         f"{label} applied: {applied} "
                         f"(model={model}, risk={risk_level}, confidence={confidence}, reason={reason_text})")
                     state['last_applied_at'] = datetime.now(
-                        UTC).isoformat()
+                        timezone.utc).isoformat()
                     state['last_applied_changes'] = {
                         k: {'old': v[0], 'new': v[1]} for k, v in applied.items()
                     }
@@ -2367,7 +2328,7 @@ class CryptoTradingBot:
             self._write_ai_copilot_state(state, state_file)
 
         except Exception as e:
-            state['last_attempt_at'] = datetime.now(UTC).isoformat()
+            state['last_attempt_at'] = datetime.now(timezone.utc).isoformat()
             state['consecutive_errors'] = int(
                 state.get('consecutive_errors', 0)) + 1
             state['last_error'] = str(e)
@@ -2380,10 +2341,10 @@ class CryptoTradingBot:
                 logger.error(
                     f"{label} suspended after {state['consecutive_errors']} consecutive errors")
                 state['last_suspended_at'] = datetime.now(
-                    UTC).isoformat()
+                    timezone.utc).isoformat()
             self._write_ai_copilot_state(state, state_file)
 
-    def _maybe_run_ai_copilot(self, snapshot: dict[str, Any]):
+    def _maybe_run_ai_copilot(self, snapshot: Dict[str, Any]):
         self._maybe_run_ai_copilot_variant(
             snapshot,
             label='AI co-pilot',
@@ -2403,7 +2364,7 @@ class CryptoTradingBot:
             allow_apply=not self.config.ai_copilot_shadow_mode,
         )
 
-    def _maybe_run_ai_copilot_benchmark(self, snapshot: dict[str, Any]):
+    def _maybe_run_ai_copilot_benchmark(self, snapshot: Dict[str, Any]):
         self._maybe_run_ai_copilot_variant(
             snapshot,
             label='AI co-pilot benchmark',
@@ -2423,7 +2384,7 @@ class CryptoTradingBot:
             allow_apply=False,
         )
 
-    def _record_close_performance(self, entry_trade: dict, sell_price: float, sell_amount: float):
+    def _record_close_performance(self, entry_trade: Dict, sell_price: float, sell_amount: float):
         buy_price = float(entry_trade.get('buy_price', 0.0))
         buy_amount_coin = float(entry_trade.get('amount_coin', 0.0))
         if buy_amount_coin <= 0:
@@ -2454,7 +2415,7 @@ class CryptoTradingBot:
                 and self.consecutive_losses >= self.config.loss_streak_pause_threshold
             ):
                 self.buy_pause_until_utc = datetime.now(
-                    UTC) + timedelta(seconds=self.config.loss_streak_pause_seconds)
+                    timezone.utc) + timedelta(seconds=self.config.loss_streak_pause_seconds)
                 logger.warning(
                     f"🧯 Loss streak detected ({self.consecutive_losses} in a row). "
                     f"New BUYs paused until {self.buy_pause_until_utc.isoformat()}"
@@ -2465,16 +2426,16 @@ class CryptoTradingBot:
         return pnl_base, pnl_pct, hold_seconds
 
     def _register_buy_timestamp(self):
-        now_utc = datetime.now(UTC)
+        now_utc = datetime.now(timezone.utc)
         self.buy_timestamps_utc.append(now_utc)
         cutoff = now_utc - timedelta(hours=1)
         self.buy_timestamps_utc = [
             ts for ts in self.buy_timestamps_utc if ts >= cutoff]
 
     def _register_sell_timestamp(self, coin: str):
-        self.last_sell_timestamps_utc[coin] = datetime.now(UTC)
+        self.last_sell_timestamps_utc[coin] = datetime.now(timezone.utc)
 
-    def _resolve_reentry_cooldown_seconds(self, current_price: float, atr: float) -> tuple[int, str]:
+    def _resolve_reentry_cooldown_seconds(self, current_price: float, atr: float) -> Tuple[int, str]:
         """Returns an effective re-entry cooldown (seconds), optionally adjusted by volatility."""
         base = max(0, int(self.config.reentry_cooldown_seconds))
         minimum = max(0, int(self.config.reentry_cooldown_min_seconds))
@@ -2514,7 +2475,7 @@ class CryptoTradingBot:
         reason = f'{regime},atr_pct={atr_pct:.4f},mult={mult:.2f}'
         return effective, reason
 
-    def _is_coin_in_reentry_cooldown(self, coin: str, cooldown_seconds: int | None = None) -> tuple[bool, int]:
+    def _is_coin_in_reentry_cooldown(self, coin: str, cooldown_seconds: Optional[int] = None) -> Tuple[bool, int]:
         cooldown = max(
             0,
             int(self.config.reentry_cooldown_seconds if cooldown_seconds is None else cooldown_seconds),
@@ -2526,14 +2487,14 @@ class CryptoTradingBot:
         if last_sell is None:
             return False, 0
 
-        elapsed = (datetime.now(UTC) - last_sell).total_seconds()
+        elapsed = (datetime.now(timezone.utc) - last_sell).total_seconds()
         remaining = int(max(0, cooldown - elapsed))
         if remaining > 0:
             return True, remaining
         return False, 0
 
     def _refresh_daily_anchor(self, portfolio_value: float):
-        today_utc = datetime.now(UTC).date()
+        today_utc = datetime.now(timezone.utc).date()
         if portfolio_value <= 0:
             return
         if self.daily_anchor_date != today_utc:
@@ -2544,8 +2505,8 @@ class CryptoTradingBot:
             logger.info(
                 f"🗓️ Daily-risk-anchor set: {portfolio_value:.2f} {self.config.base_currency} ({today_utc})")
 
-    def _can_open_new_positions(self, portfolio_value: float) -> tuple[bool, str]:
-        now_utc = datetime.now(UTC)
+    def _can_open_new_positions(self, portfolio_value: float) -> Tuple[bool, str]:
+        now_utc = datetime.now(timezone.utc)
 
         if self.buy_pause_until_utc and now_utc < self.buy_pause_until_utc:
             remaining = (self.buy_pause_until_utc - now_utc).total_seconds()
@@ -2656,14 +2617,14 @@ class CryptoTradingBot:
 
     def _update_portfolio_balance(self):
         """Updates the portfolio with current balances from the exchange."""
-        def _currency_aliases(currency: str) -> list[str]:
+        def _currency_aliases(currency: str) -> List[str]:
             base = currency.upper().strip()
             aliases = [base, f"Z{base}", f"X{base}"]
             if base == 'BTC':
                 aliases.extend(['XBT', 'XXBT'])
             return list(dict.fromkeys(aliases))
 
-        def _extract_cash_and_holdings(free_balances: dict[str, float]) -> tuple[float, dict[str, float]]:
+        def _extract_cash_and_holdings(free_balances: Dict[str, float]) -> Tuple[float, Dict[str, float]]:
             cash = 0.0
             aliases = _currency_aliases(self.config.base_currency)
             for key in aliases:
@@ -2672,7 +2633,7 @@ class CryptoTradingBot:
                     cash = float(value)
                     break
 
-            holdings: dict[str, float] = {}
+            holdings: Dict[str, float] = {}
             for currency, amount in free_balances.items():
                 if amount <= 0:
                     continue
@@ -2738,9 +2699,9 @@ class CryptoTradingBot:
             logger.error(
                 f"Unexpected error fetching/updating account balance: {e}")
 
-    def _get_market_data(self) -> dict[str, dict]:
+    def _get_market_data(self) -> Dict[str, Dict]:
         """Fetches current ticker data (price, volume) for all relevant coins."""
-        market_data: dict[str, dict] = {}
+        market_data: Dict[str, Dict] = {}
         if self.config.simulate_data:
             for coin in self.all_coins:
                 symbol = f'{coin}/{self.config.base_currency}'
@@ -2869,7 +2830,7 @@ class CryptoTradingBot:
                        for index, char in enumerate(coin))
         return regimes[checksum % len(regimes)]
 
-    def _simulation_regime_shape(self, regime: str, bucket_index: int, phase: float) -> tuple[float, float, float]:
+    def _simulation_regime_shape(self, regime: str, bucket_index: int, phase: float) -> Tuple[float, float, float]:
         relative = bucket_index - self.iteration
 
         if regime == 'uptrend':
@@ -2924,7 +2885,7 @@ class CryptoTradingBot:
         rng = np.random.default_rng(
             self._simulation_series_seed(symbol, timeframe))
         interval = self._simulation_time_delta(timeframe)
-        end_time = datetime.now(UTC).replace(second=0, microsecond=0)
+        end_time = datetime.now(timezone.utc).replace(second=0, microsecond=0)
         base_price = self._simulation_base_price(coin)
         base_volume = self._simulation_base_volume(coin)
 
@@ -2978,7 +2939,7 @@ class CryptoTradingBot:
         self._simulation_ohlcv_cache[cache_key] = df
         return df.copy()
 
-    def _fetch_ohlcv_data(self, symbol: str, timeframe: str = '1h', limit: int = 100) -> pd.DataFrame | None:
+    def _fetch_ohlcv_data(self, symbol: str, timeframe: str = '1h', limit: int = 100) -> Optional[pd.DataFrame]:
         """Fetches OHLCV data for a symbol."""
         if self.config.simulate_data or self.exchange is None:
             return self._build_simulated_ohlcv_data(symbol, timeframe=timeframe, limit=limit)
@@ -3105,8 +3066,8 @@ class CryptoTradingBot:
         price: float,
         atr: float,
         risk_pct: float = 0.01,
-        portfolio_value: float | None = None,
-        trade_amount_cap: float | None = None,
+        portfolio_value: Optional[float] = None,
+        trade_amount_cap: Optional[float] = None,
     ) -> float:
         """Calculates position size such that at most risk_pct of the portfolio is at risk (ATR-based)."""
         effective_trade_amount = self.config.trade_amount if trade_amount_cap is None else trade_amount_cap
@@ -3146,7 +3107,7 @@ class CryptoTradingBot:
         rule_score: int,
         tab_decision: str,
         tab_confidence: float,
-    ) -> tuple[bool, str]:
+    ) -> Tuple[bool, str]:
         if tab_decision == 'kaufen' and not self.config.tabular_allow_buy_entries:
             return False, 'buy_entries_disabled'
 
@@ -3180,7 +3141,7 @@ class CryptoTradingBot:
 
         return False, 'gated_by_rules'
 
-    def _effective_stop_loss_level(self, trade_info: dict, current_price: float, atr: float) -> float:
+    def _effective_stop_loss_level(self, trade_info: Dict, current_price: float, atr: float) -> float:
         """Builds a dynamic stop level combining base ATR stop, trailing stop and break-even protection."""
         buy_price = float(trade_info.get('buy_price', 0.0))
         if buy_price <= 0:
@@ -3205,7 +3166,7 @@ class CryptoTradingBot:
 
         return stop_loss_level
 
-    def _passes_entry_momentum_filter(self, coin_data: dict) -> tuple[bool, str]:
+    def _passes_entry_momentum_filter(self, coin_data: Dict) -> Tuple[bool, str]:
         """Checks if an entry candidate has acceptable short-term momentum."""
         if not self.config.entry_momentum_filter_enabled:
             return True, 'disabled'
@@ -3244,7 +3205,7 @@ class CryptoTradingBot:
 
         return True, 'ok'
 
-    def _passes_uptrend_entry_filter(self, coin_data: dict) -> tuple[bool, str]:
+    def _passes_uptrend_entry_filter(self, coin_data: Dict) -> Tuple[bool, str]:
         """Allows up-trend fallback entries only when trend and tabular quality are not too weak."""
         recommendation = str(coin_data.get('recommendation', ''))
         if recommendation != 'HOLD (Up-Trend)':
@@ -3290,7 +3251,7 @@ class CryptoTradingBot:
 
         return True, 'ok'
 
-    def _passes_fallback_entry_filter(self, coin: str, coin_data: dict) -> tuple[bool, str]:
+    def _passes_fallback_entry_filter(self, coin: str, coin_data: Dict) -> Tuple[bool, str]:
         """Applies fallback-only entry checks after the directional filters passed."""
         rsi = coin_data.get('rsi')
         if rsi is None or np.isnan(rsi):
@@ -3303,7 +3264,7 @@ class CryptoTradingBot:
 
         return True, 'ok'
 
-    def _entry_market_mode(self, market_analysis: dict[str, dict]) -> str:
+    def _entry_market_mode(self, market_analysis: Dict[str, Dict]) -> str:
         """Classifies the market to suppress aggressive entry filling in weak environments."""
         if not market_analysis:
             return 'normal'
@@ -3346,8 +3307,8 @@ class CryptoTradingBot:
 
     def _log_blocked_uptrend_candidates(
         self,
-        market_analysis: dict[str, dict],
-        uptrend_filter_results: dict[str, tuple[bool, str]],
+        market_analysis: Dict[str, Dict],
+        uptrend_filter_results: Dict[str, Tuple[bool, str]],
         limit: int = 5,
     ) -> None:
         """Logs concrete rejection details for blocked rules-based up-trend entries."""
@@ -3415,8 +3376,8 @@ class CryptoTradingBot:
 
     def _log_blocked_downtrend_reversal_candidates(
         self,
-        market_analysis: dict[str, dict],
-        downtrend_filter_results: dict[str, tuple[bool, str]],
+        market_analysis: Dict[str, Dict],
+        downtrend_filter_results: Dict[str, Tuple[bool, str]],
         limit: int = 5,
     ) -> None:
         """Logs concrete rejection details for blocked down-trend reversal entries."""
@@ -3484,9 +3445,9 @@ class CryptoTradingBot:
 
     def _log_fallback_entry_diagnostics(
         self,
-        market_analysis: dict[str, dict],
-        fallback_base_candidates: list[str],
-        fallback_filter_results: dict[str, tuple[bool, str]],
+        market_analysis: Dict[str, Dict],
+        fallback_base_candidates: List[str],
+        fallback_filter_results: Dict[str, Tuple[bool, str]],
         fallback_allowed: bool,
         fallback_suppression_reason: str,
         entry_market_mode: str,
@@ -3561,7 +3522,7 @@ class CryptoTradingBot:
 
     def _log_blocked_buy_attempt_candidates(
         self,
-        blocked_attempts: list[dict[str, Any]],
+        blocked_attempts: List[Dict[str, Any]],
         limit: int = 5,
     ) -> None:
         """Logs why shortlisted buy candidates still failed during the execution path."""
@@ -3591,12 +3552,12 @@ class CryptoTradingBot:
             )
 
     @staticmethod
-    def _is_rules_uptrend_trade(trade_info: dict) -> bool:
+    def _is_rules_uptrend_trade(trade_info: Dict) -> bool:
         recommendation = str(trade_info.get('recommendation', ''))
         signal_source = str(trade_info.get('signal_source', ''))
         return recommendation == 'HOLD (Up-Trend)' and signal_source == 'rules'
 
-    def _passes_downtrend_reversal_filter(self, coin_data: dict) -> tuple[bool, str]:
+    def _passes_downtrend_reversal_filter(self, coin_data: Dict) -> Tuple[bool, str]:
         """Allows down-trend fallback entries only for oversold coins with improving CatBoost odds."""
         recommendation = str(coin_data.get('recommendation', ''))
         if recommendation != 'HOLD (Down-Trend)':
@@ -3674,7 +3635,7 @@ class CryptoTradingBot:
     def _allows_entry_signal(
         recommendation: str,
         downtrend_reversal_allowed: bool,
-        excluded_signals: set[str],
+        excluded_signals: Set[str],
     ) -> bool:
         """Keeps explicit downtrend-reversal approvals eligible even when generic exits block downtrend entries."""
         if recommendation != 'HOLD (Down-Trend)':
@@ -3682,11 +3643,11 @@ class CryptoTradingBot:
         return downtrend_reversal_allowed
 
     @staticmethod
-    def _is_downtrend_reversal_trade(trade_info: dict) -> bool:
+    def _is_downtrend_reversal_trade(trade_info: Dict) -> bool:
         """Returns True for trades opened via the guarded downtrend reversal path."""
         return str(trade_info.get('recommendation', '')) == 'HOLD (Down-Trend)'
 
-    def _analyze_coin(self, coin: str, current_price: float) -> dict | None:
+    def _analyze_coin(self, coin: str, current_price: float) -> Optional[Dict]:
         """Performs a detailed analysis for a single coin."""
         symbol = f"{coin}/{self.config.base_currency}"
         ohlcv_df = self._fetch_ohlcv_data(
@@ -3956,7 +3917,7 @@ class CryptoTradingBot:
             'macd_hist': macd_hist,
         }
 
-    def _analyze_markets(self, market_data: dict[str, dict], extra_coins: list[str] | None = None) -> dict[str, dict]:
+    def _analyze_markets(self, market_data: Dict[str, Dict], extra_coins: Optional[List[str]] = None) -> Dict[str, Dict]:
         """Performs a comprehensive market analysis and returns recommendations."""
         dynamic_excluded_coins = self._dynamic_excluded_coins()
         if dynamic_excluded_coins:
@@ -3994,7 +3955,7 @@ class CryptoTradingBot:
                 if coin in market_data and coin not in coins_for_detailed_analysis:
                     coins_for_detailed_analysis.append(coin)
 
-        analysis: dict[str, dict] = {}
+        analysis: Dict[str, Dict] = {}
         total_analysis_coins = len(coins_for_detailed_analysis)
         for idx, coin in enumerate(coins_for_detailed_analysis, start=1):
             logger.info(
@@ -4027,7 +3988,7 @@ class CryptoTradingBot:
         amount_in_base_currency: float,
         atr: float = None,
         signal_source: str = 'rules',
-        signal_confidence: float | None = None,
+        signal_confidence: Optional[float] = None,
         recommendation: str = 'HOLD',
         reason: str = '',
     ):
@@ -4233,7 +4194,7 @@ class CryptoTradingBot:
                 f"Unexpected error executing trade ({action} {coin}): {e}")
             return False
 
-    def _manage_open_trades(self, current_market_data: dict[str, dict], market_analysis: dict | None = None):
+    def _manage_open_trades(self, current_market_data: Dict[str, Dict], market_analysis: Optional[Dict] = None):
         """Monitors open trades for stop-loss, take-profit, time and signal exits."""
         trades_to_remove = []
         for coin, trade_info in list(self.portfolio.open_trades.items()):
@@ -4241,18 +4202,6 @@ class CryptoTradingBot:
             amount_coin = trade_info['amount_coin']
             partial_tp_taken = bool(trade_info.get('partial_tp_taken', False))
             partial_tp_timestamp = trade_info.get('partial_tp_timestamp')
-            # Convert string timestamp to datetime if needed
-            if isinstance(partial_tp_timestamp, str):
-                try:
-                    partial_tp_timestamp = datetime.fromisoformat(partial_tp_timestamp.replace('Z', '+00:00'))
-                except Exception:
-                    partial_tp_timestamp = None
-            # Convert string timestamp to datetime if needed
-            if isinstance(partial_tp_timestamp, str):
-                try:
-                    partial_tp_timestamp = datetime.fromisoformat(partial_tp_timestamp.replace('Z', '+00:00'))
-                except Exception:
-                    partial_tp_timestamp = None
             current_price_data = current_market_data.get(coin)
             if current_price_data is None:
                 logger.warning(
@@ -4448,25 +4397,6 @@ class CryptoTradingBot:
             logger.warning(
                 "SIMULATION MODE IS ACTIVE! No real exchange data will be fetched or trades executed.")
 
-        # Ensure there's a persistent portfolio snapshot at startup so monitoring
-        # components (exporter / prometheus) have something to read even before
-        # the bot performs any trades.
-        try:
-            try:
-                restored = self.portfolio.load_state()
-            except Exception:
-                restored = False
-            if not restored:
-                saved = self.portfolio.save_state()
-                if saved:
-                    logger.info(
-                        f"Initial portfolio snapshot written to {self.portfolio.state_file}")
-                else:
-                    logger.warning(
-                        f"Could not write initial portfolio snapshot to {self.portfolio.state_file}")
-        except Exception as exc:
-            logger.warning(f"Failed to initialize portfolio snapshot: {exc}")
-
         try:
             while True:
                 self.iteration += 1
@@ -4527,7 +4457,7 @@ class CryptoTradingBot:
                         str(recent_pnl_guard.get('reason', 'n/a')),
                     )
 
-                def _entry_pair_allowed(coin: str, data: dict[str, Any]) -> bool:
+                def _entry_pair_allowed(coin: str, data: Dict[str, Any]) -> bool:
                     source = str(data.get('signal_source',
                                  'rules')).strip().lower()
                     return (str(coin).upper(), source) not in dynamic_excluded_entry_pairs
@@ -4760,7 +4690,7 @@ class CryptoTradingBot:
                 elif available_funds_for_trade >= min_required_cash and current_open_trades_count < effective_max_open_trades:
                     logger.info(
                         f"Attempting to open new positions. Available: {available_funds_for_trade:.2f} {self.config.base_currency}, Open trades: {current_open_trades_count}/{effective_max_open_trades}, Min amount: {min_required_cash:.2f} {self.config.base_currency}, Effective trade amount: {effective_trade_amount:.2f} {self.config.base_currency}.")
-                    blocked_buy_attempts: list[dict[str, Any]] = []
+                    blocked_buy_attempts: List[Dict[str, Any]] = []
                     successful_buy_count = 0
                     for coin in top_buy_recommendations:
                         # Only trade if no position is already open
@@ -4859,7 +4789,6 @@ class CryptoTradingBot:
                                             'recommendation', 'HOLD'),
                                         reason='ENTRY',
                                     ):
-                                        # Persist portfolio state after successful dry-run or simulation buy
                                         if self.config.dry_run or self.config.simulate_data:
                                             self.portfolio.save_state()
                                         # Update available capital
@@ -4913,10 +4842,10 @@ class CryptoTradingBot:
                         current_market_data, market_analysis)
 
                 # Step 7: Display portfolio status
-                portfolio_value = self.portfolio.get_value(
+                portfolio_value=self.portfolio.get_value(
                     {coin: data['price'] for coin, data in current_market_data.items()})
                 if self.portfolio.initial_portfolio_value is None:
-                    self.portfolio.initial_portfolio_value = portfolio_value
+                    self.portfolio.initial_portfolio_value=portfolio_value
                     if self.config.dry_run or self.config.simulate_data:
                         self.portfolio.save_state()
                 logger.info(
@@ -4934,7 +4863,7 @@ class CryptoTradingBot:
 
                 # Step 8: Optional external AI co-pilot(s) (rate- and budget-limited)
                 if self.config.ai_copilot_enabled or self.config.ai_copilot_benchmark_enabled:
-                    ai_snapshot = self._ai_copilot_snapshot()
+                    ai_snapshot=self._ai_copilot_snapshot()
                     self._maybe_run_ai_copilot(ai_snapshot)
                     self._maybe_run_ai_copilot_benchmark(ai_snapshot)
 
@@ -4957,39 +4886,39 @@ class Backtester:
     """Backtesting module for the trading strategy on historical data."""
 
     def __init__(self, data_file="training_data.csv", initial_cash=10000, base_currency="EUR"):
-        self.data_file = data_file
-        self.initial_cash = initial_cash
-        self.base_currency = base_currency
-        self.trades = []
-        self.equity_curve = []
+        self.data_file=data_file
+        self.initial_cash=initial_cash
+        self.base_currency=base_currency
+        self.trades=[]
+        self.equity_curve=[]
 
     def run(self, strategy_func, **kwargs):
-        df = pd.read_csv(self.data_file)
-        df = df.sort_values(["coin", "timestamp"]).reset_index(drop=True)
-        cash = self.initial_cash
-        holdings = {}
-        self.equity_curve = []
-        self.trades = []
+        df=pd.read_csv(self.data_file)
+        df=df.sort_values(["coin", "timestamp"]).reset_index(drop=True)
+        cash=self.initial_cash
+        holdings={}
+        self.equity_curve=[]
+        self.trades=[]
 
         for _, row in df.iterrows():
-            coin = row["coin"]
-            price = row["close"]
-            signal = strategy_func(row, **kwargs)
+            coin=row["coin"]
+            price=row["close"]
+            signal=strategy_func(row, **kwargs)
 
             if signal == "kaufen" and cash > 0:
-                amount = cash / price
-                holdings[coin] = holdings.get(coin, 0) + amount
+                amount=cash / price
+                holdings[coin]=holdings.get(coin, 0) + amount
                 self.trades.append(
                     (row["timestamp"], coin, "buy", price, amount))
-                cash = 0
+                cash=0
             elif signal == "verkaufen" and holdings.get(coin, 0) > 0:
-                amount = holdings[coin]
+                amount=holdings[coin]
                 cash += amount * price
                 self.trades.append(
                     (row["timestamp"], coin, "sell", price, amount))
-                holdings[coin] = 0
+                holdings[coin]=0
 
-            equity = cash + sum(holdings.get(c, 0) *
+            equity=cash + sum(holdings.get(c, 0) *
                                 row["close"] for c in holdings)
             self.equity_curve.append(equity)
 
@@ -4999,9 +4928,9 @@ class Backtester:
         if not self.equity_curve:
             print("No backtest run.")
             return
-        total_return = (
+        total_return=(
             self.equity_curve[-1] - self.initial_cash) / self.initial_cash * 100
-        max_drawdown = self._max_drawdown(self.equity_curve)
+        max_drawdown=self._max_drawdown(self.equity_curve)
         print("\nBacktest report:")
         print(
             f"  Starting capital: {self.initial_cash:.2f} {self.base_currency}")
@@ -5012,9 +4941,9 @@ class Backtester:
         print(f"  Trades:        {len(self.trades)}")
 
     def _max_drawdown(self, curve):
-        curve = np.array(curve)
-        highwater = np.maximum.accumulate(curve)
-        drawdowns = (curve - highwater) / highwater
+        curve=np.array(curve)
+        highwater=np.maximum.accumulate(curve)
+        drawdowns=(curve - highwater) / highwater
         return drawdowns.min() * 100
 
 
@@ -5033,19 +4962,19 @@ if __name__ == "__main__":
 
     configure_logging(os.getenv("BOT_LOG_FILE", "trading_bot.log"))
 
-    parser = argparse.ArgumentParser()
+    parser=argparse.ArgumentParser()
     parser.add_argument("--backtest", action="store_true",
                         help="Start backtest on training data")
-    args, _ = parser.parse_known_args()
+    args, _=parser.parse_known_args()
 
     if args.backtest:
         print("\nStarting backtest on training data...",)
-        backtester = Backtester(
+        backtester=Backtester(
             data_file="training_data.csv", initial_cash=10000)
         backtester.run(simple_strategy)
 
     try:
-        config = BotConfig()
+        config=BotConfig()
         if not config.simulate_data and (not config.api_key or not config.api_secret):
             logger.critical(
                 "❌ API keys not found in .env file and simulation mode is DISABLED!")
@@ -5058,8 +4987,8 @@ if __name__ == "__main__":
 
         # Test whether pandas and numpy are correctly installed (required for indicator calculation)
         try:
-            import numpy as np
-            import pandas as pd
+            import pandas as pd  # noqa: F401
+            import numpy as np  # noqa: F401
         except ImportError:
             logger.critical(
                 "❌ Pandas or Numpy are not installed. These are required for indicator calculation. Please install them with 'pip install pandas numpy'.")
@@ -5092,7 +5021,7 @@ if __name__ == "__main__":
         logger.info(
             f"   OHLCV limit (for indicators): {config.ohlcv_limit} candles")
 
-        bot = CryptoTradingBot(config)
+        bot=CryptoTradingBot(config)
         bot.run()
     except Exception as e:
         logger.critical(f"Initialisation error: {e}", exc_info=True)
