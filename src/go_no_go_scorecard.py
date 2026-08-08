@@ -30,87 +30,67 @@ def _max_drawdown_base(equity_curve: pd.Series) -> float:
 
 
 def _evaluate_verdict(
-    closed_trades: int,
-    min_closed_trades: int,
-    realized_pnl: float,
-    win_rate: float,
-    min_win_rate: float,
-    profit_factor: float,
-    min_profit_factor: float,
-    avg_pnl: float,
-    min_avg_pnl: float,
-    max_drawdown_pct: float,
-    max_allowed_drawdown_pct: float,
-    recent_closed_trades: int = 0,
-    recent_realized_pnl: float = 0.0,
-    min_recent_realized_pnl: float = -1e18,
-    recent_win_rate: float = 0.0,
-    min_recent_win_rate: float = 0.0,
-    catboost_closed_trades: int = 0,
-    catboost_realized_pnl: float = 0.0,
-    rules_closed_trades: int = 0,
-    rules_realized_pnl: float = 0.0,
-    min_catboost_vs_rules_pnl_delta: float = -1e18,
-    min_source_trades_for_delta: int = 0,
+    metrics: ScorecardMetrics,
+    thresholds: ScorecardThresholds,
 ) -> ScorecardResult:
     reasons: list[str] = []
 
     # Hard no-go conditions
-    if closed_trades < max(1, int(min_closed_trades * 0.5)):
+    if metrics.closed_trades < max(1, int(thresholds.min_closed_trades * 0.5)):
         reasons.append(
-            f"Too few closed trades: {closed_trades} < {max(1, int(min_closed_trades * 0.5))} (Hard-Fail)"
+            f"Too few closed trades: {metrics.closed_trades} < {max(1, int(thresholds.min_closed_trades * 0.5))} (Hard-Fail)"
         )
-    if realized_pnl <= 0:
+    if metrics.realized_pnl <= 0:
         reasons.append(
-            f"Realized PnL not positive: {realized_pnl:.6f} (Hard-Fail)")
-    if profit_factor < 1.0:
+            f"Realized PnL not positive: {metrics.realized_pnl:.6f} (Hard-Fail)")
+    if metrics.profit_factor < 1.0:
         reasons.append(
-            f"Profit factor below 1.0: {profit_factor:.4f} (Hard-Fail)")
-    if max_drawdown_pct > max_allowed_drawdown_pct * 1.5:
+            f"Profit factor below 1.0: {metrics.profit_factor:.4f} (Hard-Fail)")
+    if metrics.max_drawdown_pct > thresholds.max_allowed_drawdown_pct * 1.5:
         reasons.append(
-            f"Max drawdown significantly too high: {max_drawdown_pct:.2f}% > {max_allowed_drawdown_pct * 1.5:.2f}% (Hard-Fail)"
+            f"Max drawdown significantly too high: {metrics.max_drawdown_pct:.2f}% > {thresholds.max_allowed_drawdown_pct * 1.5:.2f}% (Hard-Fail)"
         )
 
     if reasons:
         return ScorecardResult(verdict=ScorecardVerdict.NO_GO, reasons=reasons)
 
     soft_fails: list[str] = []
-    if closed_trades < min_closed_trades:
+    if metrics.closed_trades < thresholds.min_closed_trades:
         soft_fails.append(
-            f"Trade count still too low: {closed_trades} < {min_closed_trades}")
-    if win_rate < min_win_rate:
+            f"Trade count still too low: {metrics.closed_trades} < {thresholds.min_closed_trades}")
+    if metrics.win_rate < thresholds.min_win_rate:
         soft_fails.append(
-            f"Win rate too low: {win_rate:.2f}% < {min_win_rate:.2f}%")
-    if profit_factor < min_profit_factor:
+            f"Win rate too low: {metrics.win_rate:.2f}% < {thresholds.min_win_rate:.2f}%")
+    if metrics.profit_factor < thresholds.min_profit_factor:
         soft_fails.append(
-            f"Profit factor too low: {profit_factor:.4f} < {min_profit_factor:.4f}")
-    if avg_pnl < min_avg_pnl:
+            f"Profit factor too low: {metrics.profit_factor:.4f} < {thresholds.min_profit_factor:.4f}")
+    if metrics.avg_pnl < thresholds.min_avg_pnl:
         soft_fails.append(
-            f"Avg PnL/trade too low: {avg_pnl:.6f} < {min_avg_pnl:.6f}")
-    if max_drawdown_pct > max_allowed_drawdown_pct:
+            f"Avg PnL/trade too low: {metrics.avg_pnl:.6f} < {thresholds.min_avg_pnl:.6f}")
+    if metrics.max_drawdown_pct > thresholds.max_allowed_drawdown_pct:
         soft_fails.append(
-            f"Max drawdown too high: {max_drawdown_pct:.2f}% > {max_allowed_drawdown_pct:.2f}%")
+            f"Max drawdown too high: {metrics.max_drawdown_pct:.2f}% > {thresholds.max_allowed_drawdown_pct:.2f}%")
 
-    if recent_closed_trades > 0 and recent_realized_pnl < min_recent_realized_pnl:
+    if metrics.recent_closed_trades > 0 and metrics.recent_realized_pnl < thresholds.min_recent_realized_pnl:
         soft_fails.append(
-            f"Recent PnL too low: {recent_realized_pnl:.6f} < {min_recent_realized_pnl:.6f}"
+            f"Recent PnL too low: {metrics.recent_realized_pnl:.6f} < {thresholds.min_recent_realized_pnl:.6f}"
         )
 
-    if recent_closed_trades > 0 and recent_win_rate < min_recent_win_rate:
+    if metrics.recent_closed_trades > 0 and metrics.recent_win_rate < thresholds.min_recent_win_rate:
         soft_fails.append(
-            f"Recent win rate too low: {recent_win_rate:.2f}% < {min_recent_win_rate:.2f}%"
+            f"Recent win rate too low: {metrics.recent_win_rate:.2f}% < {thresholds.min_recent_win_rate:.2f}%"
         )
 
     source_samples_ok = (
-        catboost_closed_trades >= min_source_trades_for_delta
-        and rules_closed_trades >= min_source_trades_for_delta
+        metrics.catboost_closed_trades >= thresholds.min_source_trades_for_delta
+        and metrics.rules_closed_trades >= thresholds.min_source_trades_for_delta
     )
     if source_samples_ok:
-        delta = catboost_realized_pnl - rules_realized_pnl
-        if delta < min_catboost_vs_rules_pnl_delta:
+        delta = metrics.catboost_realized_pnl - metrics.rules_realized_pnl
+        if delta < thresholds.min_catboost_vs_rules_pnl_delta:
             soft_fails.append(
                 "CatBoost underperforms rules too much: "
-                f"delta={delta:.6f} < {min_catboost_vs_rules_pnl_delta:.6f}"
+                f"delta={delta:.6f} < {thresholds.min_catboost_vs_rules_pnl_delta:.6f}"
             )
 
     if soft_fails:
@@ -178,6 +158,17 @@ def _compute_metrics(df: pd.DataFrame, starting_capital: float, recent_trades_wi
     )
 
 
+def _create_thresholds_from_args(**kwargs) -> ScorecardThresholds:
+    """Create ScorecardThresholds object from arguments using reflection."""
+    # Get all field names from ScorecardThresholds model
+    threshold_fields = list(ScorecardThresholds.model_fields.keys())
+    
+    # Filter kwargs to only include valid fields
+    filtered_kwargs = {k: v for k, v in kwargs.items() if k in threshold_fields}
+    
+    return ScorecardThresholds(**filtered_kwargs)
+
+
 def _print_hold_due_to_missing_data(file_path: str, reason: str) -> None:
     print("=== Go/No-Go Scorecard ===")
     print(f"File:                 {file_path}")
@@ -240,31 +231,11 @@ def evaluate_scorecard(
     )
 
     result = _evaluate_verdict(
-        closed_trades=metrics.closed_trades,
-        min_closed_trades=min_closed_trades,
-        realized_pnl=metrics.realized_pnl,
-        win_rate=metrics.win_rate,
-        min_win_rate=min_win_rate,
-        profit_factor=metrics.profit_factor,
-        min_profit_factor=min_profit_factor,
-        avg_pnl=metrics.avg_pnl,
-        min_avg_pnl=min_avg_pnl,
-        max_drawdown_pct=metrics.max_drawdown_pct,
-        max_allowed_drawdown_pct=max_drawdown_pct,
-        recent_closed_trades=metrics.recent_closed_trades,
-        recent_realized_pnl=metrics.recent_realized_pnl,
-        min_recent_realized_pnl=min_recent_realized_pnl,
-        recent_win_rate=metrics.recent_win_rate,
-        min_recent_win_rate=min_recent_win_rate,
-        catboost_closed_trades=metrics.catboost_closed_trades,
-        catboost_realized_pnl=metrics.catboost_realized_pnl,
-        rules_closed_trades=metrics.rules_closed_trades,
-        rules_realized_pnl=metrics.rules_realized_pnl,
-        min_catboost_vs_rules_pnl_delta=min_catboost_vs_rules_pnl_delta,
-        min_source_trades_for_delta=min_source_trades_for_delta,
+        metrics=metrics,
+        thresholds=thresholds,
     )
 
-    thresholds = ScorecardThresholds(
+    thresholds = _create_thresholds_from_args(
         min_closed_trades=min_closed_trades,
         min_win_rate=min_win_rate,
         min_profit_factor=min_profit_factor,
