@@ -294,7 +294,7 @@ class Portfolio:
         self.initial_portfolio_value: float | None = None
         # Persistency file for dry-run / simulation. Prefer explicit env override.
         self.state_file: str = os.getenv(
-            'PORTFOLIO_STATE_PATH', '/opt/trading_2/.portfolio_state.json')
+            'PORTFOLIO_STATE_PATH', '')
 
     def save_state(self, filepath: str | None = None) -> bool:
         """Save portfolio state to JSON file (for dry-run persistency)."""
@@ -305,8 +305,8 @@ class Portfolio:
             if parent and not os.path.exists(parent):
                 try:
                     os.makedirs(parent, exist_ok=True)
-                except Exception:
-                    pass
+                except OSError as e:
+                    logger.debug(f"Could not create directory {parent}: {e}")
 
             state = {
                 'cash': self.cash,
@@ -314,14 +314,14 @@ class Portfolio:
                 'open_trades': self.open_trades,
                 'base_currency': self.base_currency,
                 'initial_portfolio_value': self.initial_portfolio_value,
-                'timestamp': datetime.now().isoformat(),
+                'timestamp': datetime.now(UTC).isoformat(),
             }
             with open(state_file, 'w') as f:
                 json.dump(state, f, indent=2, default=lambda o: o.isoformat(
                 ) if isinstance(o, datetime) else str(o))
             logger.debug(f"Portfolio state saved to {state_file}")
             return True
-        except Exception as e:
+        except OSError as e:
             logger.error(f"Failed to save portfolio state: {e}")
             return False
 
@@ -347,7 +347,7 @@ class Portfolio:
                     try:
                         trade['timestamp'] = datetime.fromisoformat(ts)
                     except ValueError:
-                        trade['timestamp'] = datetime.now()
+                        trade['timestamp'] = datetime.now(UTC)
             logger.info(f"Portfolio state loaded from {state_file}")
             logger.info(f"  Cash: {self.cash:.2f} {self.base_currency}")
             logger.info(f"  Holdings: {self.holdings}")
@@ -355,7 +355,7 @@ class Portfolio:
                 logger.info(
                     f"  Open trades restored: {list(self.open_trades.keys())}")
             return True
-        except Exception as e:
+        except OSError as e:
             logger.error(f"Failed to load portfolio state: {e}")
             return False
 
@@ -398,7 +398,7 @@ class Portfolio:
             'buy_price': buy_price,
             'amount_coin': amount_coin,
             'amount_base': amount_base,  # Invested amount in base currency
-            'timestamp': datetime.now(),
+            'timestamp': datetime.now(UTC),
             'peak_price': buy_price,
             'partial_tp_taken': False,
             'partial_tp_timestamp': None,
@@ -987,7 +987,7 @@ class PostgresAnalyticsWriter:
         try:
             if self._psycopg is None:
                 self._psycopg = importlib.import_module('psycopg')
-        except Exception as exc:
+        except ModuleNotFoundError as exc:
             if not self._disabled_reason_logged:
                 logger.warning(
                     'Analytics DB enabled but psycopg is unavailable: %s', exc)
@@ -1007,7 +1007,7 @@ class PostgresAnalyticsWriter:
             self._conn.autocommit = True
             self._ensure_schema()
             return True
-        except Exception as exc:
+        except (OSError, AttributeError, ValueError) as exc:
             if not self._disabled_reason_logged:
                 logger.warning(
                     'Failed to connect to analytics Postgres DB: %s', exc)
@@ -1125,7 +1125,7 @@ class PostgresAnalyticsWriter:
                         base_currency,
                     ),
                 )
-        except Exception as exc:
+        except (OSError, AttributeError, ValueError) as exc:
             logger.warning(
                 'Failed to write trade event to analytics DB: %s', exc)
             self.close()
@@ -1180,7 +1180,7 @@ class PostgresAnalyticsWriter:
                         serialized_open_trades,
                     ),
                 )
-        except Exception as exc:
+        except (OSError, AttributeError, ValueError) as exc:
             logger.warning(
                 'Failed to write portfolio snapshot to analytics DB: %s', exc)
             self.close()
@@ -1192,7 +1192,7 @@ class PostgresAnalyticsWriter:
             return
         try:
             conn.close()
-        except Exception:
+        except (OSError, AttributeError):
             pass
 
 
@@ -1253,7 +1253,7 @@ class CryptoTradingBot:
                     self.config.model_path)
                 logger.info(
                     f"🤖 ML model loaded from '{self.config.model_path}'.")
-            except Exception as e:
+            except (FileNotFoundError, ImportError, OSError) as e:
                 logger.warning(
                     f"ML model could not be loaded: {e}. Using rule-based analysis only.")
 
@@ -1270,7 +1270,7 @@ class CryptoTradingBot:
                 )
                 logger.info(
                     f"📊 CatBoost model loaded from '{self.config.tabular_model_path}'.")
-            except Exception as e:
+            except (FileNotFoundError, ImportError, OSError) as e:
                 logger.warning(
                     f"CatBoost model could not be loaded: {e}.")
 
@@ -1300,7 +1300,7 @@ class CryptoTradingBot:
             with open(self.config.performance_log_file, 'a', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerow([
-                    row.get('timestamp', datetime.now().isoformat()),
+                    row.get('timestamp', datetime.now(UTC).isoformat()),
                     row.get('iteration', self.iteration),
                     row.get('coin', ''),
                     row.get('action', ''),
@@ -1350,7 +1350,7 @@ class CryptoTradingBot:
 
         try:
             df = pd.read_csv(path)
-        except Exception as e:
+        except (FileNotFoundError, OSError) as e:
             logger.warning(
                 f"Journal could not be read for auto-tuning: {e}")
             return None
@@ -1413,7 +1413,7 @@ class CryptoTradingBot:
 
         try:
             df = pd.read_csv(path)
-        except Exception as e:
+        except (FileNotFoundError, OSError) as e:
             logger.warning(
                 f"Journal could not be read for dynamic exclusions: {e}")
             return set()
@@ -1474,7 +1474,7 @@ class CryptoTradingBot:
 
         try:
             df = pd.read_csv(path)
-        except Exception as e:
+        except (FileNotFoundError, OSError) as e:
             logger.warning(
                 f"Journal could not be read for dynamic entry pair exclusions: {e}")
             return set()
@@ -1504,7 +1504,7 @@ class CryptoTradingBot:
 
         try:
             df = pd.read_csv(path)
-        except Exception as e:
+        except (FileNotFoundError, OSError) as e:
             logger.warning(
                 f"Journal could not be read for dynamic source exclusions: {e}")
             return set()
@@ -1544,7 +1544,7 @@ class CryptoTradingBot:
 
         try:
             df = pd.read_csv(path)
-        except Exception as e:
+        except (FileNotFoundError, OSError) as e:
             logger.warning(
                 f"Journal could not be read for recent PnL guard: {e}")
             return {
@@ -1570,7 +1570,7 @@ class CryptoTradingBot:
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except Exception:
+        except (json.JSONDecodeError, OSError):
             return {}
 
     def _write_auto_tune_state(self, state: dict):
@@ -1580,7 +1580,7 @@ class CryptoTradingBot:
         try:
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(state, f, ensure_ascii=True, indent=2)
-        except Exception as e:
+        except (OSError, IOError) as e:
             logger.warning(
                 f"Auto-tune state could not be saved: {e}")
 
@@ -1596,7 +1596,7 @@ class CryptoTradingBot:
             # Backward-compatible: treat naive timestamps as UTC.
             if last_dt.tzinfo is None:
                 last_dt = last_dt.replace(tzinfo=UTC)
-        except Exception:
+        except ValueError:
             return 0.0
         elapsed_minutes = (datetime.now(UTC) -
                            last_dt).total_seconds() / 60.0
@@ -1717,7 +1717,7 @@ class CryptoTradingBot:
             return
         try:
             df = pd.read_csv(path)
-        except Exception as exc:
+        except (FileNotFoundError, OSError) as exc:
             logger.warning("Policy tune: cannot read journal: %s", exc)
             return
 
@@ -1976,7 +1976,7 @@ class CryptoTradingBot:
                     logger.warning(
                         'Recovered AI co-pilot state from backup file')
                 return state
-            except Exception as exc:
+            except (json.JSONDecodeError, OSError) as exc:
                 last_error = exc
 
         if last_error is not None:
@@ -1994,13 +1994,13 @@ class CryptoTradingBot:
             if os.path.exists(path):
                 try:
                     shutil.copyfile(path, backup_path)
-                except Exception as exc:
+                except (OSError, IOError) as exc:
                     logger.warning(
                         f'AI co-pilot state backup could not be updated: {exc}')
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(state, f, ensure_ascii=True, indent=2)
             os.replace(tmp_path, path)
-        except Exception as e:
+        except (OSError, IOError) as e:
             try:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
@@ -2085,7 +2085,7 @@ class CryptoTradingBot:
                                last_run).total_seconds() / 60.0
                 if elapsed_min < interval_minutes:
                     return False, 'interval_not_reached'
-            except Exception:
+            except ValueError:
                 pass
         return True, 'ok'
 
@@ -2097,7 +2097,7 @@ class CryptoTradingBot:
         normalized = text.replace('Z', '+00:00')
         try:
             parsed = datetime.fromisoformat(normalized)
-        except Exception:
+        except ValueError:
             return None
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=UTC)
@@ -2113,7 +2113,7 @@ class CryptoTradingBot:
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 buffered = list(deque(f, maxlen=max_lines))
-        except Exception as exc:
+        except (FileNotFoundError, OSError) as exc:
             logger.warning(
                 'Could not read Hailo alerts file %s: %s', path, exc)
             return []
@@ -2131,7 +2131,7 @@ class CryptoTradingBot:
                 continue
             try:
                 payload = json.loads(line)
-            except Exception:
+            except json.JSONDecodeError:
                 continue
 
             timestamp = self._parse_iso8601_utc(payload.get('timestamp'))
@@ -2145,11 +2145,11 @@ class CryptoTradingBot:
 
             try:
                 score = float(payload.get('hailo_score', 0.0))
-            except Exception:
+            except (ValueError, TypeError):
                 score = 0.0
             try:
                 confidence = float(payload.get('confidence', 0.0))
-            except Exception:
+            except (ValueError, TypeError):
                 confidence = 0.0
 
             if score < min_score or confidence < min_confidence:
@@ -2200,6 +2200,86 @@ class CryptoTradingBot:
             'recent_alerts': recent_alerts[:5],
         }
         return allowed, details
+
+    def _call_remote_hailo_inference(self, market_data: dict[str, Any], coin: str) -> dict[str, Any] | None:
+        """
+        Call remote Hailo inference on edge device via SSH.
+        
+        Args:
+            market_data: Current market data for the coin
+            coin: Trading pair identifier
+            
+        Returns:
+            Alert dict or None if inference failed
+            
+        Required environment variables:
+            - HAILO_REMOTE_HOST: IP or hostname of Hailo edge device
+            - HAILO_REMOTE_USER: SSH username for edge device
+            - HAILO_REMOTE_SCRIPT: Full path to hailo_inference_service.py on edge device
+        """
+        import subprocess
+        
+        hailo_host = os.getenv('HAILO_REMOTE_HOST', '')
+        hailo_user = os.getenv('HAILO_REMOTE_USER', '')
+        hailo_script = os.getenv('HAILO_REMOTE_SCRIPT', '')
+        
+        # Validate required configuration
+        if not all([hailo_host, hailo_user, hailo_script]):
+            logger.debug("Remote Hailo disabled: missing HAILO_REMOTE_HOST, HAILO_REMOTE_USER, or HAILO_REMOTE_SCRIPT")
+            return None
+        
+        try:
+            # Prepare market data for Hailo
+            candles = market_data.get('ohlcv', [])[-20:]  # Last 20 candles
+            payload = {
+                'coin': coin,
+                'candles': candles,
+                'rsi': market_data.get('rsi', 50),
+                'volume_trend': 'increasing' if market_data.get('volume_trend', 0) > 0 else 'decreasing',
+            }
+            
+            # Use stdin to pass payload, with SSH options to skip host key verification
+            payload_json = json.dumps(payload)
+            cmd = [
+                'ssh',
+                '-o', 'StrictHostKeyChecking=no',
+                '-o', 'UserKnownHostsFile=/dev/null',
+                f'{hailo_user}@{hailo_host}',
+                f'python3 {hailo_script}',
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                input=payload_json,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if result.returncode != 0:
+                logger.debug(f"Remote Hailo call failed for {coin}: {result.stderr[:200]}")
+                return None
+            
+            alert = json.loads(result.stdout.strip())
+            
+            # Write alert to file
+            alerts_file = self.config.ai_copilot_hailo_alerts_file
+            if alerts_file:
+                try:
+                    with open(alerts_file, 'a', encoding='utf-8') as f:
+                        f.write(json.dumps(alert) + '\n')
+                    logger.debug(f"Hailo alert for {coin} written")
+                except (OSError, IOError) as e:
+                    logger.debug(f"Could not write Hailo alert: {e}")
+            
+            return alert
+            
+        except subprocess.TimeoutExpired:
+            logger.debug(f"Remote Hailo inference timeout for {coin}")
+            return None
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError) as e:
+            logger.debug(f"Remote Hailo inference error for {coin}: {e}")
+            return None
 
     def _ai_copilot_snapshot(self) -> dict[str, Any]:
         trades_recent = []
@@ -2307,7 +2387,7 @@ class CryptoTradingBot:
                                     {'coin': coin, 'pnl_sum': data['pnl_sum']}
                                     for coin, data in reversed(ordered_coins[-3:])
                                 ]
-            except Exception:
+            except (ValueError, IndexError, KeyError, TypeError):
                 trades_recent = []
                 recent_trade_summary = {
                     'window_rows': 0,
@@ -2390,7 +2470,7 @@ class CryptoTradingBot:
             parsed = json.loads(text[start:end + 1])
             if isinstance(parsed, dict):
                 return parsed
-        except Exception:
+        except json.JSONDecodeError:
             return None
         return None
 
@@ -2425,8 +2505,23 @@ class CryptoTradingBot:
             method='POST',
         )
 
-        with urllib.request.urlopen(req, timeout=25) as resp:
-            raw = resp.read().decode('utf-8', errors='replace')
+        try:
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                raw = resp.read().decode('utf-8', errors='replace')
+        except urllib.error.HTTPError as e:
+            # For auth/budget errors, re-raise as non-retryable
+            if e.code in (401, 403, 429):
+                error_body = e.read().decode('utf-8', errors='replace')
+                error_msg = f"HTTP {e.code}: {e.reason}"
+                try:
+                    error_json = json.loads(error_body)
+                    if 'error' in error_json:
+                        error_msg += f" - {error_json['error'].get('message', error_body[:100])}"
+                except json.JSONDecodeError:
+                    error_msg += f" - {error_body[:100]}"
+                raise ValueError(f"Non-retryable API error: {error_msg}") from e
+            raise
+        
         parsed = json.loads(raw)
         usage = parsed.get('usage', {}) if isinstance(parsed, dict) else {}
         prompt_tokens = int(usage.get('prompt_tokens', 0) or 0)
@@ -2454,7 +2549,7 @@ class CryptoTradingBot:
                 v = min(max(v, self.config.ai_copilot_min_entry_score_min),
                         self.config.ai_copilot_min_entry_score_max)
                 out['min_entry_score'] = v
-            except Exception:
+            except (ValueError, TypeError):
                 pass
 
         if 'reentry_cooldown_seconds' in raw_changes:
@@ -2463,7 +2558,7 @@ class CryptoTradingBot:
                 v = min(max(v, self.config.ai_copilot_reentry_cooldown_min),
                         self.config.ai_copilot_reentry_cooldown_max)
                 out['reentry_cooldown_seconds'] = v
-            except Exception:
+            except (ValueError, TypeError):
                 pass
 
         if 'tabular_buy_min_confidence' in raw_changes:
@@ -2472,7 +2567,7 @@ class CryptoTradingBot:
                 v = min(max(v, self.config.ai_copilot_tabular_buy_conf_min),
                         self.config.ai_copilot_tabular_buy_conf_max)
                 out['tabular_buy_min_confidence'] = round(v, 4)
-            except Exception:
+            except (ValueError, TypeError):
                 pass
 
         return out
@@ -2658,7 +2753,17 @@ class CryptoTradingBot:
 
             self._write_ai_copilot_state(state, state_file)
 
-        except Exception as e:
+        except ValueError as e:
+            # Non-retryable errors (auth, budget, etc.) - don't count as failure
+            error_msg = str(e)
+            state['last_attempt_at'] = datetime.now(UTC).isoformat()
+            state['last_error'] = error_msg
+            state['last_error_at'] = state['last_attempt_at']
+            logger.warning(f"{label} skipped (non-retryable): {error_msg}")
+            self._write_ai_copilot_state(state, state_file)
+
+        except (urllib.error.URLError, TimeoutError, OSError, ConnectionError) as e:
+            # Retryable errors (network, timeout, server errors) - count them
             state['last_attempt_at'] = datetime.now(UTC).isoformat()
             state['consecutive_errors'] = int(
                 state.get('consecutive_errors', 0)) + 1
@@ -2724,7 +2829,7 @@ class CryptoTradingBot:
         pnl_pct = ((sell_price - buy_price) / buy_price) * \
             100 if buy_price > 0 else 0.0
         hold_seconds = (
-            datetime.now() - entry_trade.get('timestamp', datetime.now())).total_seconds()
+            datetime.now(UTC) - entry_trade.get('timestamp', datetime.now(UTC))).total_seconds()
 
         self.performance['sells'] += 1
         self.performance['closed_trades'] += 1
@@ -2948,7 +3053,7 @@ class CryptoTradingBot:
                 f"Exchange initialisation failed: {e}. Enabling simulation mode.")
             self.config.simulate_data = True
             return None
-        except Exception as e:
+        except (OSError, ValueError, AttributeError, ImportError) as e:
             logger.error(
                 f"Unexpected error during exchange initialisation: {e}. Enabling simulation mode.")
             self.config.simulate_data = True
@@ -2968,7 +3073,7 @@ class CryptoTradingBot:
             self.all_coins = sorted(list(set(self.all_coins)))
             logger.info(
                 f"Loaded {len(self.all_symbols)} trading pairs and {len(self.all_coins)} coins with {self.config.base_currency}.")
-        except Exception as e:
+        except (ccxt.NetworkError, ccxt.ExchangeError) as e:
             logger.error(f"Error loading market information: {e}")
             self.all_symbols = [
                 f"{coin}/{self.config.base_currency}" for coin in self.config.quote_currencies]
@@ -3020,7 +3125,7 @@ class CryptoTradingBot:
                     self.portfolio.initial_portfolio_value = self.portfolio.cash
                     logger.info(
                         f"Simulated starting capital: {self.portfolio.cash:.2f} {self.config.base_currency}")
-            self.portfolio.last_update = datetime.now()
+            self.portfolio.last_update = datetime.now(UTC)
             return
 
         # In dry-run mode:
@@ -3033,7 +3138,7 @@ class CryptoTradingBot:
             # First time: try to load persistent state
             if self.portfolio.load_state():
                 # Restore from file and mark as initialized
-                self.portfolio.last_update = datetime.now()
+                self.portfolio.last_update = datetime.now(UTC)
                 return
             # No persistent state, load initial balance from exchange
             try:
@@ -3043,10 +3148,10 @@ class CryptoTradingBot:
                     free_balances)
                 if not self.portfolio.holdings:
                     self.portfolio.initial_portfolio_value = self.portfolio.cash
-                self.portfolio.last_update = datetime.now()
+                self.portfolio.last_update = datetime.now(UTC)
                 logger.info(
                     f"Portfolio initialized from exchange (dry-run mode). Cash: {self.portfolio.cash:.2f} {self.config.base_currency}, Holdings: {self.portfolio.holdings}")
-            except Exception as e:
+            except (ccxt.NetworkError, ccxt.ExchangeError) as e:
                 logger.warning(
                     f"Failed to load initial balance from exchange in dry-run mode: {e}")
             return
@@ -3057,13 +3162,13 @@ class CryptoTradingBot:
             free_balances = balance.get('free', {})
             self.portfolio.cash, self.portfolio.holdings = _extract_cash_and_holdings(
                 free_balances)
-            self.portfolio.last_update = datetime.now()
+            self.portfolio.last_update = datetime.now(UTC)
             logger.info(
                 f"Portfolio balance updated. Cash: {self.portfolio.cash:.2f} {self.config.base_currency}, Holdings: {self.portfolio.holdings}")
         except (ccxt.NetworkError, ccxt.ExchangeError) as e:
             logger.error(
                 f"Error fetching/updating account balance: {e}")
-        except Exception as e:
+        except (OSError, TimeoutError) as e:
             logger.error(
                 f"Unexpected error fetching/updating account balance: {e}")
 
@@ -3112,7 +3217,7 @@ class CryptoTradingBot:
                             f"after error: {e} (wait {wait:.1f}s)")
                         if wait > 0:
                             time.sleep(wait)
-                except Exception as e:
+                except (ccxt.NetworkError, ccxt.ExchangeError) as e:
                     if attempt >= retries:
                         logger.error(
                             f"Unexpected ticker error for batch {start//batch_size + 1}: {e}")
@@ -3347,7 +3452,7 @@ class CryptoTradingBot:
                     f"(attempt {attempt + 2}/{retries + 1}, wait {wait:.1f}s)")
                 if wait > 0:
                     time.sleep(wait)
-            except Exception as e:
+            except (ccxt.NetworkError, ccxt.ExchangeError) as e:
                 elapsed = time.monotonic() - started_at
                 if attempt >= retries:
                     logger.error(
@@ -4116,7 +4221,7 @@ class CryptoTradingBot:
                             score = min(score, 30)
                         elif recommendation in ['SELL', 'WEAK SELL']:
                             score = max(score - int(ml_confidence * 10), 5)
-            except Exception as e:
+            except (ValueError, TypeError, IndexError, RuntimeError) as e:
                 logger.warning(f"ML prediction for {coin} failed: {e}")
 
         # Fast tabular model analysis (optional)
@@ -4265,7 +4370,7 @@ class CryptoTradingBot:
                             score = min(score, 28)
                         elif recommendation in ['SELL', 'WEAK SELL']:
                             score = max(score - int(tab_confidence * 8), 3)
-            except Exception as e:
+            except (ValueError, TypeError, IndexError, RuntimeError) as e:
                 logger.warning(
                     f"CatBoost prediction for {coin} failed: {e}")
 
@@ -4298,7 +4403,7 @@ class CryptoTradingBot:
                 if _regime == "bear" and recommendation in ["BUY", "STRONG BUY"] and signal_source == "rules":
                     score = max(score - 5, 0)
                     logger.debug(f"  📰 Autoresearch bear-regime softener for {coin}")
-            except Exception as _re:
+            except (FileNotFoundError, json.JSONDecodeError, OSError) as _re:
                 logger.debug(f"Autoresearch signal read failed for {coin}: {_re}")
 
         return {
@@ -4592,7 +4697,7 @@ class CryptoTradingBot:
             logger.error(
                 f"Error executing trade ({action} {coin}): {e}")
             return False
-        except Exception as e:
+        except (ValueError, TypeError, OSError, TimeoutError) as e:
             logger.error(
                 f"Unexpected error executing trade ({action} {coin}): {e}")
             return False
@@ -4612,7 +4717,7 @@ class CryptoTradingBot:
                 continue
             current_price = current_price_data['price']
             pnl_pct = (current_price - buy_price) / buy_price * 100
-            hold_seconds = (datetime.now() -
+            hold_seconds = (datetime.now(UTC) -
                             trade_info['timestamp']).total_seconds()
             max_hold_seconds = self.config.coin_max_hold_seconds.get(
                 coin, self.config.max_hold_seconds)
@@ -4657,14 +4762,13 @@ class CryptoTradingBot:
                     ):
                         if coin in self.portfolio.open_trades:
                             self.portfolio.open_trades[coin]['partial_tp_taken'] = True
-                            self.portfolio.open_trades[coin]['partial_tp_timestamp'] = datetime.now(
-                            )
+                            self.portfolio.open_trades[coin]['partial_tp_timestamp'] = datetime.now(UTC)
                             if self.config.dry_run:
                                 self.portfolio.save_state()
                     continue
             if partial_tp_taken and partial_tp_timestamp:
                 partial_tp_elapsed_seconds = (
-                    datetime.now() - partial_tp_timestamp).total_seconds()
+                    datetime.now(UTC) - partial_tp_timestamp).total_seconds()
                 if (
                     self.config.partial_take_profit_remainder_max_hold_seconds > 0
                     and partial_tp_elapsed_seconds >= self.config.partial_take_profit_remainder_max_hold_seconds
@@ -4804,7 +4908,7 @@ class CryptoTradingBot:
             while True:
                 self.iteration += 1
                 logger.info(
-                    f"\n🕒 Iteration {self.iteration} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                    f"\n🕒 Iteration {self.iteration} - {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}")
 
                 # Step 1: Update balance and portfolio
                 self._update_portfolio_balance()
@@ -4821,6 +4925,20 @@ class CryptoTradingBot:
                 portfolio_value_live = self.portfolio.get_value(
                     {coin: data['price'] for coin, data in current_market_data.items()})
                 self._refresh_daily_anchor(portfolio_value_live)
+
+                # Step 2b: Optional - Call remote Hailo inference on edge device
+                if os.getenv('HAILO_REMOTE_ENABLED', 'false').lower() == 'true':
+                    hailo_interval_min = int(os.getenv('HAILO_REMOTE_INTERVAL_MINUTES', '5'))
+                    hailo_last_run = getattr(self, '_hailo_last_run_utc', None)
+                    now_utc = datetime.now(UTC)
+                    if hailo_last_run is None or (now_utc - hailo_last_run).total_seconds() >= hailo_interval_min * 60:
+                        logger.info(f"📡 Running remote Hailo edge inference on {len(current_market_data)} coins...")
+                        for coin, data in current_market_data.items():
+                            try:
+                                self._call_remote_hailo_inference(data, coin)
+                            except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError, RuntimeError) as e:
+                                logger.debug(f"Hailo inference failed for {coin}: {e}")
+                        self._hailo_last_run_utc = now_utc
 
                 # Step 3: Run market analysis and identify top recommendations
                 market_analysis = self._analyze_markets(
@@ -4845,7 +4963,7 @@ class CryptoTradingBot:
                                 except ModuleNotFoundError:
                                     from autoresearch.runner import AutoResearchRunner  # type: ignore[no-redef]
                                     from autoresearch.storage import FileStorage  # type: ignore[no-redef]
-                            except Exception:
+                            except (ModuleNotFoundError, ImportError):
                                 logger.exception("AutoResearch modules not available")
                             else:
                                 try:
@@ -4863,13 +4981,13 @@ class CryptoTradingBot:
                                         import pandas as pd
                                         # build DataFrame from current_market_data if it has timestamps
                                         market_df = pd.DataFrame({k: v for k, v in current_market_data.items()})
-                                    except Exception:
+                                    except (RuntimeError, ImportError, ValueError, OSError):
                                         market_df = None
                                     runner.run_experiment(strategy, params, market_df)
                                     self._autoresearch_last_run = now
-                                except Exception:
+                                except (RuntimeError, ValueError, FileNotFoundError, json.JSONDecodeError, OSError, AttributeError) as e:
                                     logger.exception("AutoResearch run failed")
-                except Exception:
+                except (RuntimeError, ValueError, AttributeError, OSError):
                     logger.exception("AutoResearch scheduling check failed")
 
                 occupied_positions = set(self.portfolio.open_trades.keys()) | set(
@@ -5321,7 +5439,7 @@ class CryptoTradingBot:
 
         except KeyboardInterrupt:
             logger.info("\n🛑 Bot stopping...")
-        except Exception as e:
+        except (RuntimeError, OSError, TimeoutError, ValueError) as e:
             logger.critical(
                 f"Critical, unexpected error in main loop: {e}", exc_info=True)
         finally:
@@ -5476,9 +5594,9 @@ if __name__ == "__main__":
             except ModuleNotFoundError:
                 from utils.health_endpoint import start_health_server  # type: ignore[no-redef]
             start_health_server()
-        except Exception as _he:
+        except (OSError, ImportError, RuntimeError) as _he:
             logger.warning("Health endpoint not started: %s", _he)
         bot.run()
-    except Exception as e:
+    except (OSError, ImportError, ValueError, RuntimeError) as e:
         logger.critical(f"Initialisation error: {e}", exc_info=True)
         sys.exit(1)
