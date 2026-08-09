@@ -85,10 +85,13 @@ class ServiceMetrics:
     def start_http_server(self) -> None:
         if not self.enabled or self._server_started:
             return
-        start_http_server(self.port, addr="0.0.0.0", registry=self.registry)
-        self._server_started = True
-        logger.info("Started Prometheus metrics server for %s on :%s",
-                    self.service_name, self.port)
+        try:
+            start_http_server(self.port, addr="0.0.0.0", registry=self.registry)
+            self._server_started = True
+            logger.info("Started Prometheus metrics server for %s on :%s",
+                        self.service_name, self.port)
+        except Exception as e:
+            logger.error(f"Failed to start Prometheus metrics server for {self.service_name} on port {self.port}: {e}", exc_info=True)
 
     def set_up(self, value: bool) -> None:
         self.up.set(1 if value else 0)

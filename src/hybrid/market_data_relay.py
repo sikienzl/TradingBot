@@ -42,6 +42,8 @@ class MarketDataRelayService:
         self.counters[tick.symbol] += 1
         self.service_metrics.observe_event("tick_ingress")
         self.service_metrics.set_value("buffer_size", len(buffer))
+        self.service_metrics.set_value(f"ticks_received_{tick.symbol}", self.counters[tick.symbol])
+        
         if len(buffer) < self.window_size:
             return
         if self.counters[tick.symbol] % self.flush_every_ticks != 0:
@@ -67,10 +69,18 @@ class MarketDataRelayService:
             logger.warning(
                 "Edge filter rejected snapshot for %s: %s", tick.symbol, ack.message)
             self.service_metrics.observe_event("flush_rejected")
+        else:
+            logger.debug(f"✅ Flushed {len(buffer)} ticks for {tick.symbol} in {(time.perf_counter()-started)*1000:.1f}ms")
 
     async def run(self) -> None:
-        self.service_metrics.start_http_server()
+        try:
+            self.service_metrics.start_http_server()
+            logger.info(f"✅ Market Relay Prometheus metrics server started on port {self.metrics_port}")
+        except Exception as e:
+            logger.error(f"Failed to start metrics server: {e}")
+        
         self.service_metrics.set_up(True)
+        logger.info("🔄 Market Relay service is running and listening for ticks...")
         async with kraken_websocket_session(
             pairs=self.pairs,
             tick_callback=self.handle_tick,
