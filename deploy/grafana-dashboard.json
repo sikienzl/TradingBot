@@ -117,8 +117,8 @@
       "type": "stat",
       "targets": [
         {
-          "expr": "trading_hybrid_edge_filter_last_value{name=\"last_inference_seconds\"}",
-          "legendFormat": "Latency",
+          "expr": "avg(hailo_inference_latency_seconds) * 1000",
+          "legendFormat": "Latency (avg)",
           "refId": "A"
         }
       ]

@@ -2229,6 +2229,8 @@ class CryptoTradingBot:
             return None
         
         try:
+            import time as time_module
+            
             # Fetch OHLCV data for this coin (market_data only has ticker, not candles)
             symbol = f'{coin}/{self.config.base_currency}'
             ohlcv_df = self._fetch_ohlcv_data(symbol, timeframe='1h', limit=50)
@@ -2274,6 +2276,8 @@ class CryptoTradingBot:
                 f'python3 {hailo_script}',
             ]
             
+            # Measure inference latency
+            start_time = time_module.perf_counter()
             result = subprocess.run(
                 cmd,
                 input=payload_json,
@@ -2281,6 +2285,7 @@ class CryptoTradingBot:
                 text=True,
                 timeout=10
             )
+            elapsed_ms = (time_module.perf_counter() - start_time) * 1000.0
             
             if result.returncode != 0:
                 logger.debug(f"Remote Hailo call failed for {coin}: {result.stderr[:200]}")
@@ -2288,13 +2293,16 @@ class CryptoTradingBot:
             
             alert = json.loads(result.stdout.strip())
             
+            # Add inference latency to alert
+            alert['inference_latency_ms'] = round(elapsed_ms, 2)
+            
             # Write alert to file
             alerts_file = self.config.ai_copilot_hailo_alerts_file
             if alerts_file:
                 try:
                     with open(alerts_file, 'a', encoding='utf-8') as f:
                         f.write(json.dumps(alert) + '\n')
-                    logger.debug(f"Hailo alert for {coin} written")
+                    logger.debug(f"Hailo alert for {coin} written (latency={elapsed_ms:.1f}ms)")
                 except (OSError, IOError) as e:
                     logger.debug(f"Could not write Hailo alert: {e}")
             
