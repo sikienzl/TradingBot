@@ -19,11 +19,6 @@ scrape_configs:
           - "localhost:9100"
           - "worker-node:9100"
 
-  - job_name: "trading_hybrid_edge_filter"
-    scrape_interval: 15s
-    static_configs:
-      - targets: ["localhost:9201"]
-
   - job_name: "trading_hybrid_strategist"
     scrape_interval: 15s
     static_configs:

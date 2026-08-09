@@ -44,62 +44,6 @@
         "x": 0,
         "y": 4
       },
-      "id": 101,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "center",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "textMode": "value_and_name"
-      },
-      "title": "Hailo Last Score Proxy",
-      "type": "stat",
-      "targets": [
-        {
-          "expr": "trading_hybrid_edge_filter_last_value{name=\"anomalies_detected\"}",
-          "legendFormat": "Alerts",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": "Prometheus",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 25
-              },
-              {
-                "color": "red",
-                "value": 100
-              }
-            ]
-          },
-          "unit": "ms"
-        }
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
-        "y": 4
-      },
       "id": 102,
       "options": {
         "colorMode": "background",
@@ -153,19 +97,14 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "trading_hybrid_edge_filter_up",
-          "legendFormat": "Edge Filter",
-          "refId": "A"
-        },
-        {
           "expr": "trading_hybrid_strategist_up",
           "legendFormat": "Strategist",
-          "refId": "B"
+          "refId": "A"
         },
         {
           "expr": "trading_hybrid_market_relay_up",
           "legendFormat": "Market Relay",
-          "refId": "C"
+          "refId": "B"
         }
       ]
     },
