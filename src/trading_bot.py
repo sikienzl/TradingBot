@@ -2229,14 +2229,40 @@ class CryptoTradingBot:
             return None
         
         try:
-            # Prepare market data for Hailo
-            candles = market_data.get('ohlcv', [])[-20:]  # Last 20 candles
+            # Fetch OHLCV data for this coin (market_data only has ticker, not candles)
+            symbol = f'{coin}/{self.config.base_currency}'
+            ohlcv_df = self._fetch_ohlcv_data(symbol, timeframe='1h', limit=50)
+            
+            candles = []
+            if ohlcv_df is not None and len(ohlcv_df) > 0:
+                # Convert DataFrame to list of [open, high, low, close, volume]
+                candles = ohlcv_df[['open', 'high', 'low', 'close', 'volume']].values.tolist()
+            
+            # Calculate RSI from closes if possible
+            rsi = 50  # Default neutral
+            if ohlcv_df is not None and len(ohlcv_df) >= 14:
+                try:
+                    closes = ohlcv_df['close'].values
+                    # Calculate RSI using pandas Series for diff()
+                    close_series = ohlcv_df['close']
+                    delta = close_series.diff()[-14:]
+                    gain = (delta.clip(lower=0)).mean()
+                    loss = (-delta.clip(upper=0)).mean()
+                    if loss != 0:
+                        rs = gain / loss
+                        rsi = float(100 - (100 / (1 + rs)))
+                except (ValueError, ZeroDivisionError, AttributeError):
+                    rsi = 50
+            
             payload = {
                 'coin': coin,
                 'candles': candles,
-                'rsi': market_data.get('rsi', 50),
+                'rsi': float(rsi),
                 'volume_trend': 'increasing' if market_data.get('volume_trend', 0) > 0 else 'decreasing',
             }
+            
+            # Debug: Log payload details
+            logger.debug(f"Hailo payload for {coin}: candles={len(candles)}, rsi={rsi}, ohlcv_df={'None' if ohlcv_df is None else f'{len(ohlcv_df)} rows'}")
             
             # Use stdin to pass payload, with SSH options to skip host key verification
             payload_json = json.dumps(payload)
@@ -2275,10 +2301,10 @@ class CryptoTradingBot:
             return alert
             
         except subprocess.TimeoutExpired:
-            logger.debug(f"Remote Hailo inference timeout for {coin}")
+            logger.error(f"❌ Remote Hailo inference timeout for {coin}")
             return None
         except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError) as e:
-            logger.debug(f"Remote Hailo inference error for {coin}: {e}")
+            logger.error(f"❌ Remote Hailo inference error for {coin}: {type(e).__name__}: {str(e)[:200]}")
             return None
 
     def _ai_copilot_snapshot(self) -> dict[str, Any]:
@@ -4935,9 +4961,11 @@ class CryptoTradingBot:
                         logger.info(f"📡 Running remote Hailo edge inference on {len(current_market_data)} coins...")
                         for coin, data in current_market_data.items():
                             try:
-                                self._call_remote_hailo_inference(data, coin)
+                                result = self._call_remote_hailo_inference(data, coin)
+                                if result:
+                                    logger.debug(f"✅ Hailo result for {coin}: score={result.get('hailo_score', 0)}")
                             except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError, RuntimeError) as e:
-                                logger.debug(f"Hailo inference failed for {coin}: {e}")
+                                logger.error(f"❌ Hailo inference failed for {coin}: {type(e).__name__}: {str(e)[:200]}")
                         self._hailo_last_run_utc = now_utc
 
                 # Step 3: Run market analysis and identify top recommendations
