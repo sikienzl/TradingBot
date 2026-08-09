@@ -10,9 +10,15 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
+
+# Ensure /opt/trading_2 or current dir is in path for imports
+_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _root not in sys.path:
+    sys.path.insert(0, _root)
 
 import aiohttp
 

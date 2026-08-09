@@ -1,0 +1,37 @@
+[Unit]
+Description=GPT-5 Chief Strategist Service
+Documentation=https://github.com/sikienzl/TradingBot/blob/main/docs/hybrid_cluster.md
+After=network-online.target trading-bot.service
+Wants=network-online.target
+PartOf=trading-bot.service
+StartLimitBurst=3
+StartLimitIntervalSec=300
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/trading_2
+Environment="PATH=/opt/trading_2/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONPATH=/usr/local/lib/python3.13/dist-packages:/opt/trading_2"
+EnvironmentFile=-/opt/trading_2/.env
+ExecStart=/usr/bin/python3 /opt/trading_2/src/cloud/strategist_service.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=strategist
+PrivateTmp=yes
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/trading_2/data /tmp /var/log
+
+# Resource limits (should not exceed parent trading-bot)
+MemoryLimit=256M
+CPUQuota=50%
+
+# Timeout for graceful shutdown
+TimeoutStopSec=30
+
+[Install]
+WantedBy=trading-bot.service
