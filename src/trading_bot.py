@@ -591,6 +591,8 @@ class BotConfig:
         # Number of top coins for analysis
         self.top_n_for_analysis = int(os.getenv('TOP_N_FOR_ANALYSIS', 10))
         self.exchange_timeout_ms = int(os.getenv('EXCHANGE_TIMEOUT_MS', 15000))
+        # Tax configuration
+        self.german_tax_enabled = _env_bool('GERMAN_TAX_ENABLED', False)
         # Split ticker requests into manageable chunks to avoid oversized exchange calls.
         self.ticker_batch_size = int(os.getenv('TICKER_BATCH_SIZE', 80))
         self.ticker_fetch_retries = int(os.getenv('TICKER_FETCH_RETRIES', 2))
@@ -897,6 +899,7 @@ class BotConfig:
             os.getenv('AI_COPILOT_HAILO_REQUIRED_ALERTS', '1'))
         self.ai_copilot_hailo_max_lines_scan = int(
             os.getenv('AI_COPILOT_HAILO_MAX_LINES_SCAN', '400'))
+        self.german_tax_enabled = _env_bool('GERMAN_TAX_ENABLED', False)
         self.ai_copilot_min_entry_score_min = int(
             os.getenv('AI_COPILOT_MIN_ENTRY_SCORE_MIN', 55))
         self.ai_copilot_min_entry_score_max = int(
@@ -1276,12 +1279,71 @@ class CryptoTradingBot:
 
         if self.config.performance_log_enabled:
             self._init_trade_journal()
+        
+        # Initialize tax calculator if enabled
+        self.tax_calculator = create_tax_calculator(self.config)
+        
+    def generate_tax_report(self) -> str:
+        """Generate a tax report if German tax calculation is enabled."""
+        if self.tax_calculator:
+            return self.tax_calculator.get_tax_report()
+        return "Tax reporting not enabled."
+    
+    def save_tax_report(self, filename: str = None):
+        """Save the tax report to a file."""
+        if not self.config.german_tax_enabled:
+            logger.info("German tax calculation is not enabled.")
+            return
+            
+        if not self.tax_calculator:
+            logger.warning("Tax calculator not initialized.")
+            return
+            
+        if filename is None:
+            from datetime import datetime
+            filename = f"tax_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            
+        report = self.generate_tax_report()
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(report)
+        logger.info(f"Tax report saved to {filename}")
+        
+    def display_tax_info(self):
+        """Display current tax information if enabled."""
+        if not self.config.german_tax_enabled:
+            return
+            
+        if not self.tax_calculator:
+            logger.info("Tax calculator not initialized.")
+            return
+            
+        summary = self.tax_calculator.calculate_tax_summary()
+        logger.info("=== Tax Information ===")
+        logger.info(f"Total gains: {summary['total_gains']:.2f} EUR")
+        logger.info(f"Total losses: {summary['total_losses']:.2f} EUR")
+        logger.info(f"Net gain/loss: {summary['net_gain']:.2f} EUR")
+        logger.info(f"Taxable income: {summary['taxable_income']:.2f} EUR")
+        logger.info(f"Withholding tax due: {summary['withholding_tax']:.2f} EUR")
 
         if self.config.use_tabular_model:
             self._maybe_auto_tune_tabular_confidence()
             self._maybe_auto_tune_policy_params()
 
         self._maybe_apply_capital_step_up()
+        
+    def _add_tax_transaction(self, coin: str, action: str, price: float, amount_in_base_currency: float, amount_coin: float):
+        """Add a transaction to the tax calculator if enabled."""
+        if self.tax_calculator:
+            from datetime import datetime
+            tx = Transaction(
+                tx_id=f"{action}_{coin}_{datetime.now().timestamp()}",
+                type=action,
+                coin=coin,
+                amount=amount_coin,
+                price=price,
+                timestamp=datetime.now()
+            )
+            self.tax_calculator.add_transaction(tx)
 
     def _init_trade_journal(self):
         """Creates the journal file with header if it does not yet exist."""
@@ -4574,6 +4636,8 @@ class CryptoTradingBot:
                     'reason': reason,
                     'dry_run': True,
                 })
+                # Add to tax calculator
+                self._add_tax_transaction(coin, "buy", price, amount_in_base_currency, amount_coin)
                 # Persist portfolio state after successful dry-run or simulation buy
                 if self.config.dry_run or self.config.simulate_data:
                     self.portfolio.save_state()
@@ -4618,6 +4682,8 @@ class CryptoTradingBot:
                     'dry_run': True,
                 })
                 self._register_sell_timestamp(coin)
+                # Add to tax calculator
+                self._add_tax_transaction(coin, "sell", price, sell_amount * price, sell_amount)
                 if remaining_open_amount > 1e-12 and coin in self.portfolio.open_trades:
                     self.portfolio.open_trades[coin]['amount_coin'] = remaining_open_amount
                     self.portfolio.open_trades[coin]['amount_base'] = float(
@@ -4673,6 +4739,10 @@ class CryptoTradingBot:
                     'reason': reason,
                     'dry_run': False,
                 })
+                # Add to tax calculator
+                self._add_tax_transaction(coin, "buy", order.get('price', price), 
+                                        order.get('cost', amount_in_base_currency), 
+                                        order.get('amount', amount_in_base_currency / price))
             elif action == "sell":
                 if coin not in self.portfolio.holdings or self.portfolio.holdings[coin] < amount_in_base_currency / price:
                     logger.warning(
@@ -4718,6 +4788,10 @@ class CryptoTradingBot:
                         entry_trade.get('amount_base', 0.0)) * remaining_ratio
                 else:
                     self.portfolio.remove_trade(coin)
+                # Add to tax calculator
+                self._add_tax_transaction(coin, "sell", order.get('price', price), 
+                                        order.get('cost', amount_in_base_currency), 
+                                        sold_amount_coin)
             self._update_portfolio_balance()
             return True
         except ccxt.InsufficientFunds as e:

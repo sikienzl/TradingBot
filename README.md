@@ -130,6 +130,19 @@ Available endpoints:
 
 Swagger UI is available at `http://127.0.0.1:8000/docs`.
 
+### German Tax Compliance
+
+The trading bot now supports German tax compliance features with the `GERMAN_TAX_ENABLED` environment variable.
+When enabled, the bot will:
+- Apply appropriate tax calculations to trades
+- Ensure compliance with German tax reporting requirements
+- Support international compatibility for cross-border trading scenarios
+
+To enable German tax support, set:
+```
+GERMAN_TAX_ENABLED=true
+```
+
 ### 1. Data collection
 ```sh
 python3 get_data.py

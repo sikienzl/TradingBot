@@ -114,7 +114,14 @@ Environment variables can be used to override configuration values. They follow 
 TRADING_BOT_EXCHANGE_API_KEY=your_api_key_here
 TRADING_BOT_TRADING_TRADE_AMOUNT=25.0
 TRADING_BOT_DATA_ENABLE_SENTIMENT_DATA=true
+TRADING_BOT_GERMAN_TAX_ENABLED=true
 ```
+
+### Available Configuration Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GERMAN_TAX_ENABLED` | Enable German tax calculation rules (international compatibility) | `false` |
 
 ## Best Practices
 
