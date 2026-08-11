@@ -78,8 +78,9 @@ class GermanTaxCalculator:
         self.transactions: List[Transaction] = []
         self.taxable_events: List[TaxableEvent] = []
         
-        # Track coin balances for FIFO calculation
+        # Track coin balances for FIFO calculation - but keep original purchase history
         self.coin_balances: Dict[str, List[Tuple[float, float, str]]] = {}  # [amount, price, exchange]
+        self.purchase_history: Dict[str, List[Dict]] = {}  # Store purchase details for FIFO calculations
         # Track transaction details for better reporting
         self.transaction_details: Dict[str, Transaction] = {}
     
@@ -97,8 +98,19 @@ class GermanTaxCalculator:
         if transaction.type == 'buy':
             # Add to balance
             self.coin_balances[transaction.coin].append((transaction.amount, transaction.price, transaction.exchange))
+            
+            # Also store in purchase history for accurate FIFO calculations
+            if transaction.coin not in self.purchase_history:
+                self.purchase_history[transaction.coin] = []
+                
+            self.purchase_history[transaction.coin].append({
+                'amount': transaction.amount,
+                'price': transaction.price,
+                'timestamp': transaction.timestamp,
+                'exchange': transaction.exchange
+            })
         elif transaction.type == 'sell':
-            # Remove from balance using FIFO
+            # Remove from balance using FIFO (but don't modify purchase history)
             remaining_amount = transaction.amount
             while remaining_amount > 0 and self.coin_balances[transaction.coin]:
                 available_amount, available_price, available_exchange = self.coin_balances[transaction.coin][0]
@@ -165,24 +177,26 @@ class GermanTaxCalculator:
         
         Returns total cost in base currency (EUR).
         """
-        if coin not in self.coin_balances or not self.coin_balances[coin]:
+        # Use purchase history to calculate cost basis, not current balances
+        if coin not in self.purchase_history or not self.purchase_history[coin]:
             return 0.0
             
         remaining_amount = amount
         total_cost = 0.0
         
-        # Process FIFO - use oldest coins first
-        for i, (available_amount, available_price, available_exchange) in enumerate(self.coin_balances[coin]):
-            if remaining_amount <= available_amount:
-                # Use partial amount from this purchase
-                total_cost += remaining_amount * available_price
-                # Update the balance with remaining amount
-                self.coin_balances[coin][i] = (available_amount - remaining_amount, available_price, available_exchange)
+        # Process FIFO - use oldest purchases first  
+        for purchase in self.purchase_history[coin]:
+            if remaining_amount <= 0:
                 break
+                
+            if remaining_amount <= purchase['amount']:
+                # Use partial amount from this purchase
+                total_cost += remaining_amount * purchase['price']
+                remaining_amount = 0
             else:
                 # Use entire available amount
-                total_cost += available_amount * available_price
-                remaining_amount -= available_amount
+                total_cost += purchase['amount'] * purchase['price']
+                remaining_amount -= purchase['amount']
                 
         return total_cost
     
