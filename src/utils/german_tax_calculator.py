@@ -397,6 +397,6 @@ def create_tax_calculator(config) -> Optional[GermanTaxCalculator]:
     elif hasattr(config, 'tax_calculation_enabled') and config.tax_calculation_enabled:
         return GermanTaxCalculator(config)
     else:
-        # If no explicit tax calculation is enabled, create a default calculator
-        logger.info("Creating default German tax calculator")
-        return GermanTaxCalculator(config)
+        # If tax calculation is not enabled, return None
+        logger.info("Tax calculation is not enabled, returning None")
+        return None
