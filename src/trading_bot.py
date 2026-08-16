@@ -850,10 +850,10 @@ class BotConfig:
             os.getenv('LOSS_STREAK_PAUSE_THRESHOLD', 0))
         self.loss_streak_pause_seconds = int(
             os.getenv('LOSS_STREAK_PAUSE_SECONDS', 0))
-        # Weekly Go/No-Go scorecard verdict file written by run_weekly_scorecard.sh
-        # If verdict is NO-GO, new BUYs are blocked until the next scorecard run.
-        self.scorecard_verdict_path = os.getenv(
-            'SCORECARD_VERDICT_PATH', './results/scorecards/latest_status.json')
+        # Weekly Go/No-Go scorecard verdict file(s) written by run_weekly_scorecard.sh
+        # If any verdict is NO-GO, new BUYs are blocked until the next scorecard run.
+        scorecard_paths_raw = os.getenv('SCORECARD_VERDICT_PATH', './results/scorecards/latest_status.json')
+        self.scorecard_verdict_paths = [p.strip() for p in scorecard_paths_raw.split(',') if p.strip()]plit(',') if p.strip()]
         # Circuit breaker: max age of price data before new BUYs are paused (0 = disabled)
         self.price_staleness_max_seconds = int(
             os.getenv('PRICE_STALENESS_MAX_SECONDS', 300))
@@ -1973,7 +1973,7 @@ class CryptoTradingBot:
         current_ladder_idx = int(state.get("capital_ladder_idx", 0))
 
         # Read latest scorecard verdict
-        sc_path = self.config.scorecard_verdict_path
+        sc_path = self.config.scorecard_verdict_pathss
         verdict = "UNKNOWN"
         profit_factor = 0.0
         max_drawdown_pct = 0.0
@@ -3039,24 +3039,30 @@ class CryptoTradingBot:
 
     def _check_scorecard_verdict(self) -> tuple[bool, str]:
         """
-        Read the latest weekly scorecard verdict from disk.
+        Read the latest weekly scorecard verdicts from disk.
 
         Returns:
             (buys_allowed, reason) — buys_allowed=False blocks new positions.
         """
-        path = self.config.scorecard_verdict_path
-        try:
-            with open(path) as fh:
-                data = json.load(fh)
-            verdict = data.get("verdict", "").upper().replace("-", "_")
-            if verdict == "NO_GO":
-                reasons = data.get("reasons", [])
-                reason_str = "; ".join(reasons[:3]) if reasons else "see scorecard"
-                return False, f"Scorecard NO-GO: {reason_str}"
-        except FileNotFoundError:
-            pass  # No scorecard yet — allow trading
-        except (OSError, json.JSONDecodeError, KeyError) as exc:
-            logger.warning("Could not read scorecard verdict from %s: %s", path, exc)
+        paths = self.config.scorecard_verdict_paths
+        all_ok = True
+        reasons = []
+
+        for path in paths:
+            try:
+                with open(path) as fh:
+                    data = json.load(fh)
+                verdict = data.get("verdict", "").upper().replace("-", "_")
+                if verdict == "NO_GO":
+                    all_ok = False
+                    reasons.append(f"Scorecard NO-GO ({path}): " + ("; ".join(data.get("reasons", [])[:3]) if data.get("reasons") else "see scorecard"))
+            except FileNotFoundError:
+                pass  # No scorecard yet — allow trading
+            except (OSError, json.JSONDecodeError, KeyError) as exc:
+                logger.warning("Could not read scorecard verdict from %s: %s", path, exc)
+
+        if not all_ok:
+            return False, "; ".join(reasons)
         return True, ""
 
     def _can_open_new_positions(self, portfolio_value: float) -> tuple[bool, str]:
