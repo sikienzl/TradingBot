@@ -1,10 +1,11 @@
 import os
 import tempfile
-import pytest
-import pandas as pd
-import numpy as np
 
-from src.data_preperation import prepare_training_data, diagnose_data
+import numpy as np
+import pandas as pd
+import pytest
+
+from src.data_preperation import diagnose_data, prepare_training_data
 
 
 @pytest.fixture
@@ -51,6 +52,24 @@ def test_prepare_training_data_creates_output(valid_crypto_data, temp_dir):
     )
     assert result is True
     assert os.path.exists(output_file)
+
+
+def test_prepare_training_data_keeps_only_selected_columns(valid_crypto_data, temp_dir):
+    source = pd.read_csv(valid_crypto_data)
+    source["unused_column"] = "not for training"
+    source.to_csv(valid_crypto_data, index=False)
+    output_file = os.path.join(temp_dir, "output.csv")
+
+    assert prepare_training_data(valid_crypto_data, output_file) is True
+
+    result = pd.read_csv(output_file)
+    assert "unused_column" not in result.columns
+    assert list(result.columns) == [
+        "timestamp",
+        "coin",
+        "close",
+        "rsi",
+    ]
 
 
 def test_prepare_training_data_extracts_coin_from_symbol(valid_crypto_data, temp_dir):
@@ -126,6 +145,24 @@ def test_prepare_training_data_handles_missing_rsi(temp_dir):
     result = pd.read_csv(output_file)
     # RSI should be calculated
     assert 'rsi' in result.columns or result.shape[0] > 0
+
+
+def test_prepare_training_data_fills_missing_rsi_values(temp_dir):
+    data = {
+        "timestamp": pd.date_range("2024-01-01", periods=40, freq="1h"),
+        "symbol": ["BTC/EUR"] * 40,
+        "close": np.linspace(100.0, 140.0, 40),
+        "rsi": [50.0] * 20 + [np.nan] + [50.0] * 19,
+    }
+    input_file = os.path.join(temp_dir, "input.csv")
+    output_file = os.path.join(temp_dir, "output.csv")
+    pd.DataFrame(data).to_csv(input_file, index=False)
+
+    assert prepare_training_data(input_file, output_file) is True
+
+    result = pd.read_csv(output_file)
+    assert pd.notna(result.loc[20, "rsi"])
+    assert result.loc[19, "rsi"] == 50.0
 
 
 def test_prepare_training_data_removes_duplicate_columns(temp_dir):

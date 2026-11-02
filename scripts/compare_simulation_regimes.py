@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-from trading_bot import BotConfig, CryptoTradingBot, logger as bot_logger
 import argparse
 import logging
+import math
 import os
 import sys
 from collections import Counter
 from pathlib import Path
 
+from trading_bot import BotConfig, CryptoTradingBot
+from trading_bot import logger as bot_logger
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
@@ -38,7 +40,7 @@ def _has_valid_number(value) -> bool:
         numeric = float(value)
     except (TypeError, ValueError):
         return False
-    return numeric == numeric
+    return math.isfinite(numeric)
 
 
 def _build_bot(regime: str, seed: int, top_n: int, coins: list[str]) -> CryptoTradingBot:

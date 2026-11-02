@@ -1,6 +1,7 @@
 import argparse
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 
 
 def safe_float(series: pd.Series) -> pd.Series:
@@ -350,7 +351,12 @@ def main() -> None:
     except FileNotFoundError:
         print(f"Datei nicht gefunden: {args.file}")
         return
-    except Exception as exc:
+    except (
+        OSError,
+        UnicodeError,
+        pd.errors.ParserError,
+        pd.errors.EmptyDataError,
+    ) as exc:
         print(f"Fehler beim Lesen: {exc}")
         return
 

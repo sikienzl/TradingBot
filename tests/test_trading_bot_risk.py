@@ -1,9 +1,9 @@
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 
-from src.trading_bot import BotConfig, CryptoTradingBot
+from src.trading_bot import BotConfig, CryptoTradingBot, _order_fill_details
 
 
 def _make_test_bot(monkeypatch):
@@ -17,6 +17,92 @@ def _make_test_bot(monkeypatch):
     bot = CryptoTradingBot(config)
     bot.portfolio.save_state = lambda filepath=None: True
     return bot
+
+
+def test_order_fill_details_use_actual_partial_fill_and_average():
+    filled, average, cost = _order_fill_details(
+        {
+            "status": "closed",
+            "amount": 1.0,
+            "filled": 0.4,
+            "average": 102.0,
+            "cost": 40.8,
+        },
+        requested_amount=1.0,
+        fallback_price=100.0,
+    )
+
+    assert filled == 0.4
+    assert average == 102.0
+    assert cost == 40.8
+
+
+def test_order_fill_details_reject_unconfirmed_fill():
+    try:
+        _order_fill_details(
+            {"status": "open", "amount": 1.0},
+            requested_amount=1.0,
+            fallback_price=100.0,
+        )
+    except ValueError as exc:
+        assert "filled amount" in str(exc)
+    else:
+        raise AssertionError("An unconfirmed order fill must be rejected.")
+
+
+def test_confirm_order_fill_refreshes_incomplete_exchange_response(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.exchange = type(
+        "ExchangeStub",
+        (),
+        {
+            "cancel_order": lambda self, order_id, symbol: {},
+            "fetch_order": lambda self, order_id, symbol: {
+                "status": "closed",
+                "filled": 0.75,
+                "average": 101.0,
+                "cost": 75.75,
+            }
+        },
+    )()
+
+    details = bot._confirm_order_fill(
+        {"id": "order-1", "status": "open", "amount": 1.0},
+        "BTC/EUR",
+        requested_amount=1.0,
+        fallback_price=100.0,
+    )
+
+    assert details == (0.75, 101.0, 75.75)
+
+
+def test_confirm_order_fill_rejects_order_that_remains_open(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.exchange = type(
+        "ExchangeStub",
+        (),
+        {
+            "cancel_order": lambda self, order_id, symbol: {},
+            "fetch_order": lambda self, order_id, symbol: {
+                "id": order_id,
+                "status": "open",
+                "filled": 0.5,
+                "amount": 1.0,
+            },
+        },
+    )()
+
+    try:
+        bot._confirm_order_fill(
+            {"id": "order-2", "status": "open", "amount": 1.0},
+            "BTC/EUR",
+            requested_amount=1.0,
+            fallback_price=100.0,
+        )
+    except ValueError as exc:
+        assert "non-terminal" in str(exc)
+    else:
+        raise AssertionError("An open order must not be accounted as a final fill.")
 
 
 def test_daily_loss_guard_blocks_new_entries(monkeypatch):
@@ -34,7 +120,7 @@ def test_buy_limit_per_hour_blocks(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.max_buys_per_hour = 2
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     bot.buy_timestamps_utc = [
         now - timedelta(minutes=10), now - timedelta(minutes=1)]
 
@@ -1309,6 +1395,107 @@ def test_coin_specific_max_hold_seconds_override(monkeypatch):
     assert "SUI" not in bot.portfolio.open_trades
 
 
+def test_failed_exit_sell_retains_open_position(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.partial_take_profit_enabled = False
+    bot.config.trailing_stop_enabled = False
+    bot.config.break_even_enabled = False
+    bot.config.exit_on_downtrend = False
+    bot.config.max_hold_seconds = 1
+    bot.config.coin_max_hold_seconds = {}
+    bot.portfolio.holdings["BTC"] = 1.0
+    bot.portfolio.open_trades["BTC"] = {
+        "buy_price": 100.0,
+        "amount_coin": 1.0,
+        "amount_base": 100.0,
+        "timestamp": datetime.now() - timedelta(seconds=10),
+        "peak_price": 100.0,
+        "partial_tp_taken": False,
+        "partial_tp_timestamp": None,
+        "signal_source": "rules",
+        "signal_confidence": None,
+        "recommendation": "BUY",
+    }
+    monkeypatch.setattr(bot, "_get_atr_for_coin", lambda coin, period=14: 5.0)
+    monkeypatch.setattr(bot, "_execute_trade", lambda *args, **kwargs: False)
+
+    bot._manage_open_trades({"BTC": {"price": 100.0}})
+
+    assert "BTC" in bot.portfolio.open_trades
+    assert bot.portfolio.open_trades["BTC"]["amount_coin"] == 1.0
+
+
+def test_partial_exit_sell_retains_remaining_open_position(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.partial_take_profit_enabled = False
+    bot.config.trailing_stop_enabled = False
+    bot.config.break_even_enabled = False
+    bot.config.exit_on_downtrend = False
+    bot.config.max_hold_seconds = 1
+    bot.config.coin_max_hold_seconds = {}
+    bot.portfolio.holdings["BTC"] = 1.0
+    bot.portfolio.open_trades["BTC"] = {
+        "buy_price": 100.0,
+        "amount_coin": 1.0,
+        "amount_base": 100.0,
+        "timestamp": datetime.now() - timedelta(seconds=10),
+        "peak_price": 100.0,
+        "partial_tp_taken": False,
+        "partial_tp_timestamp": None,
+        "signal_source": "rules",
+        "signal_confidence": None,
+        "recommendation": "BUY",
+    }
+    monkeypatch.setattr(bot, "_get_atr_for_coin", lambda coin, period=14: 5.0)
+
+    def _fake_execute_trade(coin, action, price, amount_in_base_currency, **kwargs):
+        bot.portfolio.open_trades[coin]["amount_coin"] = 0.4
+        return True
+
+    monkeypatch.setattr(bot, "_execute_trade", _fake_execute_trade)
+
+    bot._manage_open_trades({"BTC": {"price": 100.0}})
+
+    assert bot.portfolio.open_trades["BTC"]["amount_coin"] == 0.4
+
+
+def test_failed_partial_take_profit_does_not_skip_other_exit_checks(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.partial_take_profit_enabled = True
+    bot.config.partial_take_profit_atr_mult = 1.0
+    bot.config.partial_take_profit_fraction = 0.5
+    bot.config.trailing_stop_enabled = False
+    bot.config.break_even_enabled = False
+    bot.config.max_hold_seconds = 1
+    bot.portfolio.holdings["BTC"] = 1.0
+    bot.portfolio.open_trades["BTC"] = {
+        "buy_price": 100.0,
+        "amount_coin": 1.0,
+        "amount_base": 100.0,
+        "timestamp": datetime.now() - timedelta(seconds=10),
+        "peak_price": 100.0,
+        "partial_tp_taken": False,
+        "partial_tp_timestamp": None,
+        "signal_source": "rules",
+        "signal_confidence": None,
+        "recommendation": "BUY",
+    }
+    monkeypatch.setattr(bot, "_get_atr_for_coin", lambda coin, period=14: 2.0)
+    outcomes = iter([False, True])
+    actions = []
+
+    def _fake_execute_trade(coin, action, price, amount_in_base_currency, **kwargs):
+        actions.append(action)
+        return next(outcomes)
+
+    monkeypatch.setattr(bot, "_execute_trade", _fake_execute_trade)
+
+    bot._manage_open_trades({"BTC": {"price": 102.5}})
+
+    assert actions == ["sell", "sell"]
+    assert "BTC" not in bot.portfolio.open_trades
+
+
 def test_dynamic_lossmaker_exclusions_detect_recent_timeout_losers(monkeypatch, tmp_path):
     bot = _make_test_bot(monkeypatch)
     journal_file = tmp_path / "trade_journal.csv"
@@ -1447,7 +1634,7 @@ def test_reentry_cooldown_blocks_recently_sold_coin(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.reentry_cooldown_seconds = 600
     bot.last_sell_timestamps_utc["BTC"] = datetime.now(
-        timezone.utc) - timedelta(seconds=120)
+        UTC) - timedelta(seconds=120)
 
     blocked, remaining = bot._is_coin_in_reentry_cooldown("BTC")
 
@@ -1459,7 +1646,7 @@ def test_reentry_cooldown_allows_after_expiry(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.reentry_cooldown_seconds = 300
     bot.last_sell_timestamps_utc["ETH"] = datetime.now(
-        timezone.utc) - timedelta(seconds=301)
+        UTC) - timedelta(seconds=301)
 
     blocked, remaining = bot._is_coin_in_reentry_cooldown("ETH")
 

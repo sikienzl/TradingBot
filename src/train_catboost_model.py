@@ -1,6 +1,6 @@
 import json
 import os
-from typing import List, Tuple
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -9,12 +9,9 @@ from sklearn.metrics import accuracy_score, classification_report, f1_score
 
 from src.research_signal import (
     RESEARCH_FEATURE_COLUMNS,
-    apply_research_features,
-    load_latest_research_signal,
 )
 
-
-BASE_FEATURE_COLUMNS: List[str] = [
+BASE_FEATURE_COLUMNS: list[str] = [
     "rsi",
     "macd",
     "macd_signal",
@@ -37,16 +34,17 @@ BASE_FEATURE_COLUMNS: List[str] = [
 
 LABEL_MAP = {"verkaufen": 0, "halten": 1, "kaufen": 2}
 INV_LABEL_MAP = {v: k for k, v in LABEL_MAP.items()}
+LABEL_HORIZON = 6
 
 
-def compute_class_weights(y: np.ndarray, n_classes: int = 3) -> List[float]:
+def compute_class_weights(y: np.ndarray, n_classes: int = 3) -> list[float]:
     """Computes inverse-frequency class weights with mean normalized to 1.0."""
     counts = np.bincount(y.astype(int), minlength=n_classes).astype(float)
     total = float(np.sum(counts))
     if total <= 0:
         return [1.0] * n_classes
 
-    weights: List[float] = []
+    weights: list[float] = []
     for c in counts:
         if c <= 0:
             weights.append(1.0)
@@ -66,7 +64,7 @@ def tune_confidence_threshold(
     threshold_min: float = 0.40,
     threshold_max: float = 0.80,
     threshold_step: float = 0.01,
-) -> Tuple[float, dict]:
+) -> tuple[float, dict]:
     """Finds the best confidence threshold by maximizing macro-F1 after abstaining to HOLD."""
     if len(y_true) == 0 or proba.size == 0:
         return 0.45, {"macro_f1": 0.0, "coverage": 0.0}
@@ -159,9 +157,46 @@ def create_profit_labels(
     return out
 
 
-def train_val_split_time(df: pd.DataFrame, train_ratio: float = 0.8) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def _purge_training_boundary(
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    horizon: int = LABEL_HORIZON,
+) -> pd.DataFrame:
+    """Drops training rows whose forward label window overlaps validation."""
+    if train_df.empty or val_df.empty or horizon <= 0:
+        return train_df.copy()
+
+    combined = pd.concat([train_df, val_df], ignore_index=True)
+    positions = pd.Series(np.arange(len(combined)), index=combined.index)
+    if "coin" in combined.columns:
+        grouped_positions = positions.groupby(combined["coin"], sort=False)
+        future_positions = grouped_positions.shift(-horizon)
+    else:
+        future_positions = positions.shift(-horizon)
+
+    if "timestamp" in combined.columns and "timestamp" in val_df.columns:
+        future_timestamps = (
+            combined.groupby("coin", sort=False)["timestamp"].shift(-horizon)
+            if "coin" in combined.columns
+            else combined["timestamp"].shift(-horizon)
+        )
+        validation_start = val_df["timestamp"].min()
+        keep = future_timestamps.iloc[:len(train_df)] < validation_start
+    else:
+        keep = future_positions.iloc[:len(train_df)] < len(train_df)
+
+    return train_df.iloc[np.flatnonzero(keep.fillna(False).to_numpy())].copy()
+
+
+def train_val_split_time(
+    df: pd.DataFrame,
+    train_ratio: float = 0.8,
+    horizon: int = LABEL_HORIZON,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     split_idx = int(len(df) * train_ratio)
-    return df.iloc[:split_idx].copy(), df.iloc[split_idx:].copy()
+    train_df = df.iloc[:split_idx].copy()
+    val_df = df.iloc[split_idx:].copy()
+    return _purge_training_boundary(train_df, val_df, horizon), val_df
 
 
 def generate_walk_forward_splits(
@@ -169,7 +204,7 @@ def generate_walk_forward_splits(
     n_splits: int = 3,
     min_train_size: int = 300,
     min_val_size: int = 100,
-) -> List[Tuple[int, int, int, int]]:
+) -> list[tuple[int, int, int, int]]:
     """Erzeugt expanding-window Splits: Train [0:train_end), Val [val_start:val_end)."""
     if n_rows <= 0 or n_splits <= 0:
         return []
@@ -178,7 +213,7 @@ def generate_walk_forward_splits(
     effective_splits = min(n_splits, max_splits_by_val)
     val_size = max(min_val_size, n_rows // (effective_splits + 1))
 
-    splits: List[Tuple[int, int, int, int]] = []
+    splits: list[tuple[int, int, int, int]] = []
     train_end = max(min_train_size, val_size)
     for _ in range(effective_splits):
         val_start = train_end
@@ -213,6 +248,9 @@ def run_walk_forward_evaluation(
     for fold_idx, (train_start, train_end, val_start, val_end) in enumerate(splits, start=1):
         train_df = df.iloc[train_start:train_end].copy()
         val_df = df.iloc[val_start:val_end].copy()
+        train_df = _purge_training_boundary(train_df, val_df)
+        if train_df.empty:
+            continue
 
         x_train, y_train, _ = prepare_xy(train_df)
         x_val, y_val, _ = prepare_xy(val_df)
@@ -234,8 +272,8 @@ def run_walk_forward_evaluation(
         y_pred = model.predict(x_val).reshape(-1).astype(int)
         rows.append({
             "fold": fold_idx,
-            "train_size": int(len(x_train)),
-            "val_size": int(len(x_val)),
+            "train_size": len(x_train),
+            "val_size": len(x_val),
             "accuracy": float(accuracy_score(y_val, y_pred)),
             "macro_f1": float(f1_score(y_val, y_pred, average="macro", zero_division=0)),
             "weighted_f1": float(f1_score(y_val, y_pred, average="weighted", zero_division=0)),
@@ -244,7 +282,7 @@ def run_walk_forward_evaluation(
     return pd.DataFrame(rows)
 
 
-def prepare_xy(df: pd.DataFrame) -> Tuple[pd.DataFrame, np.ndarray, List[str]]:
+def prepare_xy(df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray, list[str]]:
     all_features = BASE_FEATURE_COLUMNS + [
         "ret_1", "ret_3", "ret_6", "vol_6"] + RESEARCH_FEATURE_COLUMNS
     available_features = [c for c in all_features if c in df.columns]
@@ -262,9 +300,27 @@ def train_model(
 ) -> None:
     df = load_data(data_path)
     df = add_features(df)
-    research_features = load_latest_research_signal(
-        research_signal_path or os.getenv("RESEARCH_SIGNAL_PATH", ""))
-    df = apply_research_features(df, research_features)
+    present_research_features = set(RESEARCH_FEATURE_COLUMNS).intersection(
+        df.columns
+    )
+    if present_research_features and len(present_research_features) != len(
+        RESEARCH_FEATURE_COLUMNS
+    ):
+        warnings.warn(
+            "Incomplete historical research features found; excluding them "
+            "from training.",
+            UserWarning,
+            stacklevel=2,
+        )
+        df = df.drop(columns=list(present_research_features))
+    elif research_signal_path or os.getenv("RESEARCH_SIGNAL_PATH"):
+        warnings.warn(
+            "The latest research signal file is not applied to historical "
+            "training rows. Provide timestamp-aligned research feature columns "
+            "in the training data to train with research signals.",
+            UserWarning,
+            stacklevel=2,
+        )
     df = create_profit_labels(df)
 
     required = ["close", "label"]
@@ -277,7 +333,9 @@ def train_model(
     if "timestamp" in df.columns:
         df = df.sort_values(["timestamp"]).reset_index(drop=True)
 
-    train_df, val_df = train_val_split_time(df, train_ratio=0.8)
+    train_df, val_df = train_val_split_time(
+        df, train_ratio=0.8, horizon=LABEL_HORIZON
+    )
     x_train, y_train, features = prepare_xy(train_df)
     x_val, y_val, _ = prepare_xy(val_df)
     class_weights = compute_class_weights(y_train)
@@ -373,7 +431,10 @@ def main() -> None:
     parser.add_argument(
         "--research-signal-path",
         default="",
-        help="Path to latest AutoResearch JSON signal. Can also be set via RESEARCH_SIGNAL_PATH.",
+        help=(
+            "Inference-only latest AutoResearch JSON path; it is not applied "
+            "to historical training rows. Can also be set via RESEARCH_SIGNAL_PATH."
+        ),
     )
     args = parser.parse_args()
 

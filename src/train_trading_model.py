@@ -1,18 +1,20 @@
 import os
-import pandas as pd
+import warnings
+
 import numpy as np
+import pandas as pd
 import torch
-from sklearn.preprocessing import MinMaxScaler
 from datasets import Dataset
+from peft import LoraConfig, prepare_model_for_kbit_training
+from sklearn.preprocessing import MinMaxScaler
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    TrainingArguments,
     BitsAndBytesConfig,
+    TrainingArguments,
 )
-from peft import LoraConfig, prepare_model_for_kbit_training
 from trl import SFTTrainer
-import warnings
+
 warnings.filterwarnings("ignore")
 
 # --- 1. LOAD & PREPARE DATA ---
@@ -72,8 +74,17 @@ def load_and_preprocess_data(filepath="training_data.csv"):
         print(f"✅ Data prepared: {len(df)} records")
         return df
 
-    except Exception as e:
-        print(f"❌ Error during data preparation: {str(e)}")
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        IndexError,
+        KeyError,
+        AttributeError,
+        pd.errors.ParserError,
+        pd.errors.EmptyDataError,
+    ) as e:
+        print(f"❌ Error during data preparation: {e!s}")
         return None
 
 # --- 2. PROMPT CREATION (ADAPTED FOR YOUR DATA) ---
@@ -120,8 +131,8 @@ def prepare_dataset(df):
 
         print(f"📚 Dataset created with {len(dataset)} examples")
         return dataset
-    except Exception as e:
-        print(f"❌ Error during dataset creation: {str(e)}")
+    except (KeyError, TypeError, ValueError, IndexError, AttributeError) as e:
+        print(f"❌ Error during dataset creation: {e!s}")
         return None
 
 # --- 4. MODELL LADEN (OPTIMIERT) ---
@@ -212,8 +223,8 @@ def train(model, tokenizer, dataset):
         print(f"✅ Training complete! Model saved to '{output_dir}'")
         return True
 
-    except Exception as e:
-        print(f"❌ Training failed: {str(e)}")
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
+        print(f"❌ Training failed: {e!s}")
         return False
 
 
@@ -244,8 +255,15 @@ if __name__ == "__main__":
         else:
             print("❌ Training ended with errors")
 
-    except Exception as e:
-        print(f"\n❌ Fehler: {str(e)}")
+    except (
+        ImportError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        KeyError,
+    ) as e:
+        print(f"\n❌ Fehler: {e!s}")
         print("\n🔍 Troubleshooting tips:")
         print("1. Check if 'training_data.csv' exists")
         print("2. Make sure enough VRAM is available (min. 24GB recommended)")

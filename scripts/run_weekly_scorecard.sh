@@ -453,6 +453,8 @@ if [[ "${STATUS_PROM_ENABLED,,}" == "true" ]]; then
 import json
 import os
 import re
+import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -496,7 +498,14 @@ def _read_ai_spend_from_api() -> tuple[float, float]:
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             payload = json.loads(resp.read().decode("utf-8", errors="replace"))
-    except Exception:
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+    ) as exc:
+        print(f"AI spend lookup failed: {exc}", file=sys.stderr)
         return 0.0, 0.0
 
     info = payload.get("info", {}) if isinstance(payload, dict) else {}

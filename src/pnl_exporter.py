@@ -5,18 +5,18 @@ Listens on http://localhost:9200/metrics
 """
 import ast
 import csv
+import json
 import math
 import os
-import sys
-import json
 import re
+import sys
 import time
-import urllib.request
 import urllib.error
-from contextlib import suppress
+import urllib.request
 from collections import deque
-from datetime import datetime, timedelta, timezone
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from contextlib import suppress
+from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 JOURNAL_PATH = '/opt/trading_2/trade_journal.csv'
 BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
@@ -150,7 +150,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                         if key.strip() != env_key:
                             continue
                         return value.strip().strip('"').strip("'")
-        except Exception:
+        except OSError:
             pass
         return ''
 
@@ -182,7 +182,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             with urllib.request.urlopen(req, timeout=AI_SPEND_API_TIMEOUT_SECONDS) as resp:
                 payload = json.loads(
                     resp.read().decode('utf-8', errors='replace'))
-        except Exception:
+        except (urllib.error.URLError, TimeoutError, OSError, UnicodeError, json.JSONDecodeError):
             AI_SPEND_CACHE['expires_at'] = now + AI_SPEND_CACHE_TTL_SECONDS
             return AI_SPEND_CACHE['value']
 
@@ -236,9 +236,8 @@ class MetricsHandler(BaseHTTPRequestHandler):
         try:
             with open(JOURNAL_PATH, 'r') as f:
                 reader = csv.DictReader(f)
-                for row in reader:
-                    trades.append(row)
-        except Exception:
+                trades = list(reader)
+        except (OSError, UnicodeError, csv.Error):
             pass
         return trades
 
@@ -252,7 +251,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
         except ValueError:
             try:
                 return datetime.fromisoformat(ts.split('.')[0])
-            except Exception:
+            except ValueError:
                 return None
 
     def _extract_log_line_timestamp(self, line):
@@ -260,7 +259,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
         try:
             timestamp_raw = line.split(' - ', 1)[0].strip()
             return datetime.strptime(timestamp_raw, '%Y-%m-%d %H:%M:%S,%f')
-        except Exception:
+        except ValueError:
             return None
 
     def _extract_return_pct(self, trade, pnl_value):
@@ -288,7 +287,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             'open_positions_count': 0,
             'portfolio_snapshot_timestamp_unixtime': 0.0,
             'portfolio_snapshot_age_seconds': 0.0,
-            'metrics_generated_unixtime': datetime.now(timezone.utc).timestamp(),
+            'metrics_generated_unixtime': datetime.now(UTC).timestamp(),
         }
 
         if not os.path.exists(BOT_LOG_PATH):
@@ -313,7 +312,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                         if line_ts is not None:
                             snapshot['portfolio_snapshot_timestamp_unixtime'] = line_ts.timestamp(
                             )
-                    except Exception:
+                    except (IndexError, ValueError):
                         pass
 
                 if snapshot['portfolio_cash_eur'] == 0.0 and '  - Cash:' in line:
@@ -321,7 +320,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                         cash_part = line.split('Cash:', 1)[1].strip()
                         snapshot['portfolio_cash_eur'] = float(
                             cash_part.split(' ')[0])
-                    except Exception:
+                    except (IndexError, ValueError):
                         pass
 
                 if not snapshot['holdings_amount_coin'] and '  - Holdings:' in line:
@@ -334,7 +333,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                                 for coin, amount in parsed.items()
                                 if float(amount) > 0.0
                             }
-                    except Exception:
+                    except (SyntaxError, TypeError, ValueError):
                         pass
 
                 if '  - Open trades details:' in line:
@@ -375,7 +374,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                         for coin in snapshot['holdings_amount_coin']
                     ):
                         break
-        except Exception:
+        except (OSError, UnicodeError):
             return snapshot
 
         for coin, amount_coin in snapshot['holdings_amount_coin'].items():
@@ -424,7 +423,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                             cash_part = line.split('Cash:', 1)[1].strip()
                             value = float(cash_part.split(' ')[0])
                             break
-                        except Exception:
+                        except (IndexError, ValueError):
                             continue
 
             if value <= 0.0 and os.path.exists(PORTFOLIO_STATE_PATH):
@@ -432,13 +431,13 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     with open(PORTFOLIO_STATE_PATH, 'r', encoding='utf-8', errors='ignore') as f:
                         state = json.load(f)
                     value = float(state.get('initial_portfolio_value') or 0.0)
-                except Exception:
+                except (TypeError, ValueError):
                     pass
 
             START_VALUE_CACHE['log_mtime'] = mtime
             START_VALUE_CACHE['value'] = value
             return value
-        except Exception:
+        except (OSError, UnicodeError, json.JSONDecodeError, AttributeError, TypeError, ValueError):
             return 0.0
 
     def read_ai_copilot_usage(self):
@@ -458,7 +457,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 result['ai_copilot_budget_cap_usd'] = float(budget_cap)
             if calls_cap:
                 result['ai_copilot_calls_cap_monthly'] = float(calls_cap)
-        except Exception:
+        except (TypeError, ValueError):
             pass
 
         try:
@@ -467,7 +466,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     continue
                 with open(candidate, 'r', encoding='utf-8') as f:
                     state = json.load(f)
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 month_key = f"{now.year:04d}-{now.month:02d}"
                 if state.get('month_key') == month_key:
                     result['ai_copilot_budget_cap_usd'] = float(
@@ -480,14 +479,14 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     result['ai_copilot_calls_used_monthly'] = float(
                         state.get('monthly_calls', 0) or 0)
                     break
-        except Exception:
+        except (OSError, UnicodeError, json.JSONDecodeError, AttributeError, TypeError, ValueError):
             pass
 
         try:
             api_usage = self._read_ai_spend_from_api()
             if api_usage:
                 result.update(api_usage)
-        except Exception:
+        except (urllib.error.URLError, TimeoutError, OSError, UnicodeError, json.JSONDecodeError):
             pass
 
         return result
@@ -503,7 +502,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             with open(BOT_LOG_PATH, 'r', encoding='utf-8', errors='ignore') as f:
                 tail_lines = list(deque(f, maxlen=4000))
 
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             suggestions = []
             rank = 1
 
@@ -546,7 +545,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                         timestamp_raw.strip(), '%Y-%m-%d %H:%M:%S,%f')
                     age_minutes = max(
                         0.0, (now - ts).total_seconds() / 60.0)
-                except Exception:
+                except (IndexError, SyntaxError, ValueError):
                     continue
 
                 if not isinstance(changes, dict):
@@ -571,14 +570,14 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     break
 
             result['ai_copilot_shadow_suggestions'] = suggestions
-        except Exception:
+        except (OSError, UnicodeError):
             pass
 
         return result
 
     def calculate_pnl_metrics(self, trades, time_window_hours=24):
         """Calculate PnL metrics from trades"""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         cutoff = now - timedelta(hours=time_window_hours)
 
         all_time_realized_pnl = 0.0
@@ -657,18 +656,15 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 per_trade_returns.append(ret)
 
                 equity += pnl
-                if equity > peak_equity:
-                    peak_equity = equity
+                peak_equity = max(peak_equity, equity)
                 drawdown_usd = peak_equity - equity
-                if drawdown_usd > max_drawdown_usd:
-                    max_drawdown_usd = drawdown_usd
+                max_drawdown_usd = max(max_drawdown_usd, drawdown_usd)
                 if peak_equity > 0:
                     # Prevent unrealistic percentages when peak equity is near zero.
                     drawdown_pct = drawdown_usd / \
                         max(peak_equity, MIN_DRAWDOWN_PCT_BASE_USD)
-                    if drawdown_pct > max_drawdown_pct:
-                        max_drawdown_pct = drawdown_pct
-            except Exception:
+                    max_drawdown_pct = max(max_drawdown_pct, drawdown_pct)
+            except (AttributeError, IndexError, KeyError, TypeError, ValueError, OverflowError):
                 continue
 
         win_rate = (winning_trades / total_trades *

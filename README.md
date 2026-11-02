@@ -132,11 +132,11 @@ python3 train_trading_model.py
 ```
 Outputs a LoRA adapter in `model/fine_tuned_trading_model/`.
 
-Train CatBoost with AutoResearch features (optional):
+Train CatBoost using historical, timestamp-aligned AutoResearch features (optional):
 ```sh
-python3 train_catboost_model.py --research-signal-path data/research_signal_latest.json
+python3 train_catboost_model.py
 ```
-If omitted, the model uses neutral research defaults.
+If the training CSV contains all six `research_*` feature columns, they are used as supplied. The latest research JSON is for inference and is deliberately not copied across historical rows, which would leak future information into training.
 
 ### 3. Dry-run / live trading
 ```sh

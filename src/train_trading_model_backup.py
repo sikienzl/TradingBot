@@ -1,17 +1,19 @@
-import pandas as pd
+import warnings
+
 import numpy as np
+import pandas as pd
 import torch
-from sklearn.preprocessing import MinMaxScaler
 from datasets import Dataset
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from sklearn.preprocessing import MinMaxScaler
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    TrainingArguments,
     BitsAndBytesConfig,
+    TrainingArguments,
 )
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from trl import SFTTrainer
-import warnings
+
 warnings.filterwarnings("ignore")
 
 # --- 1. LOAD & PREPARE DATA ---
@@ -151,8 +153,8 @@ if __name__ == "__main__":
         train(model, tokenizer, dataset)
 
         print("🎉 Model saved to './fine_tuned_trading_model'!")
-    except Exception as e:
-        print(f"\n❌ Error: {str(e)}")
+    except (ImportError, OSError, RuntimeError, TypeError, ValueError, KeyError) as e:
+        print(f"\n❌ Error: {e!s}")
         print("\n🔍 Tips:")
         print("1. Check whether 'crypto_data.csv' exists")
         print("2. Make sure enough VRAM is available")

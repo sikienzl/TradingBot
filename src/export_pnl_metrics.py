@@ -5,14 +5,13 @@ Reads trade_journal.csv and exports current balance status as Prometheus metrics
 """
 import ast
 import csv
+import json
 import math
 import os
-import sys
-import json
 import re
+import sys
 from collections import deque
-from datetime import datetime, timedelta, timezone
-
+from datetime import UTC, datetime, timedelta
 
 MIN_DRAWDOWN_PCT_BASE_USD = 1.0
 BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
@@ -39,9 +38,8 @@ def read_trades(journal_path):
     try:
         with open(journal_path, 'r') as f:
             reader = csv.DictReader(f)
-            for row in reader:
-                trades.append(row)
-    except Exception as e:
+            trades = list(reader)
+    except (OSError, UnicodeError, csv.Error) as e:
         print(f"Error reading trades: {e}", file=sys.stderr)
         return []
     return trades
@@ -57,7 +55,7 @@ def parse_timestamp(timestamp_str):
     except ValueError:
         try:
             return datetime.fromisoformat(ts.split('.')[0])
-        except Exception:
+        except ValueError:
             return None
 
 
@@ -77,7 +75,7 @@ def extract_return_pct(trade):
 
 def calculate_pnl_metrics(trades, time_window_hours=24):
     """Calculate PnL metrics from trades"""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     cutoff = now - timedelta(hours=time_window_hours)
 
     all_time_realized_pnl = 0.0
@@ -156,18 +154,15 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
             per_trade_returns.append(extract_return_pct(trade))
 
             equity += pnl
-            if equity > peak_equity:
-                peak_equity = equity
+            peak_equity = max(peak_equity, equity)
             drawdown_usd = peak_equity - equity
-            if drawdown_usd > max_drawdown_usd:
-                max_drawdown_usd = drawdown_usd
+            max_drawdown_usd = max(max_drawdown_usd, drawdown_usd)
             if peak_equity > 0:
                 # Prevent unrealistic percentages when peak equity is near zero.
                 drawdown_pct = drawdown_usd / \
                     max(peak_equity, MIN_DRAWDOWN_PCT_BASE_USD)
-                if drawdown_pct > max_drawdown_pct:
-                    max_drawdown_pct = drawdown_pct
-        except Exception:
+                max_drawdown_pct = max(max_drawdown_pct, drawdown_pct)
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError, OverflowError):
             continue
 
     win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
@@ -242,7 +237,7 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
                     value_part = line.split('Portfolio value:', 1)[1].strip()
                     snapshot['portfolio_value_eur'] = float(
                         value_part.split(' ')[0])
-                except Exception:
+                except (IndexError, ValueError):
                     pass
 
             if snapshot['portfolio_cash_eur'] == 0.0 and '  - Cash:' in line:
@@ -250,7 +245,7 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
                     cash_part = line.split('Cash:', 1)[1].strip()
                     snapshot['portfolio_cash_eur'] = float(
                         cash_part.split(' ')[0])
-                except Exception:
+                except (IndexError, ValueError):
                     pass
 
             if not snapshot['holdings_amount_coin'] and '  - Holdings:' in line:
@@ -263,7 +258,7 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
                             for coin, amount in parsed.items()
                             if float(amount) > 0.0
                         }
-                except Exception:
+                except (SyntaxError, TypeError, ValueError):
                     pass
 
             if '  - Open trades details:' in line:
@@ -303,7 +298,7 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
                     for coin in snapshot['holdings_amount_coin']
                 ):
                     break
-    except Exception:
+    except (OSError, UnicodeError):
         return snapshot
 
     for coin, amount_coin in snapshot['holdings_amount_coin'].items():
@@ -339,14 +334,14 @@ def read_portfolio_start_value(log_path=BOT_LOG_PATH):
                     try:
                         cash_part = line.split('Cash:', 1)[1].strip()
                         return float(cash_part.split(' ')[0])
-                    except Exception:
+                    except (IndexError, ValueError):
                         continue
 
         if os.path.exists(PORTFOLIO_STATE_PATH):
             with open(PORTFOLIO_STATE_PATH, 'r', encoding='utf-8', errors='ignore') as f:
                 state = json.load(f)
             return float(state.get('initial_portfolio_value') or 0.0)
-    except Exception:
+    except (OSError, UnicodeError, json.JSONDecodeError, AttributeError, TypeError, ValueError):
         return 0.0
     return 0.0
 
@@ -374,14 +369,14 @@ def read_ai_copilot_usage(env_path=ENV_PATH, state_path=AI_COPILOT_STATE_PATH):
                         result['ai_copilot_budget_cap_usd'] = float(value)
                     elif key == 'AI_COPILOT_MAX_CALLS_PER_MONTH':
                         result['ai_copilot_calls_cap_monthly'] = float(value)
-    except Exception:
-        pass
+    except (OSError, UnicodeError) as exc:
+        print(f"Error reading AI co-pilot environment: {exc}", file=sys.stderr)
 
     try:
         if os.path.exists(state_path):
             with open(state_path, 'r', encoding='utf-8') as f:
                 state = json.load(f)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             month_key = f"{now.year:04d}-{now.month:02d}"
             if state.get('month_key') == month_key:
                 result['ai_copilot_budget_cap_usd'] = float(
@@ -392,8 +387,8 @@ def read_ai_copilot_usage(env_path=ENV_PATH, state_path=AI_COPILOT_STATE_PATH):
                     state.get('monthly_spend_usd', 0.0) or 0.0)
                 result['ai_copilot_calls_used_monthly'] = float(
                     state.get('monthly_calls', 0) or 0)
-    except Exception:
-        pass
+    except (OSError, UnicodeError, json.JSONDecodeError, AttributeError, TypeError, ValueError) as exc:
+        print(f"Error reading AI co-pilot state: {exc}", file=sys.stderr)
 
     return result
 
@@ -408,7 +403,7 @@ def read_ai_shadow_suggestions(log_path=BOT_LOG_PATH):
         with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
             tail_lines = list(deque(f, maxlen=4000))
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         suggestions = []
         rank = 1
 
@@ -450,7 +445,7 @@ def read_ai_shadow_suggestions(log_path=BOT_LOG_PATH):
                 ts = datetime.strptime(
                     timestamp_raw.strip(), '%Y-%m-%d %H:%M:%S,%f')
                 age_minutes = max(0.0, (now - ts).total_seconds() / 60.0)
-            except Exception:
+            except (IndexError, SyntaxError, ValueError):
                 continue
 
             if not isinstance(changes, dict):
@@ -475,8 +470,8 @@ def read_ai_shadow_suggestions(log_path=BOT_LOG_PATH):
                 break
 
         result['ai_copilot_shadow_suggestions'] = suggestions
-    except Exception:
-        pass
+    except (OSError, UnicodeError) as exc:
+        print(f"Error reading AI co-pilot suggestions: {exc}", file=sys.stderr)
 
     return result
 
@@ -493,8 +488,8 @@ def _read_env_value(env_key, env_path=ENV_PATH):
                     if key.strip() != env_key:
                         continue
                     return value.strip().strip('"').strip("'")
-    except Exception:
-        pass
+    except (OSError, UnicodeError) as exc:
+        print(f"Error reading environment file: {exc}", file=sys.stderr)
     return ''
 
 
