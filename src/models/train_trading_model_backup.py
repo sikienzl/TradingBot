@@ -51,7 +51,7 @@ def create_prompt(row):
       - RSI: {row['rsi']:.2f} (0=oversold, 1=overbought)
       - MACD: {row['macd']:.2f} (negative=downtrend, positive=uptrend)
 
-    Question: Should I buy, sell, or hold? Answer with one word only: kaufen/verkaufen/halten.
+    Question: Should I buy, sell, or hold? Answer with one word only: buy/sell/hold.
     Answer: {row['label']}
     """
 

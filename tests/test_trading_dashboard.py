@@ -85,10 +85,14 @@ def test_missing_credentials_fails_closed_and_denies_unauthenticated(monkeypatch
     connect, _, _ = mock_db(monkeypatch)
     client = TestClient(dashboard.create_app(settings(user="", password="")))
     assert client.get("/").status_code == 503
-    assert client.get("/", auth=AUTH).status_code == 503
+    response = client.get("/", auth=AUTH)
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Dashboard authentication is not configured"
     client = TestClient(dashboard.create_app(settings()))
     assert client.get("/").status_code == 401
-    assert client.get("/", auth=("operator", "bad")).status_code == 401
+    response = client.get("/", auth=("operator", "bad"))
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Authentication required"
     connect.assert_not_called()
 
 
@@ -99,8 +103,18 @@ def test_read_only_dashboard_renders_actual_schema_and_modes(monkeypatch):
     client = TestClient(dashboard.create_app(settings()))
     response = client.get("/", auth=AUTH)
     assert response.status_code == 200
-    assert "Modus laut letztem Snapshot: DRY-RUN" in response.text
-    assert "Aktuell" in response.text
+    assert '<html lang="en">' in response.text
+    assert "Trading Dashboard · read-only" in response.text
+    assert "Mode from latest snapshot: DRY-RUN" in response.text
+    assert "Current" in response.text
+    assert all(value in response.text for value in (
+        "Open positions · latest snapshot",
+        "Events · newest first",
+        "Coin amount",
+        "Base amount",
+        "Portfolio history · chart",
+        "Portfolio value",
+    ))
     assert all(value in response.text for value in ("BTC", "102.5", "42.5", "6000", "LIVE"))
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in response.text
     assert "<script>" not in response.text
@@ -122,17 +136,17 @@ def test_empty_stale_and_future_data_are_explicit(monkeypatch):
     mock_db(monkeypatch)
     client = TestClient(dashboard.create_app(settings()))
     response = client.get("/", auth=AUTH)
-    assert "Modus: UNBEKANNT" in response.text
-    assert "Kein Portfolio-Snapshot" in response.text
-    assert "Keine Daten" in response.text
+    assert "Mode: UNKNOWN" in response.text
+    assert "No portfolio snapshot" in response.text
+    assert "No data" in response.text
 
     mock_db(monkeypatch, [snapshot(snapshot_ts=NOW - timedelta(seconds=301), dry_run=False)])
     response = client.get("/", auth=AUTH)
-    assert "VERALTET" in response.text
-    assert "Modus laut letztem Snapshot: LIVE" in response.text
+    assert "STALE" in response.text
+    assert "Mode from latest snapshot: LIVE" in response.text
 
     mock_db(monkeypatch, [snapshot(snapshot_ts=NOW + timedelta(minutes=5))])
-    assert "Zukunft" in client.get("/", auth=AUTH).text
+    assert "Timestamp is in the future" in client.get("/", auth=AUTH).text
 
 
 def test_database_failure_is_generic_and_never_logs_credentials(monkeypatch, caplog):
@@ -144,7 +158,7 @@ def test_database_failure_is_generic_and_never_logs_credentials(monkeypatch, cap
     client = TestClient(dashboard.create_app(settings()))
     response = client.get("/", auth=AUTH)
     assert response.status_code == 503
-    assert "DB-Fehler" in response.text
+    assert "Database error" in response.text
     assert secret not in response.text
     assert secret not in caplog.text
     assert "password" not in repr(settings())
@@ -154,7 +168,7 @@ def test_database_not_configured_and_no_write_endpoints(monkeypatch):
     connect, _, _ = mock_db(monkeypatch)
     client = TestClient(dashboard.create_app(settings(database_url="")))
     assert client.get("/", auth=AUTH).status_code == 503
-    assert "nicht konfiguriert" in client.get("/", auth=AUTH).text
+    assert "database is not configured" in client.get("/", auth=AUTH).text
     for path in ("/", "/orders", "/openapi.json", "/docs"):
         assert client.post(path, auth=AUTH).status_code in (404, 405)
     assert client.get("/docs", auth=AUTH).status_code == 404
@@ -171,7 +185,7 @@ def test_invalid_snapshot_returns_safe_error_and_closes_connection(monkeypatch):
     _, conn, _ = mock_db(monkeypatch, [snapshot(open_trades_json=[])])
     response = TestClient(dashboard.create_app(settings())).get("/", auth=AUTH)
     assert response.status_code == 503
-    assert "DB-Fehler" in response.text
+    assert "Database error" in response.text
     conn.__exit__.assert_called_once()
 
 
@@ -194,11 +208,11 @@ def test_portfolio_charts_separate_modes_and_currencies_and_scale_time(monkeypat
     assert len(charts) == 3
     by_label = {chart.attrib["aria-label"]: chart for chart in charts}
     assert set(by_label) == {
-        "LIVE · EUR: Portfolioverlauf mit 1 Datenpunkten",
-        "DRY-RUN · EUR: Portfolioverlauf mit 3 Datenpunkten",
-        "DRY-RUN · USD: Portfolioverlauf mit 1 Datenpunkten",
+        "LIVE · EUR: Portfolio history with 1 data point",
+        "DRY-RUN · EUR: Portfolio history with 3 data points",
+        "DRY-RUN · USD: Portfolio history with 1 data point",
     }
-    chart = by_label["DRY-RUN · EUR: Portfolioverlauf mit 3 Datenpunkten"]
+    chart = by_label["DRY-RUN · EUR: Portfolio history with 3 data points"]
     labels = [point.find("title").text for point in chart.findall("circle")]
     assert [label.split(": ")[-1] for label in labels] == ["100.0 EUR", "110.0 EUR", "130.0 EUR"]
     coords = [(float(point.attrib["cx"]), float(point.attrib["cy"])) for point in chart.findall("circle")]
@@ -248,7 +262,7 @@ def test_portfolio_chart_skips_invalid_points_and_escapes_labels(monkeypatch):
     mock_db(monkeypatch, data)
     response = TestClient(dashboard.create_app(settings())).get("/", auth=AUTH)
     assert response.status_code == 200
-    assert "6 unvollständige oder ungültige Snapshots" in response.text
+    assert "6 incomplete or invalid snapshots omitted" in response.text
     assert "<img" not in response.text
     chart, = chart_elements(response.text)
     assert currency in chart.attrib["aria-label"]
@@ -263,10 +277,10 @@ def test_missing_portfolio_chart_data_does_not_break_dashboard(monkeypatch):
     mock_db(monkeypatch, [incomplete])
     response = TestClient(dashboard.create_app(settings())).get("/", auth=AUTH)
     assert response.status_code == 200
-    assert "Aktualität unbekannt" in response.text
-    assert "Keine gültigen Daten für den Portfolioverlauf" in response.text
+    assert "Freshness unknown" in response.text
+    assert "No valid data for portfolio history" in response.text
     assert not chart_elements(response.text)
-    assert "1 unvollständige oder ungültige Snapshots" in response.text
+    assert "1 incomplete or invalid snapshots omitted" in response.text
 
 
 @pytest.fixture
@@ -358,16 +372,16 @@ def test_real_postgres_auth_charts_and_read_only_transaction(postgres_dashboard,
     response = client.get("/", auth=AUTH)
     assert response.status_code == 200
     assert observed == [("on", "repeatable read")]
-    assert "Modus laut letztem Snapshot: LIVE" in response.text
+    assert "Mode from latest snapshot: LIVE" in response.text
     assert "BTC" in response.text and "entry" in response.text
     charts = chart_elements(response.text)
     by_label = {chart.attrib["aria-label"]: chart for chart in charts}
     assert set(by_label) == {
-        "LIVE · EUR: Portfolioverlauf mit 1 Datenpunkten",
-        "DRY-RUN · EUR: Portfolioverlauf mit 2 Datenpunkten",
-        "DRY-RUN · USD: Portfolioverlauf mit 1 Datenpunkten",
+        "LIVE · EUR: Portfolio history with 1 data point",
+        "DRY-RUN · EUR: Portfolio history with 2 data points",
+        "DRY-RUN · USD: Portfolio history with 1 data point",
     }
-    dry_eur = by_label["DRY-RUN · EUR: Portfolioverlauf mit 2 Datenpunkten"]
+    dry_eur = by_label["DRY-RUN · EUR: Portfolio history with 2 data points"]
     assert [point.find("title").text.split(": ")[-1] for point in dry_eur.findall("circle")] == [
         "100.0 EUR", "110.0 EUR",
     ]

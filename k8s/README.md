@@ -20,9 +20,9 @@
     (24/7 live ticks)
 ```
 
-## Deployment-Strategie
+## Deployment Strategy
 
-### Phase 1: Vorbereitung (lokal)
+### Phase 1: Preparation (local)
 
 ```bash
 # Branch already created: feature/hailo8-k3s-hybrid
@@ -132,7 +132,7 @@ lose events, and the in-memory gRPC window is not restored after restart.
 The retention setting is not automatically enforced by the relay. This is not
 a complete or lossless historical dataset.
 
-## Dateien in diesem Verzeichnis
+## Files in This Directory
 
 ```text
 k8s/

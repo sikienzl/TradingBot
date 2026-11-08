@@ -268,7 +268,7 @@ def train_model(
     required = ["close", "label"]
     missing = [c for c in required if c not in df.columns]
     if missing:
-        raise ValueError(f"Fehlende Spalten: {missing}")
+        raise ValueError(f"Missing columns: {missing}")
 
     df = df.dropna(subset=["close", "future_net_return", "label"])
 

@@ -93,7 +93,7 @@ def _text(value: Any) -> str:
 
 
 def _mode(value: Any) -> str:
-    return "DRY-RUN" if value is True else "LIVE" if value is False else "UNBEKANNT"
+    return "DRY-RUN" if value is True else "LIVE" if value is False else "UNKNOWN"
 
 
 def _table(headers: tuple[str, ...], rows: list[tuple[Any, ...]]) -> str:
@@ -103,13 +103,13 @@ def _table(headers: tuple[str, ...], rows: list[tuple[Any, ...]]) -> str:
         for row in rows
     )
     if not body:
-        body = f'<tr><td colspan="{len(headers)}">Keine Daten</td></tr>'
+        body = f'<tr><td colspan="{len(headers)}">No data</td></tr>'
     return f"<table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table>"
 
 
 def _page(content: str) -> str:
     return f"""<!doctype html>
-<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <meta http-equiv="refresh" content="30"><title>Trading Dashboard</title>
 <style>body{{font:16px system-ui;max-width:1200px;margin:auto;padding:1rem;background:#111827;color:#f3f4f6}}
 h1,h2{{color:#e5e7eb}} .notice{{padding:1rem;background:#374151;border-left:4px solid #fbbf24}}
@@ -119,7 +119,7 @@ th{{color:#93c5fd}} small{{color:#d1d5db}}
 svg{{width:100%;max-width:760px;height:auto;background:#1f2937}}
 svg text{{fill:#e5e7eb;font-size:12px}} svg .axis{{stroke:#9ca3af}}
 svg .series{{fill:none;stroke:#60a5fa;stroke-width:2}} svg circle{{fill:#fbbf24}}</style></head>
-<body><h1>Trading Dashboard · nur lesend</h1>{content}</body></html>"""
+<body><h1>Trading Dashboard · read-only</h1>{content}</body></html>"""
 
 
 def _portfolio_charts(snapshots: list[dict[str, Any]]) -> str:
@@ -179,19 +179,19 @@ def _portfolio_charts(snapshots: list[dict[str, Any]]) -> str:
         charts.append(
             f"<h3>{_text(label)}</h3>"
             f'<svg viewBox="0 0 640 230" role="img" aria-label="{_text(label)}: '
-            f'Portfolioverlauf mit {len(points)} Datenpunkten">'
-            f"<title>Portfolioverlauf {_text(label)}</title>"
+            f'Portfolio history with {len(points)} data point{"s" if len(points) != 1 else ""}">'
+            f"<title>Portfolio history {_text(label)}</title>"
             '<line class="axis" x1="64" y1="20" x2="64" y2="200"/>'
             '<line class="axis" x1="64" y1="200" x2="620" y2="200"/>'
             f'<text x="60" y="24" text-anchor="end">{_text(f"{high:.5g}")}</text>'
             f'<text x="60" y="200" text-anchor="end">{_text(f"{low:.5g}")}</text>'
             f'<polyline class="series" points="{polyline}"/>{dots}</svg>'
-            f"<p><small>{len(points)} Punkte · {_text(first)} bis {_text(last)} · "
-            f"Werte in {_text(currency)}</small></p>"
+            f"<p><small>{len(points)} points · {_text(first)} to {_text(last)} · "
+            f"Values in {_text(currency)}</small></p>"
         )
-    note = f"<p><small>{skipped} unvollständige oder ungültige Snapshots nicht dargestellt.</small></p>" if skipped else ""
+    note = f"<p><small>{skipped} incomplete or invalid snapshots omitted.</small></p>" if skipped else ""
     if not charts:
-        return "<p>Keine gültigen Daten für den Portfolioverlauf.</p>" + note
+        return "<p>No valid data for portfolio history.</p>" + note
     return "".join(charts) + note
 
 
@@ -202,15 +202,15 @@ def _render(snapshots: list[dict[str, Any]], events: list[dict[str, Any]], stale
     if latest:
         timestamp = latest.get("snapshot_ts")
         if not isinstance(timestamp, datetime) or timestamp.utcoffset() is None:
-            freshness = "Aktualität unbekannt – ungültiger Zeitstempel"
+            freshness = "Freshness unknown – invalid timestamp"
         else:
             age = (now - timestamp).total_seconds()
             if age < -30:
-                freshness = "Zeitstempel liegt in der Zukunft – Uhrzeit prüfen"
+                freshness = "Timestamp is in the future – check the clock"
             elif age > stale_seconds:
-                freshness = f"VERALTET ({int(age)} s alt)"
+                freshness = f"STALE ({int(age)} s old)"
             else:
-                freshness = f"Aktuell ({max(0, int(age))} s alt)"
+                freshness = f"Current ({max(0, int(age))} s old)"
         trades = latest["open_trades_json"]
         if not isinstance(trades, dict):
             raise TypeError("Invalid positions")
@@ -222,14 +222,14 @@ def _render(snapshots: list[dict[str, Any]], events: list[dict[str, Any]], stale
                 trade.get("amount_base"), trade.get("timestamp"), trade.get("signal_source"),
             ))
         status = (
-            f"<strong>Modus laut letztem Snapshot: {_mode(latest.get('dry_run'))}</strong><br>"
+            f"<strong>Mode from latest snapshot: {_mode(latest.get('dry_run'))}</strong><br>"
             f"Snapshot: {_text(timestamp)} · {_text(freshness)} · "
-            f"offene Positionen: {_text(latest['open_positions_count'])}<br>"
+            f"Open positions: {_text(latest['open_positions_count'])}<br>"
             f"Portfolio: {_text(latest.get('portfolio_value_base'))} {_text(latest.get('base_currency'))} · "
             f"Cash: {_text(latest['cash_base'])} {_text(latest.get('base_currency'))}"
         )
     else:
-        status = "<strong>Modus: UNBEKANNT</strong><br>Kein Portfolio-Snapshot vorhanden; Aktualität unbekannt."
+        status = "<strong>Mode: UNKNOWN</strong><br>No portfolio snapshot available; freshness unknown."
 
     portfolio_rows = [
         (s.get("snapshot_ts"), s["iteration"], _mode(s.get("dry_run")), s.get("portfolio_value_base"),
@@ -244,20 +244,20 @@ def _render(snapshots: list[dict[str, Any]], events: list[dict[str, Any]], stale
     ]
     return _page(
         f'<div class="notice">{status}</div>'
-        "<p><small>Snapshots sind keine Live-Order- oder Börsenabfrage. "
-        "Aktualisierung alle 30 Sekunden; Anzeige auf je 100 Datensätze begrenzt.</small></p>"
-        "<section><h2>Offene Positionen · letzter Snapshot</h2>"
-        + _table(("Coin", "Menge", "Kaufpreis", "Investiert", "Seit", "Quelle"), positions)
-        + "</section><section><h2>Ereignisse · neueste zuerst</h2>"
-        + _table(("Zeit", "Iteration", "Modus", "Coin", "Aktion", "Preis", "Menge",
-                  "Betrag", "PnL", "PnL %", "Währung", "Quelle", "Grund"), event_rows)
-        + "</section><section><h2>Portfolioverlauf · grafisch</h2>"
-        + "<p><small>Getrennte Diagramme je Modus und Währung; Zeitachse von links nach rechts. "
-        "Linien verbinden verfügbare Werte, auch über Datenlücken hinweg.</small></p>"
+        "<p><small>Snapshots are not live order or exchange data. "
+        "Refreshes every 30 seconds; each display is limited to 100 records.</small></p>"
+        "<section><h2>Open positions · latest snapshot</h2>"
+        + _table(("Coin", "Amount", "Purchase price", "Invested", "Since", "Source"), positions)
+        + "</section><section><h2>Events · newest first</h2>"
+        + _table(("Time", "Iteration", "Mode", "Coin", "Action", "Price", "Coin amount",
+                  "Base amount", "PnL", "PnL %", "Currency", "Source", "Reason"), event_rows)
+        + "</section><section><h2>Portfolio history · chart</h2>"
+        + "<p><small>Separate charts for each mode and currency; the time axis runs from left to right. "
+        "Lines connect available values, including across data gaps.</small></p>"
         + _portfolio_charts(snapshots)
-        + "</section><section><h2>Portfolioverlauf · neueste zuerst</h2>"
-        + _table(("Zeit", "Iteration", "Modus", "Portfoliowert", "Cash", "Währung",
-                  "Offene Positionen"), portfolio_rows)
+        + "</section><section><h2>Portfolio history · newest first</h2>"
+        + _table(("Time", "Iteration", "Mode", "Portfolio value", "Cash", "Currency",
+                  "Open positions"), portfolio_rows)
         + "</section>"
     )
 
@@ -280,7 +280,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def authenticate(credentials: HTTPBasicCredentials | None = Depends(basic)) -> None:  # noqa: B008
         if not settings.user or not settings.password:
-            raise HTTPException(status_code=503, detail="Dashboard-Authentifizierung nicht konfiguriert")
+            raise HTTPException(status_code=503, detail="Dashboard authentication is not configured")
         username = credentials.username if credentials else ""
         password = credentials.password if credentials else ""
         # Fixed-size digests allow constant-time comparisons even with non-ASCII configuration.
@@ -292,7 +292,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if not (user_ok and password_ok and credentials):
             raise HTTPException(
-                status_code=401, detail="Authentifizierung erforderlich",
+                status_code=401, detail="Authentication required",
                 headers={"WWW-Authenticate": 'Basic realm="Trading Dashboard"'},
             )
 
@@ -300,8 +300,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def dashboard() -> Response:
         if not settings.database_url:
             return HTMLResponse(
-                _page('<div class="notice">DB-Fehler: Datenbank nicht konfiguriert. '
-                      "Modus und Aktualität unbekannt.</div>"), status_code=503,
+                _page('<div class="notice">Database error: database is not configured. '
+                      "Mode and freshness are unknown.</div>"), status_code=503,
             )
         try:
             snapshots, events = _read_analytics(settings)
@@ -309,8 +309,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception:  # noqa: BLE001
             # Driver errors can contain connection strings or credentials.
             return HTMLResponse(
-                _page('<div class="notice">DB-Fehler: Analytics-Daten nicht verfügbar. '
-                      "Modus und Aktualität unbekannt.</div>"), status_code=503,
+                _page('<div class="notice">Database error: analytics data is unavailable. '
+                      "Mode and freshness are unknown.</div>"), status_code=503,
             )
 
     return app

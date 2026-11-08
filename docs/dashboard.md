@@ -1,170 +1,170 @@
-# Dashboard und PostgreSQL-Analytics
+# Dashboard and PostgreSQL Analytics
 
-Diese Einrichtung nutzt die **vorhandene** PostgreSQL-Datenbank, legt keinen
-zweiten Server an und verändert den Trading-Bot nicht. Das separate Dashboard
-zeigt maximal je 100 Snapshots und Ereignisse; es hat keine Order-Endpunkte.
-Basic Auth und eine SELECT-only-DB-Rolle beschränken den lesenden Zugriff.
-Die Anzeige ist kein Börsenstatus und kein Nachweis, dass der Bot läuft.
-Diese lokale Variante verzichtet ausdrücklich auf PostgreSQL-TLS; sie ist
-deshalb **nicht abhör- oder manipulationssicher**, auch nicht im lokalen Netz.
+This setup uses the **existing** PostgreSQL database, does not create a second
+server, and does not modify the trading bot. The separate dashboard displays
+up to 100 snapshots and 100 events; it has no order endpoints. Basic Auth and a
+SELECT-only database role restrict read access. The display is not an exchange
+status and does not prove that the bot is running. This local setup deliberately
+omits PostgreSQL TLS and is therefore **not protected against eavesdropping or
+tampering**, even on the local network.
 
-## Temporärer Betrieb auf dem CM5-Cluster
+## Temporary Operation on the CM5 Cluster
 
-Auf `rasp-clu-01` wurde zusätzlich zur unten beschriebenen allgemeinen
-Einrichtung ein temporärer Dashboard-Test im Namespace `trading` eingerichtet:
-Deployment `trading-dashboard-local-52247d45`, Datenbank `appdb`, Schema
-`trading_analytics`, vorhandene Rollen `tradingbot_writer` und
-`trade_dashboard_reader`. Der Writer benötigt Datenbank-CREATE; der Leser
-hat SELECT, aber kein INSERT auf den Analytics-Tabellen. Weitere öffentliche
-Datenbankrechte sind damit nicht generell ausgeschlossen.
+In addition to the general setup described below, a temporary dashboard test
+was configured on `rasp-clu-01` in the `trading` namespace: deployment
+`trading-dashboard-local-52247d45`, database `appdb`, schema
+`trading_analytics`, and the existing roles `tradingbot_writer` and
+`trade_dashboard_reader`. The writer requires database CREATE; the reader has
+SELECT but not INSERT privileges on the analytics tables. This does not
+necessarily exclude other public database privileges.
 
-Der Dashboard-Pod verwendet Host-Netzwerk, da die Verbindung über den
-Cluster-Service vom vorhandenen PostgreSQL-`pg_hba.conf` abgelehnt wurde. Er
-bindet nur an `127.0.0.1:8080` auf Node 1. Lokale Prozesse auf Node 1 können
-den Port ebenfalls erreichen; Basic Auth und SSH-Zugang entsprechend schützen.
-Zugangsdaten liegen auf Node 1 ausschließlich in der Datei
-`/mnt/nvme_data/trading_simulation_59325f0/dashboard-access.txt` (Modus 0600)
-und im Kubernetes-Secret. Für den Zugriff vom eigenen Rechner:
+The dashboard pod uses host networking because the existing PostgreSQL
+`pg_hba.conf` rejected connections through the cluster service. It binds only
+to `127.0.0.1:8080` on Node 1. Local processes on Node 1 can also reach the
+port, so protect it with Basic Auth and SSH access. Credentials are stored on
+Node 1 only in `/mnt/nvme_data/trading_simulation_59325f0/dashboard-access.txt`
+(mode 0600) and in the Kubernetes Secret. To access it from your computer:
 
 ```sh
 rtk proxy ssh -N -o BatchMode=yes -o StrictHostKeyChecking=yes -L 127.0.0.1:8080:127.0.0.1:8080 raspi-cm5-node-1.kienzle
 ```
 
-Danach `http://127.0.0.1:8080/` im lokalen Browser öffnen. Die Zugangsdaten
-bei Bedarf selbst über SSH aus der geschützten Datei auf Node 1 lesen;
-Passwörter nicht in Chat, Logs oder Repository übernehmen. Den SSH-Prozess zum
-Beenden des Zugriffs mit Ctrl+C schließen.
+Then open `http://127.0.0.1:8080/` in your local browser. If needed, read the
+credentials yourself over SSH from the protected file on Node 1; do not copy
+passwords into chat, logs, or the repository. Press Ctrl+C to stop the SSH
+process and end access.
 
-Der bestehende Dry-Run wurde einmal mit unverändertem Portfolio auf den
-Analytics-Writer umgestellt. Die alte Instanz ist gestoppt und darf nicht
-parallel gestartet werden. Ein Portfolio- und Journal-Abzug unmittelbar vor
-dem Neustart liegt auf Node 1 unter
+The existing dry run was switched to the analytics writer once, with its
+portfolio unchanged. The old instance is stopped and must not be started in
+parallel. A portfolio and journal snapshot taken immediately before the
+restart is on Node 1 at
 `/mnt/nvme_data/trading_simulation_59325f0/pre-analytics-52247d45/`.
-Das verwendete Dashboard-Manifest und die Image-Bausteine liegen auf Node 1
-unter `/mnt/nvme_data/trading_simulation_59325f0/deployment-52247d45/`.
-Analytics beginnt erst mit der Umstellung, ist Best Effort und keine
-Recovery. Der Dry-Run hat weiterhin keinen automatischen Neustart; Images und
-Laufzeitmanifeste sind nicht durch einen versionierten Release reproduzierbar.
-Dies ist keine Freigabe für Live-Orders.
+The dashboard manifest and image build files used are on Node 1 at
+`/mnt/nvme_data/trading_simulation_59325f0/deployment-52247d45/`. Analytics
+begins only after the switch, is best effort, and is not a recovery mechanism.
+The dry run still has no automatic restart; images and runtime manifests cannot
+be reproduced from a versioned release. This is not authorization for live
+orders.
 
-## Vorbedingungen und Sicherheitsgrenzen
+## Prerequisites and Security Boundaries
 
-* Das vorhandene PostgreSQL-Overlay initialisiert `appdb`/`trading_analytics`
-  nur bei **neuem** Datenverzeichnis. Bei bestehenden Daten zuerst das Schema
-  und beide Tabellen samt Indizes prüfen; `scripts/init_postgres_analytics.sql`
-  ist das vorhandene Schema. Schemaänderungen, Backup und Rollback separat
-  planen. Das SQL unten ändert Eigentümer und entzieht PUBLIC Rechte an diesen
-  Objekten; andere Nutzer können dadurch Zugriff verlieren.
-* Das bisherige StatefulSet konfiguriert **kein TLS**, der bisherige
-  ConfigMap-Standard ist `sslmode=disable` und `trading_db` ist der initiale
-  PostgreSQL-Superuser. Statt des Superusers getrennte Rollen verwenden.
-  Writer-, Dashboard- und administrative DB-Verbindungen mit
-  `sslmode=disable` übertragen Abfragen und Daten unverschlüsselt; der Server
-  wird nicht kryptografisch authentifiziert. Teilnehmer auf dem Netzwerkpfad
-  können mitlesen und Verbindungen manipulieren oder sich als Server ausgeben.
-  PostgreSQL-SCRAM statt Passwort-Klartextverfahren verwenden; SCRAM ersetzt
-  weder Transportverschlüsselung noch Serverauthentifizierung.
-* Das lokale Netz allein ist keine Sicherheitsgrenze. DB-Service und Port 5432
-  nicht extern veröffentlichen; Netzwerkzugriff mit Firewall, PostgreSQL
-  `pg_hba.conf` und gegebenenfalls durch die tatsächlich durchgesetzten
-  Kubernetes-NetworkPolicies auf erforderliche Clients beschränken. Betreiber
-  muss die Wirksamkeit prüfen; dieses Overlay erstellt keine NetworkPolicy.
-  Wenn andere Systeme das Netz oder Nodes nicht vertrauenswürdig mitbenutzen,
-  diese Klartextvariante nicht verwenden.
-* Kubernetes-Secrets sind nicht automatisch verschlüsselt: Encryption at rest,
-  enges RBAC für Secrets, Pods und `pods/portforward`, vertrauenswürdige Nodes,
-  getrennte Zugangsdaten, Rotation und Audit sind Betreiberpflicht. Keine
-  Secrets, DSNs oder echten Passwörter ins Repository, Shell-History, Logs,
-  Image oder Kommandozeilenargumente schreiben. Secret-Bereitstellung
-  über den bestehenden Secret-Manager bzw. gesicherte Dateien organisieren.
-  Nach Rotation Pods neu starten; Umgebungsvariablen aktualisieren sich nicht.
+* The existing PostgreSQL overlay initializes `appdb`/`trading_analytics` only
+  for a **new** data directory. For existing data, first inspect the schema
+  and both tables, including their indexes; `scripts/init_postgres_analytics.sql`
+  defines the existing schema. Plan schema changes, backups, and rollback
+  separately. The SQL below changes ownership and revokes PUBLIC privileges
+  on these objects; this may remove access for other users.
+* The current StatefulSet does **not** configure TLS; the current ConfigMap
+  default is `sslmode=disable`, and `trading_db` is the initial PostgreSQL
+  superuser. Use separate roles instead of the superuser. Writer, dashboard,
+  and administrative database connections using `sslmode=disable` transmit
+  queries and data unencrypted, and the server is not cryptographically
+  authenticated. Network-path participants can read traffic, tamper with
+  connections, or impersonate the server. Use PostgreSQL SCRAM rather than
+  plaintext password authentication; SCRAM does not replace transport
+  encryption or server authentication.
+* The local network alone is not a security boundary. Do not expose the
+  database service or port 5432 externally. Restrict network access to
+  required clients using a firewall, PostgreSQL `pg_hba.conf`, and, where
+  actually enforced, Kubernetes NetworkPolicies. The operator must verify
+  enforcement; this overlay does not create a NetworkPolicy. Do not use this
+  plaintext configuration if other systems sharing the network or nodes are
+  untrusted.
+* Kubernetes Secrets are not encrypted automatically. Encryption at rest,
+  restrictive RBAC for Secrets, pods, and `pods/portforward`, trusted nodes,
+  separate credentials, rotation, and auditing are the operator's
+  responsibility. Do not put Secrets, DSNs, or real passwords in the
+  repository, shell history, logs, images, or command-line arguments. Manage
+  Secret provisioning through the existing Secret Manager or secured files.
+  Restart pods after rotation; environment variables are not updated
+  automatically.
 
-## Rollen einmalig einrichten
+## Set Up Roles Once
 
-Als administrativer Benutzer mit Rollen- und Objektverwaltungsrechten
-**zur richtigen bestehenden Datenbank** ausführen (das DSN liegt beispielsweise
-in `PGSERVICE`, dort für diese Variante `sslmode=disable` setzen; Zugangsdaten in einer
-geschützten libpq-Passdatei). Der Vorgang scheitert absichtlich, wenn die beiden
-Rollennamen bereits existieren; nicht blind erneut ausführen. Die Verbindung
-bleibt auch beim Setzen der Passwörter unverschlüsselt und anfällig für aktive
-Angriffe; nur auf einem entsprechend kontrollierten Netzwerkpfad verwenden.
+Run this as an administrative user with role and object management privileges
+**against the correct existing database** (for example, the DSN is in
+`PGSERVICE`; set `sslmode=disable` there for this setup and store credentials
+in a protected libpq password file). The operation intentionally fails if
+either role name already exists; do not rerun it blindly. The connection
+remains unencrypted and vulnerable to active attacks while setting passwords;
+use it only over a suitably controlled network path.
 
 ```sh
 rtk proxy psql -X -v ON_ERROR_STOP=1 --single-transaction -f k8s/overlays/trading-dashboard/analytics-roles.sql
 rtk proxy psql -X
 ```
 
-In der administrativen interaktiven psql-Sitzung anschließend jeweils
-`\password trading_analytics_writer` und `\password trading_dashboard_reader`
-verwenden. Vorher sind beide Login-Rollen ohne Passwort nicht für
-Passwortauthentifizierung nutzbar. Separat aus dem Secret-Manager die
-Passwörter bereitstellen, nicht identische Passwörter verwenden.
+Then, in the interactive administrative psql session, run
+`\password trading_analytics_writer` and `\password trading_dashboard_reader`.
+Until passwords are set, neither login role can be used for password
+authentication. Retrieve the passwords separately from the Secret Manager
+and do not reuse the same password.
 
-Die Tabelleigentümerrolle Writer erhält absichtlich mehr als INSERT: Der
-bestehende Bot führt beim Verbinden `CREATE SCHEMA/TABLE/INDEX IF NOT EXISTS`
-aus. Deshalb benötigt er Datenbank-CREATE, Schema-CREATE und Eigentümerschaft
-an den Tabellen; er kann Tabellen und Daten ändern oder löschen und andere
-Schemas erzeugen. Das ist **keine append-only-Sicherheitsgrenze**. Die
-Leserrolle besitzt nur USAGE und SELECT auf diesen zwei Tabellen und
-`default_transaction_read_only` als zusätzliche Vorsichtsmaßnahme, nicht als
-Berechtigungsersatz. SQL entzieht PUBLIC-Rechte nur auf den genannten Objekten;
-es ändert keine anderen Rollen oder Datenbanken. Vor Freigabe zusätzlich
-andere PUBLIC- und explizite Grants, Rollenmitgliedschaften, Funktionen,
-Views und TEMP-Rechte in der gesamten Datenbank prüfen und erforderlichenfalls
-entziehen. Keine privilegierten Mitgliedschaften oder zusätzliche Grants an
-den Leser vergeben. Schema-/Tabellenbesitzer und Superuser bleiben mächtig.
-Neue Tabellen und später geänderte Grants erfordern erneute Prüfung.
+The table-owner role, Writer, intentionally receives more than INSERT
+privileges: when connecting, the existing bot runs
+`CREATE SCHEMA/TABLE/INDEX IF NOT EXISTS`. It therefore needs database CREATE,
+schema CREATE, and ownership of the tables; it can modify or delete tables and
+data, and create other schemas. This is **not an append-only security
+boundary**. The reader role has only USAGE and SELECT on these two tables, with
+`default_transaction_read_only` as an additional precaution, not a substitute
+for permissions. The SQL revokes PUBLIC privileges only on the specified
+objects; it does not change other roles or databases. Before deployment, also
+inspect PUBLIC and explicit grants, role memberships, functions, views, and
+TEMP privileges across the entire database, and revoke them as needed. Do not
+grant privileged memberships or additional privileges to the reader. Schema
+and table owners, as well as superusers, remain powerful. New tables and
+subsequent grant changes require another review.
 
-## Writer: vorhandenen Dry-Run ausdrücklich sicher konfigurieren
+## Writer: Explicitly Configure the Existing Dry Run Safely
 
-Das vorhandene `k8s/overlays/analytics-writer` startet bereits den Bot; **kein
-zweites Exemplar daneben starten**. Es ist nicht Teil dieses
-Dashboard-Overlays: Es verwendet `hostPath`, optional breite Secrets,
-`trading_db` und die unverschlüsselte ConfigMap. Vor Inbetriebnahme dessen
-Deployment und Konfiguration gezielt durch den Betreiber anpassen:
+The existing `k8s/overlays/analytics-writer` already starts the bot; **do not
+start a second instance alongside it**. It is not part of this dashboard
+overlay: it uses `hostPath`, potentially broad Secrets, `trading_db`, and the
+unencrypted ConfigMap. Before using it, the operator must specifically adjust
+its deployment and configuration:
 
-1. `DRY_RUN=true`, `ANALYTICS_DB_ENABLED=true`,
-   `ANALYTICS_DB_SCHEMA=trading_analytics` und
-   `ANALYTICS_DB_URL` als Secret mit einer libpq-DSN für
-   `trading_analytics_writer`, `appdb`, den internen DB-Host und
-   `sslmode=disable` setzen. Eine gesetzte URL ersetzt die einzelnen
-   DB-Einstellungen; insbesondere erzwingt `ANALYTICS_DB_SSLMODE` bei
-   gesetzter URL **kein** TLS.
-2. Der Bot lädt die `.env` mit `override=True`: Eine Datei auf dem bestehenden
-   Host-Mount kann `DRY_RUN`, die DSN und andere Umgebungswerte überschreiben.
-   Sie muss vor Start entfernt bzw. durch eine kontrollierte leere Datei
-   ersetzt werden. Auch alternative `POSTGRES_*`-Werte, Runtime-Secrets,
-   Deployment-Rollouts und Dateirechte auditieren. Effektive Konfiguration
-   ohne Ausgabe von Secrets kontrollieren. Keine Exchange-Schlüssel mit
-   Handelsrechten im Dry-Run bereitstellen.
-3. Ein Replikat ist keine verteilte Sperre. Keine parallelen Writer starten;
-   Rolling Updates, manuelle Prozesse und alte Pods ebenfalls ausschließen.
-   Testweise Snapshot-Eingang und `dry_run=true` in PostgreSQL prüfen. Ein
-   gemeldeter Snapshot beweist weder korrekte Isolation noch lückenlose Daten.
+1. Set `DRY_RUN=true`, `ANALYTICS_DB_ENABLED=true`,
+   `ANALYTICS_DB_SCHEMA=trading_analytics`, and `ANALYTICS_DB_URL` as a Secret
+   containing a libpq DSN for `trading_analytics_writer`, `appdb`, the internal
+   database host, and `sslmode=disable`. A configured URL overrides the
+   individual database settings; in particular, `ANALYTICS_DB_SSLMODE` does
+   **not** enforce TLS when a URL is set.
+2. The bot loads `.env` with `override=True`: a file on the existing host mount
+   can override `DRY_RUN`, the DSN, and other environment values. Remove it
+   before startup or replace it with a controlled empty file. Also audit
+   alternative `POSTGRES_*` values, runtime Secrets, deployment rollouts, and
+   file permissions. Check the effective configuration without displaying
+   Secrets. Do not provide exchange keys with trading permissions to the dry
+   run.
+3. A replica is not a distributed lock. Do not start parallel writers; also
+   prevent rolling updates, manual processes, and old pods from running
+   concurrently. Test that snapshots arrive in PostgreSQL and have
+   `dry_run=true`. A reported snapshot proves neither correct isolation nor
+   complete data.
 
-Dieses Repository liefert absichtlich keinen vermeintlich sicheren Writer-Patch:
-Host-Datei, bestehende Secrets und Netzwerkzugriff sind ohne Kenntnis der
-Installation nicht sicher überschreibbar. Bis diese Voraussetzungen erfüllt
-sind und das Klartextrisiko bewusst akzeptiert ist, nicht deployen.
+This repository deliberately does not provide a purportedly safe writer
+patch: without knowing the installation, it cannot safely override the host
+file, existing Secrets, or network access. Do not deploy until these
+prerequisites are met and the plaintext risk is knowingly accepted.
 
-## Dashboard deployen
+## Deploy the Dashboard
 
-1. Image aus dem Repository-Root bauen und in die interne Registry übertragen;
-   Deployment vor Anwendung auf das geprüfte, unveränderliche Image-Digest
-   ändern. `latest` ist nur ein lokaler Platzhalter.
+1. Build the image from the repository root and push it to the internal
+   registry. Before applying, update the deployment to use the verified,
+   immutable image digest. `latest` is only a local placeholder.
 
    ```sh
    rtk proxy docker build -f docker/trading-dashboard.Dockerfile -t trading-dashboard:latest .
    ```
 
-2. Im Namespace `trading-bot` extern ein Secret
-   `trading-dashboard-credentials` mit `DASHBOARD_USER`, `DASHBOARD_PASSWORD`
-   und `DASHBOARD_DATABASE_URL` bereitstellen. Die DSN nutzt ausschließlich
-   `trading_dashboard_reader`, den internen DB-Host und ausdrücklich
-   `sslmode=disable`; URL-Passwort gegebenenfalls korrekt percent-encodieren.
-   Für Basic Auth starke separate Zugangsdaten verwenden. Das Manifest setzt
-   `DASHBOARD_DB_SCHEMA=trading_analytics` fest und benötigt kein CA-Volume.
-3. Nach Bereitstellung des Secrets deployen und ausschließlich lokal zugreifen:
+2. Create a Secret externally in the `trading-bot` namespace named
+   `trading-dashboard-credentials` with `DASHBOARD_USER`, `DASHBOARD_PASSWORD`,
+   and `DASHBOARD_DATABASE_URL`. The DSN must use only
+   `trading_dashboard_reader`, the internal database host, and explicitly
+   `sslmode=disable`; percent-encode the URL password correctly if needed.
+   Use strong, separate credentials for Basic Auth. The manifest fixes
+   `DASHBOARD_DB_SCHEMA=trading_analytics` and does not require a CA volume.
+3. After provisioning the Secret, deploy and access it only locally:
 
    ```sh
    rtk proxy kubectl apply -k k8s/overlays/trading-dashboard
@@ -172,66 +172,67 @@ sind und das Klartextrisiko bewusst akzeptiert ist, nicht deployen.
    rtk proxy kubectl -n trading-bot port-forward --address 127.0.0.1 deployment/trading-dashboard 8080:8080
    ```
 
-   Auf demselben Rechner `http://127.0.0.1:8080/` öffnen und Basic-Auth-
-   Zugangsdaten eingeben. HTTP/Basic Auth ist Klartext: Zugangsdaten niemals
-   über das lokale Netz senden, Port-Forward nicht an `0.0.0.0` binden und
-   keinen Service, Ingress oder ungeschützten Proxy dafür bereitstellen.
-   Die Anwendung bindet nur an Pod-Loopback; eine normale Service-Weiterleitung
-   zur Pod-IP funktioniert nicht. Kubernetes-API-Zugriff und Berechtigung
-   `pods/portforward` per RBAC auf befugte Operatoren begrenzen; auch
-   `pods/exec`, Pod-Erstellung und Secret-Lesen können Zugriff ermöglichen.
-   Den verwendeten Rechner und dessen lokale Benutzer schützen. Port-Forward
-   schützt nicht die separate Klartextverbindung vom Dashboard zu PostgreSQL.
+   On the same computer, open `http://127.0.0.1:8080/` and enter the
+   Basic-Auth credentials. HTTP/Basic Auth is plaintext: never send credentials
+   over the local network, do not bind port forwarding to `0.0.0.0`, and do not
+   expose a Service, Ingress, or unprotected proxy. The application binds only
+   to pod loopback; normal Service forwarding to the pod IP will not work.
+   Restrict Kubernetes API access and the `pods/portforward` permission to
+   authorized operators through RBAC; `pods/exec`, pod creation, and Secret
+   access can also enable access. Secure the computer being used and its local
+   user accounts. Port forwarding does not protect the separate plaintext
+   connection from the dashboard to PostgreSQL.
 
-4. Verifizieren: Ohne/mit falscher Authentifizierung 401, mit richtiger
-   Authentifizierung Dashboard; Port-Forward nur auf localhost erreichbar,
-   weder Service noch Ingress für das Dashboard vorhanden. Mit dem Leser ein SELECT aus beiden Tabellen
-   testen sowie INSERT/UPDATE/DELETE/TRUNCATE außerhalb einer absichtlich
-   read-only Transaktion: alle müssen an DB-Rechten scheitern. Keine
-   Zugangsdaten in Diagnoseausgaben ablegen. 503 bedeutet fehlende Auth-
-   Konfiguration oder DB-Fehler, kein gesundes Dashboard.
+4. Verify that missing or incorrect authentication returns 401 and correct
+   authentication displays the dashboard; port forwarding is reachable only
+   on localhost, and no Service or Ingress exists for the dashboard. Using the
+   reader role, test SELECT on both tables, then test INSERT/UPDATE/DELETE/
+   TRUNCATE outside an intentionally read-only transaction; all must fail due
+   to database permissions. Do not include credentials in diagnostic output.
+   A 503 indicates missing authentication configuration or a database error,
+   not a healthy dashboard.
 
-## Option: später PostgreSQL-TLS einführen
+## Option: Introduce PostgreSQL TLS Later
 
-Der Betreiber muss PostgreSQL-TLS einschalten, ein Serverzertifikat mit dem
-verwendeten DNS-Namen im SAN installieren und die CA unabhängig prüfen.
-`pg_hba.conf` auf `hostssl` mit SCRAM beschränken und keinen passenden
-Klartext-`host`-Fallback zulassen. Beispielsweise muss bei
-`postgres-analytics.trading-bot.svc` genau dieser Name im Zertifikat stehen.
-Die CA-Datei als eigenes read-only ConfigMap-Volume sowohl beim Dashboard als
-auch beim Writer mounten und `PGSSLROOTCERT` auf den jeweiligen Dateipfad
-setzen; nur öffentliche CA-Zertifikate, keine privaten Schlüssel, verwenden.
-Beide Secret-DSNs auf `sslmode=verify-full` und den zertifizierten Hostnamen
-umstellen; die administrative Verbindung ebenfalls umstellen. Secrets und
-Deployment aktualisieren und Pods neu starten. Eine CA-ConfigMap ist in der
-aktuellen Klartextkonfiguration nicht erforderlich. Anschließend echte TLS-
-Verbindung sowie Ablehnung bei falscher CA, falschem Hostnamen und
-Klartextverbindung testen; bloßes `sslmode=require` überprüft den Servernamen
-nicht ausreichend. Diese TLS-Option ist hier nicht vorkonfiguriert und ersetzt
-nicht RBAC und localhost-Port-Forward für das Dashboard.
+The operator must enable PostgreSQL TLS, install a server certificate whose
+SAN includes the DNS name in use, and verify the CA independently. Restrict
+`pg_hba.conf` to `hostssl` with SCRAM and do not allow a matching plaintext
+`host` fallback. For example, the certificate must contain exactly
+`postgres-analytics.trading-bot.svc` when that is the host being used. Mount
+the CA file as a separate read-only ConfigMap volume in both the dashboard and
+writer, and set `PGSSLROOTCERT` to the corresponding file path; use only public
+CA certificates, never private keys. Update both Secret DSNs to use
+`sslmode=verify-full` and the certified hostname; update the administrative
+connection as well. Update the Secrets and deployment, then restart the pods.
+A CA ConfigMap is not required for the current plaintext configuration. Then
+test a real TLS connection and verify that connections are rejected for a
+wrong CA, wrong hostname, or plaintext; `sslmode=require` alone does not
+sufficiently verify the server name. This TLS option is not preconfigured here
+and does not replace RBAC or localhost-only port forwarding for the dashboard.
 
-## Grenzen und Tests
+## Limitations and Tests
 
-Analytics ist best effort, kein dauerhaftes Transaktionsjournal und keine
-PostgreSQL-Portfolio-Recovery: Writes, lokaler Zustand und Risikostatus sind
-nicht atomar, Lücken oder Duplikate sind möglich, Snapshots können veraltet
-sein. Auch die DB-Fehlerbehandlung fängt nicht alle psycopg-Fehler ab; ein
-ununterbrochener Bot-Betrieb bei DB-Ausfall ist nicht garantiert. Die Anzeige
-mischt keine Währungen/Modi in einem Chart, zeigt aber historische LIVE- und
-DRY-RUN-Daten; der zuletzt angezeigte Modus ist kein laufzeitverifizierter
-Schalter. `DRY_RUN_REQUIRE_POSTGRES_RECOVERY=true` verweigert aktuell den
-Start, statt Recovery zu implementieren. Weitere Grenzen stehen in
+Analytics is best effort, not a durable transaction journal or PostgreSQL
+portfolio recovery mechanism: writes, local state, and risk status are not
+atomic; gaps or duplicates are possible, and snapshots may be stale. Database
+error handling also does not catch all psycopg errors; uninterrupted bot
+operation during a database outage is not guaranteed. The display does not
+mix currencies or modes in one chart, but it does show historical LIVE and
+DRY-RUN data; the last displayed mode is not a runtime-verified setting.
+`DRY_RUN_REQUIRE_POSTGRES_RECOVERY=true` currently prevents startup instead of
+implementing recovery. Further limitations are described in
 `docs/postgres_analytics_schema.md`.
 
-Lokale Tests ohne Cluster:
+Local tests without a cluster:
 
 ```sh
 rtk proxy .venv/bin/python -m pytest -q tests/test_trading_dashboard.py tests/test_trading_dashboard_deployment.py
 ```
 
-Optionale echte PostgreSQL-Tests benötigen eine **isolierte Wegwerf-Datenbank**
-und einen Superuser über `TRADING_DASHBOARD_SETUP_TEST_DSN`; der Setup-Test
-erstellt zufällig benannte Rollen/Objekte und rollt die Transaktion zurück.
-Die bestehenden Dashboard-Integrationstests benötigen zusätzlich
-`TRADING_SAFETY_TEST_DSN`. Diese Tests ersetzen weder Server-TLS- noch
-RBAC-Prüfungen im Zielsystem. Ohne diese DSNs werden sie übersprungen.
+Optional integration tests against a real PostgreSQL server require an
+**isolated disposable database** and a superuser via
+`TRADING_DASHBOARD_SETUP_TEST_DSN`; the setup test creates randomly named
+roles and objects, then rolls back the transaction. The existing dashboard
+integration tests also require `TRADING_SAFETY_TEST_DSN`. These tests do not
+replace TLS or RBAC checks on the target system. They are skipped when these
+DSNs are not set.
