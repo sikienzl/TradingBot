@@ -275,6 +275,28 @@ compiler and HEF.
 
 ## Rollout
 
+The separate GitHub Actions workflow `hybrid-release.yml` publishes a
+pre-release source archive and SHA-256 checksum when a tag such as
+`hybrid-v0.1.0` is pushed. This tag namespace does not trigger the Raspberry
+Pi release workflow. The archive is built from the tagged commit and includes
+the Dockerfiles, Kubernetes manifests, rollout scripts and committed model;
+it does not contain built container images, secrets, proprietary compiler
+packages or a newly compiled HEF. Download both release assets and verify
+them before extracting:
+
+```sh
+sha256sum --check trading-hybrid-hybrid-v0.1.0.tar.gz.sha256
+tar -xzf trading-hybrid-hybrid-v0.1.0.tar.gz
+cd trading-hybrid-hybrid-v0.1.0
+```
+
+The rollout script synchronizes the extracted directory with `rsync --delete`
+and builds/imports images on the cluster nodes. Back up existing data,
+inspect its exclusions, and independently verify SSH host keys before running
+it. Kubernetes model storage is separate from the archive and must contain
+the appropriate model and configuration. This package does not fix or validate
+the Kraken v2 tick recorder; do not assume it already collects usable ticks.
+
 After the HEF is present, deploy with:
 
 ```sh

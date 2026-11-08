@@ -1,0 +1,82 @@
+name: Release - Hybrid Cluster Package
+
+on:
+  push:
+    tags:
+      - 'hybrid-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish hybrid cluster pre-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@v4
+
+      - name: Build and verify source package
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^hybrid-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Expected a tag like hybrid-v0.1.0" >&2
+            exit 1
+          }
+          pkg="trading-hybrid-${TAG}"
+          git archive --format=tar.gz --prefix="${pkg}/" \
+            --output="${pkg}.tar.gz" HEAD
+
+          required=(
+            .dockerignore
+            docker/cloud-strategist.Dockerfile
+            docker/hailo-worker.Dockerfile
+            k8s/base/kustomization.yaml
+            k8s/overlays/cloud-strategist/kustomization.yaml
+            k8s/overlays/hailo-worker/daemonset-hailo.yaml
+            k8s/overlays/market-data-relay/deployment-relay.yaml
+            scripts/rollout_hybrid_cluster.sh
+            scripts/download_onnx_model.py
+            scripts/run_hybrid_shadow_mode_smoke_test.py
+            scripts/hailo_prepare_calibration.py
+            src/hailo/preprocessing.py
+            src/hailo/edge_filter_service.py
+            src/hybrid/market_data_relay.py
+            model/hailo_prefilter/timeseries_transformer.onnx
+            model/hailo_prefilter/timeseries_transformer.onnx.data
+            model/hailo_prefilter/model_config.json
+          )
+          for file in "${required[@]}"; do
+            tar -tzf "${pkg}.tar.gz" "${pkg}/${file}" >/dev/null
+          done
+          sha256sum "${pkg}.tar.gz" > "${pkg}.tar.gz.sha256"
+          sha256sum --check "${pkg}.tar.gz.sha256"
+
+      - name: Publish pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg="trading-hybrid-${TAG}"
+          cat > release-notes.txt <<'EOF'
+          Source package for the Hailo hybrid Kubernetes deployment.
+
+          The archive contains the committed source, Dockerfiles, Kubernetes
+          manifests, rollout script and existing model. It does not contain
+          container images, credentials, proprietary Hailo SDK packages, or a
+          newly compiled HEF. Verify the SHA-256 checksum before extracting.
+
+          Review docs/hailo_hybrid_cluster.md before deployment. The rollout
+          script builds images on the cluster nodes and synchronizes using
+          rsync --delete; back up existing data and verify SSH host keys first.
+          The Kraken tick recorder must be validated before using its data for
+          training or calibration.
+          EOF
+          gh release create "$TAG" "${pkg}.tar.gz" "${pkg}.tar.gz.sha256" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease --latest=false \
+            --title "Hybrid Cluster ${TAG}" --notes-file release-notes.txt
