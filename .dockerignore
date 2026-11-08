@@ -1,3 +1,33 @@
+# Local environments, secrets, and repository metadata
+.env*
+.git/
+.venv/
+venv/
+.aider*
+.vscode/
+.idea/
+
+# Generated Python, test, and build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+build/
+dist/
+
+# Local data and training/runtime outputs
+*.csv
+*.db
+*.log
+*.zip
+catboost_info/
+old_data/
+results/
+logs/
+
+# Vendor build inputs must only enter through the named BuildKit context.
 hailo_dataflow_compiler-*.whl
 hailort_*.deb
 hailo8_ai_sw_suite_*.zip

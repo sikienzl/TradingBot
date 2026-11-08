@@ -81,7 +81,7 @@ secret.
 Build and start the compiler environment from an x86_64 Docker host:
 
 ```sh
-DOCKER_BUILDKIT=1 docker buildx build --platform linux/amd64 \
+DOCKER_BUILDKIT=1 docker buildx build --platform linux/amd64 --load \
   -f docker/hailo-compiler.Dockerfile \
   --build-context hailo_packages="$HOME/Schreibtisch/hailo_8/build-inputs" \
   -t trading-hailo-compiler:3.34.0 .
@@ -98,12 +98,80 @@ hailo --version
 hailo parser onnx --help
 ```
 
+The compiler image was built with Hailo Dataflow Compiler 3.34.0, and
+`hailortcli --version` reports HailoRT 4.24.0. The compiler's startup status
+probe still reports HailoRT as `Not Installed`; no physical Hailo device is
+available in this build environment. Parsing the current
+`timeseries_transformer.onnx` was also tested, but the parser exits inside a
+`ReduceMean` conversion with `KeyError: batch`; specifying the sequence input
+format (`NGC`) and shape (`[1,60,9]`) instead reaches the same conversion and
+fails with `KeyError: groups`. This file has opset 18. An isolated re-export of
+the same checkpoint using the PyTorch legacy exporter and opset 14 parsed both
+outputs successfully, and was optimized and compiled to a two-context Hailo-8
+HEF using synthetic calibration data. Across five synthetic test windows, both
+re-exported ONNX outputs matched the PyTorch checkpoint within 1.6e-7 and
+matched the existing ONNX model exactly. The synthetic HEF
+was created only inside a disposable container and is **not suitable for
+deployment**. DFC also warned about unexpected matmul input shapes.
+
+The existing ONNX file is not replaced automatically. On a host with this
+project's training dependencies installed, re-export the existing checkpoint
+to a new path:
+
+```sh
+python -m scripts.hailo_export_onnx \
+  model/hailo_prefilter \
+  model/hailo_prefilter/timeseries_transformer_hailo.onnx
+```
+
+The command loads `model_config.json` and `timeseries_transformer_state.pt`,
+checks the state dictionary strictly, and refuses to overwrite an existing
+file. Validate both model outputs against PyTorch and the existing ONNX model
+on representative data before relying on a new export.
+
 The container opens a shell in `/workspace`; the project model is available at
 `model/hailo_prefilter/`. Use the compiler/Model Zoo commands and calibration
 options supported by the installed SDK version. The model must be calibrated
 with representative windows that match its sequence length and feature order.
 The image only supplies the compiler environment; it does not guess a
 model-specific calibration command or include project trading dependencies.
+
+For a DFC-compatible ONNX model, the image includes a noninteractive compiler
+wrapper. Place the model and a **representative, preprocessed** calibration
+array in the mounted model directory, then run inside the container:
+
+```sh
+python /opt/hailo/hailo_compile_onnx.py \
+  model/hailo_prefilter/timeseries_transformer_hailo.onnx \
+  model/hailo_prefilter/calibration.npy \
+  model/hailo_prefilter/timeseries_transformer_hailo.hef
+```
+
+The calibration file must be a non-empty four-dimensional NHWC NumPy array,
+with the layout, values and preprocessing expected by the parsed model.
+For the tested Transformer export, DFC reported input shape `[N, 1, 60, 9]`;
+the 60-by-9 values must follow the actual inference preprocessing and feature
+order. Confirm the shape again for models with different configurations.
+Random or synthetic calibration data is useful only for pipeline smoke tests,
+not for trading or accuracy assessment. Use `--arch hailo8r` or `--arch
+hailo8l` if the target is not a Hailo-8. The output must not already exist.
+Temporary HARs are created next to the output and removed after the attempt;
+ensure sufficient free space and write permissions there.
+
+The wrapper does not pass `-y` to the parser: automatic acceptance of parser
+recommendations can truncate a model to an intermediate layer. Unsupported
+graphs therefore fail rather than publishing a partial HEF. It validates the
+result with `hailortcli parse-hef` before publishing it, but a parseable HEF
+does not guarantee equivalent inference results. Verify output shapes,
+quantized accuracy against the ONNX model, and execution on the actual device
+before deployment. The tested CPU-only optimizer reduced its optimization level
+to zero and warned that accuracy may be suboptimal.
+
+The test HEF reports input `NHWC(1x60x9)` and outputs named `fc3` and `fc4`,
+not the ONNX tensor names. The current worker's HEF path must be checked and,
+if needed, adapted for this shape and for the mapping of those outputs to
+anomaly score and confidence before deploying the HEF. Training and inference
+preprocessing also need to be reconciled and validated on representative data.
 The source wheel and DEB are excluded from Git and from the repository's
 default Docker build context. The separate named build context contains only
 the two required files and exposes them read-only to their installation steps;
@@ -111,6 +179,20 @@ they are not copied into image layers. The local BuildKit builder still
 receives these proprietary packages to perform the installation. The resulting
 image contains the installed proprietary compiler and runtime, so distribute
 or publish that image only if your Hailo license permits it.
+
+The compiler Dockerfile also removes apt metadata in the same layer that
+installs system packages, disables pip's download cache, and installs the
+compiler wheel from a read-only BuildKit mount. The virtual environment setup
+and compiler installation share one layer so the pre-upgrade pip/setuptools
+files are not retained in a lower image layer. The compiler and its runtime
+dependencies still determine most of the final image size; removing SDK
+libraries without checking the compiler's runtime requirements can make the
+image unusable.
+
+BuildKit's reusable build cache takes additional disk space beyond the image.
+Inspect it with `docker buildx du`; when space is needed, `docker buildx prune`
+removes cache for the selected builder after confirmation. Avoid `--no-cache`
+as a disk-cleanup option: it forces rebuilds but does not remove existing cache.
 
 High-level flow:
 

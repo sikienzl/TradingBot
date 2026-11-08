@@ -40,10 +40,9 @@ RUN apt-get update && \
       python3-tk && \
     rm -rf /var/lib/apt/lists/*
 
-RUN python3.10 -m venv "${VIRTUAL_ENV}" && \
-    "${VIRTUAL_ENV}/bin/python" -m pip install --no-cache-dir --upgrade pip setuptools wheel
-
 RUN --mount=type=bind,from=hailo_packages,source=compiler.whl,target=/tmp/hailo_dataflow_compiler-3.34.0-py3-none-linux_x86_64.whl,ro \
+    python3.10 -m venv "${VIRTUAL_ENV}" && \
+    "${VIRTUAL_ENV}/bin/python" -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
     "${VIRTUAL_ENV}/bin/python" -m pip install --no-cache-dir \
       /tmp/hailo_dataflow_compiler-3.34.0-py3-none-linux_x86_64.whl
 
@@ -63,6 +62,8 @@ RUN groupadd --gid "${HAILO_GID}" hailo && \
       --shell /bin/bash hailo && \
     install -d -o hailo -g hailo /workspace /venv/etc/hailo && \
     chown hailo:hailo /venv/bin /venv/bin/activate
+
+COPY scripts/hailo_compile_onnx.py /opt/hailo/hailo_compile_onnx.py
 
 WORKDIR /workspace
 USER hailo

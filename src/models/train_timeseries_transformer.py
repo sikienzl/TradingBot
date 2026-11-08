@@ -12,6 +12,7 @@ Architecture:
 """
 
 import argparse
+import inspect
 import json
 import logging
 import os
@@ -421,7 +422,8 @@ def export_to_onnx(
     """
     Export PyTorch model to ONNX format.
 
-    Compatible with Hailo-8 & CPUs.
+    Compatible with Hailo-8 & CPUs. PyTorch versions without the dynamo
+    argument already use the legacy exporter.
     """
     model.eval()
 
@@ -430,6 +432,10 @@ def export_to_onnx(
     dummy_input = torch.randn(1, seq_length, n_features, device=model_device)
 
     # Export
+    export_options = {}
+    if "dynamo" in inspect.signature(torch.onnx.export).parameters:
+        export_options["dynamo"] = False
+
     try:
         torch.onnx.export(
             model,
@@ -439,10 +445,12 @@ def export_to_onnx(
             output_names=["anomaly_score", "confidence"],
             opset_version=14,
             do_constant_folding=True,
+            **export_options,
         )
         logger.info(f"✅ Model exported to {output_path}")
-    except Exception as e:
-        logger.error(f"❌ ONNX export failed: {e}")
+    except Exception:
+        logger.exception("❌ ONNX export failed: %s", output_path)
+        raise
 
 
 def export_hailo_assets(output_model_dir: str) -> dict[str, str]:
@@ -535,7 +543,10 @@ def train_transformer(
 
     # Export to ONNX
     onnx_path = Path(output_model_dir) / "timeseries_transformer.onnx"
-    export_to_onnx(model, str(onnx_path), seq_length=config.seq_length)
+    export_to_onnx(
+        model, str(onnx_path),
+        seq_length=config.seq_length, n_features=config.n_features,
+    )
     export_hailo_assets(output_model_dir)
 
     logger.info("🎉 Training complete! Ready for Hailo-8 deployment.")

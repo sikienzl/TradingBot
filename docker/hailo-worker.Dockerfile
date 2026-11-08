@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir \
     grpcio==1.74.0 \
     numpy==2.3.4 \
     onnxruntime==1.23.2 \
+    PyYAML==6.0.2 \
     prometheus-client==0.22.1 \
     websockets==15.0.1
 
