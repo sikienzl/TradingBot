@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -321,12 +322,32 @@ class Portfolio:
                 'initial_portfolio_value': self.initial_portfolio_value,
                 'timestamp': datetime.now(UTC).isoformat(),
             }
-            with open(state_file, 'w') as f:
-                json.dump(state, f, indent=2, default=lambda o: o.isoformat(
-                ) if isinstance(o, datetime) else str(o))
+            directory = parent or '.'
+            temp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode='w', encoding='utf-8', dir=directory,
+                    prefix='.portfolio-state-', delete=False,
+                ) as f:
+                    temp_path = f.name
+                    json.dump(state, f, indent=2, default=lambda o: o.isoformat(
+                    ) if isinstance(o, datetime) else str(o))
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_path, state_file)
+                temp_path = None
+                if os.name == 'posix':
+                    directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+            finally:
+                if temp_path is not None:
+                    os.unlink(temp_path)
             logger.debug(f"Portfolio state saved to {state_file}")
             return True
-        except OSError as e:
+        except (OSError, ValueError, TypeError) as e:
             logger.error(f"Failed to save portfolio state: {e}")
             return False
 
@@ -349,10 +370,7 @@ class Portfolio:
             for trade in self.open_trades.values():
                 ts = trade.get('timestamp')
                 if isinstance(ts, str):
-                    try:
-                        trade['timestamp'] = datetime.fromisoformat(ts)
-                    except ValueError:
-                        trade['timestamp'] = datetime.now(UTC)
+                    trade['timestamp'] = datetime.fromisoformat(ts)
             logger.info(f"Portfolio state loaded from {state_file}")
             logger.info(f"  Cash: {self.cash:.2f} {self.base_currency}")
             logger.info(f"  Holdings: {self.holdings}")
@@ -360,9 +378,9 @@ class Portfolio:
                 logger.info(
                     f"  Open trades restored: {list(self.open_trades.keys())}")
             return True
-        except OSError as e:
+        except (OSError, ValueError, TypeError) as e:
             logger.error(f"Failed to load portfolio state: {e}")
-            return False
+            raise
 
     def get_value(self, prices: dict[str, float]) -> float:
         """
@@ -4611,6 +4629,13 @@ class CryptoTradingBot:
         Executes a (simulated) trade.
         Uses market orders for simplicity; limit orders would be preferable in a real bot.
         """
+        if not self.config.dry_run:
+            logger.error(
+                "LIVE order blocked: durable order recovery and Kraken reconciliation "
+                "are not implemented. Manage existing positions directly on Kraken."
+            )
+            return False
+
         if self.config.dry_run:
             amount_coin = amount_in_base_currency / price
             logger.info(
@@ -4823,7 +4848,6 @@ class CryptoTradingBot:
 
     def _manage_open_trades(self, current_market_data: dict[str, dict], market_analysis: dict | None = None):
         """Monitors open trades for stop-loss, take-profit, time and signal exits."""
-        trades_to_remove = []
         for coin, trade_info in list(self.portfolio.open_trades.items()):
             buy_price = trade_info['buy_price']
             amount_coin = trade_info['amount_coin']
@@ -5001,9 +5025,6 @@ class CryptoTradingBot:
                     f"{exit_reason} → Verkauf {coin} @ {current_price:.4f}")
                 self._execute_trade(coin, "sell", current_price,
                                     amount_coin * current_price, atr=atr, reason=exit_reason)
-                trades_to_remove.append(coin)
-        for coin in trades_to_remove:
-            self.portfolio.remove_trade(coin)
 
     def run(self):
         """Main loop of the bot."""
@@ -5015,6 +5036,9 @@ class CryptoTradingBot:
             safe_config.get('api_secret', ''))
         safe_config['ai_copilot_api_key'] = _mask_secret(
             safe_config.get('ai_copilot_api_key', ''))
+        for field in ('analytics_db_password', 'analytics_db_url'):
+            if safe_config.get(field):
+                safe_config[field] = '<redacted>'
         logger.info(f"Configuration: {safe_config}")
         if self.config.dry_run:
             logger.warning(
@@ -5689,6 +5713,12 @@ if __name__ == "__main__":
             f"   Check interval: {config.check_interval} seconds")
         logger.info(
             f"   Dry-run mode: {'Enabled' if config.dry_run else 'Disabled'}")
+        if not config.dry_run:
+            logger.critical(
+                "LIVE orders including protective sells are blocked until Kraken "
+                "reconciliation and durable recovery are implemented and verified. "
+                "Manage existing positions directly on Kraken."
+            )
         logger.info(
             f"   Simulation mode: {'Enabled' if config.simulate_data else 'Disabled'}")
         logger.info(f"   Stop-loss percent: {config.stop_loss_pct * 100:.1f}%")

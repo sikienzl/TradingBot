@@ -178,20 +178,9 @@ kubectl exec -it <hailo-pod> -n trading-bot -- python3 -c \
 
 ### Step 9: Setup Monitoring (Optional)
 
-```bash
-# Deploy Prometheus & Grafana
-kubectl apply -k k8s/overlays/monitoring/
-
-# Port-forward Prometheus
-kubectl port-forward -n trading-bot svc/prometheus 9090:9090
-
-# Port-forward Grafana
-kubectl port-forward -n trading-bot svc/grafana 3000:3000
-
-# Access:
-# - Prometheus: http://localhost:9090
-# - Grafana: http://localhost:3000 (admin/admin)
-```
+The hybrid services expose Prometheus metrics but do not deploy a Prometheus
+server. A separately managed Prometheus instance can scrape them; Grafana is
+not required. See [K3s deployment monitoring](k8s/README.md#phase-3-monitoring).
 
 ### Step 10: Verify Hailo-8 Inference Loop
 

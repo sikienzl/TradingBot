@@ -1,7 +1,11 @@
 # PostgreSQL Analytics Schema Proposal
 
 This schema is intended for optional analytics-only writes from the trading bot.
-The bot remains operational without PostgreSQL. When enabled, it only appends rows.
+Dry-run can continue without PostgreSQL; analytics writes are best effort and
+do not provide durable recovery. When enabled, the bot only appends rows.
+All live orders, including protective sells, are currently blocked pending
+verified Kraken reconciliation and recovery. Existing positions must be
+managed directly on Kraken.
 
 ## Goals
 

@@ -60,17 +60,30 @@ DB_PASSWORD='<set-postgres-password>' bash scripts/setup_rpi_k3s_cluster.sh
 
 ### Phase 3: Monitoring
 
-```bash
-# Port-forward Prometheus
-kubectl port-forward -n trading-bot svc/prometheus 9090:9090
+The hybrid services expose Prometheus metrics; they do not deploy a Prometheus
+server. Use a separately managed Prometheus server or query the metrics
+endpoints directly. Grafana is not required by the hybrid rollout.
 
-# View Grafana dashboards
-kubectl port-forward -n trading-bot svc/grafana 3000:3000
-```
+The optional dashboard has its own image (`docker/trading-dashboard.Dockerfile`)
+and overlay (`k8s/overlays/trading-dashboard`). It is not deployed by the
+hybrid rollout. Create the `trading-dashboard-credentials` Secret separately
+with `DASHBOARD_USER`, `DASHBOARD_PASSWORD`, and `DASHBOARD_DATABASE_URL`;
+use a dedicated PostgreSQL role with SELECT privileges only on the analytics
+tables. Set `DASHBOARD_DB_SCHEMA` in that Secret if it is not `public`.
+The image listens only on pod loopback, with no Kubernetes Service or ingress.
+After deploying and importing the image on the master, access it locally with
+`kubectl -n trading-bot port-forward deployment/trading-dashboard 8080:8080`.
+Basic authentication requires TLS for remote access; do not expose it directly.
+Dashboard snapshots are best-effort analytics, not a Kraken reconciliation.
+
+**Live-order safety:** The trading bot currently blocks all live orders,
+including stop-loss and other protective sells, until durable recovery and
+Kraken reconciliation are implemented and verified. Manage existing positions
+directly on Kraken. This block does not affect dry-run orders.
 
 ### Host Monitoring on the Master
 
-If you want the cluster master to look like the single Raspberry Pi setup, install monitoring on the host instead of running Grafana inside K3s:
+If you want to install Prometheus and Node Exporter on the cluster master:
 
 ```bash
 sudo bash /opt/trading_2/scripts/install_monitoring_host.sh /opt/trading_2
@@ -80,12 +93,13 @@ This installs and enables:
 
 - `prometheus.service`
 - `prometheus-node-exporter.service`
-- `grafana-server.service`
 - `pnl-exporter.service`
 - `scorecard-status.timer`
 - `node-exporter-textfile.service`
 
-Grafana will be available on port 3000 and use the same provisioning files as the single-Pi host setup.
+The host installer does not install or remove Grafana. The hybrid rollout's
+monitoring step requires Prometheus to be installed; use `--skip-monitoring`
+when it is managed separately or not installed.
 
 ## Node Labels
 
@@ -95,6 +109,28 @@ The overlays are scheduled by stable node labels instead of hostnames:
 - `trading-role=hailo-worker` for the worker node with the Hailo module
 
 The setup script applies these labels automatically.
+
+### Persistent relay ticks
+
+The market-data-relay overlay requests a dedicated 20 GiB PVC with a
+`Retain` reclaim policy and schedules its single writer on `master-ssd`.
+Before deployment, ensure the SSD is mounted at `/mnt/nvme_data` and that the
+installed K3s local-path provisioner supports the `nodePath` parameter and
+allows `/mnt/nvme_data/trading_db` for that node. Configure this separately
+in Ansible; the StorageClass alone does not configure the provisioner or mount
+the SSD. Verify the resulting PV's node affinity and actual host path, and
+ensure its directory is writable by container UID 1000. Local-path PVC sizes
+are requests, not necessarily enforced quotas; monitor free space and back up
+the data separately. The manifests cannot detect a missing SSD mount: without
+an Ansible/systemd mount dependency and verification, provisioning can write to
+the OS disk instead. Do not deploy until that protection is in place. The
+existing PostgreSQL StorageClass has the same provisioner prerequisite.
+
+The relay writes SQLite under the PVC rather than `/tmp`, but persistence is
+best effort: failed writes are logged and streaming continues, disconnects can
+lose events, and the in-memory gRPC window is not restored after restart.
+The retention setting is not automatically enforced by the relay. This is not
+a complete or lossless historical dataset.
 
 ## Dateien in diesem Verzeichnis
 

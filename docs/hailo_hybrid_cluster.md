@@ -297,6 +297,23 @@ it. Kubernetes model storage is separate from the archive and must contain
 the appropriate model and configuration. This package does not fix or validate
 the Kraken v2 tick recorder; do not assume it already collects usable ticks.
 
+The rollout configures and verifies a host Prometheus service by default; it
+does not install, configure, restart, or remove Grafana. If Prometheus is not
+installed or its configuration is managed elsewhere, pass `--skip-monitoring`.
+Existing Grafana installations and data are left untouched.
+
+Portfolio snapshots and trade events in PostgreSQL are currently optional
+analytics, not a complete order-recovery mechanism. The dry-run portfolio
+state file is replaced atomically, but it does not close the gap between a
+live Kraken order and a database write. Do not rely on these artifacts to
+resume live trading after a power failure: open orders, fills, balances and
+risk state require an explicit reconciliation process before new orders.
+Set `PORTFOLIO_STATE_PATH` to a writable persistent file for dry-run state;
+the default is empty, so saving fails and is logged unless it is configured.
+Dry-run trading can still continue when PostgreSQL or state-file writes fail.
+Until recovery is implemented and verified, all live orders are blocked,
+including protective sells; manage existing positions directly on Kraken.
+
 After the HEF is present, deploy with:
 
 ```sh

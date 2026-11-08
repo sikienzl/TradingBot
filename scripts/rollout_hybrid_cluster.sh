@@ -39,7 +39,7 @@ Usage: bash scripts/rollout_hybrid_cluster.sh [options]
 
 Options:
   --skip-image-build      Skip docker build/import on both nodes.
-  --skip-monitoring       Skip Prometheus/Grafana config reload on node 1.
+  --skip-monitoring       Skip Prometheus config reload and verification on node 1.
   --skip-smoke-test       Skip the local shadow-mode smoke test on node 1.
   --help                  Show this help text.
 
@@ -151,10 +151,10 @@ apply_manifests() {
 }
 
 reload_monitoring() {
-  info "Reloading Prometheus and Grafana configs on node 1"
-  remote_sudo "$NODE1_IP" "mkdir -p /etc/prometheus /etc/prometheus/rules /etc/grafana/provisioning/datasources /etc/grafana/provisioning/dashboards /etc/grafana/dashboards"
+  info "Reloading Prometheus config on node 1"
+  remote_sudo "$NODE1_IP" "mkdir -p /etc/prometheus /etc/prometheus/rules"
   remote_sudo "$NODE1_IP" "cd '$APP_DIR' && WORKER_NODE=\$(kubectl get nodes -l trading-role='${HAILO_LABEL_VALUE}' -o jsonpath='{.items[0].metadata.name}') && python3 scripts/render_cluster_prometheus_config.py '$KUBE_NAMESPACE' \"\$WORKER_NODE\" > /etc/prometheus/prometheus.yml && cp '$APP_DIR/deploy/trading-alerts.yml' /etc/prometheus/rules/trading-alerts.yml"
-  remote_sudo "$NODE1_IP" "cp '$APP_DIR/deploy/grafana-datasource.yml' /etc/grafana/provisioning/datasources/trading.yml; cp '$APP_DIR/deploy/grafana-dashboard-provisioning.yml' /etc/grafana/provisioning/dashboards/trading.yml; cp '$APP_DIR/deploy/grafana-dashboard.json' /etc/grafana/dashboards/trading-bot.json; systemctl restart prometheus; systemctl restart grafana-server"
+  remote_sudo "$NODE1_IP" "systemctl restart prometheus"
 }
 
 run_smoke_test() {
@@ -163,18 +163,11 @@ run_smoke_test() {
 }
 
 verify_monitoring() {
-  info "Verifying Prometheus hybrid targets and Grafana availability"
+  info "Verifying Prometheus hybrid targets"
   remote_sudo "$NODE1_IP" "set -euo pipefail
 prom_targets=\$(mktemp)
 prom_query=\$(mktemp)
 trap 'rm -f \"\$prom_targets\" \"\$prom_query\"' EXIT
-attempt=0
-until curl -fsSI http://127.0.0.1:3000/login >/dev/null 2>&1; do
-  attempt=\$((attempt + 1))
-  [[ \$attempt -lt 20 ]] || exit 1
-  sleep 3
-done
-
 attempt=0
 while true; do
   curl -fsS http://127.0.0.1:9090/api/v1/targets > \"\$prom_targets\"
@@ -211,8 +204,7 @@ import json
 import os
 data = json.load(open(os.environ['PROM_QUERY_PATH']))
 print(json.dumps(data['data']['result'], indent=2))
-PY
-curl -fsSI http://127.0.0.1:3000/login | head -n 1"
+PY"
 }
 
 show_status() {

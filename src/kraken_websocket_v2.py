@@ -6,20 +6,33 @@ Replaces CCXT polling with event-driven WebSocket ticks.
 
 Features:
 - Persistent connection with auto-reconnect
-- Tick buffering to NVMe SSD for replay & analysis
+- Tick buffering to SQLite for replay & analysis
 - Multi-coin support (configurable pairs)
 - Metrics: connection uptime, ticks/sec, buffer health
+
+Ticks combine the latest received complete ticker quote and latest trade for
+each symbol, not an atomic market snapshot; either component can become stale
+when its channel is quiet. Both are required; incomplete events are discarded.
+The trade channel supplies the trade price and size:
+ticker volume is a 24-hour total, not a trade size. Tick timestamps are the
+later of the two exchange timestamps. Cached data is cleared on reconnect.
+
+The default SQLite buffer under /tmp is ephemeral, including for the relay.
+Set HAILO8_LOCAL_TICK_PATH to a persistent mounted directory when replay must
+survive restarts; the in-memory relay window itself is not persisted here.
 """
 
 import asyncio
 import json
 import logging
+import math
 import os
 import sqlite3
-from collections.abc import Callable
+import time
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +46,7 @@ logger = logging.getLogger(__name__)
 class Tick:
     """Single tick from Kraken WebSocket V2"""
 
-    timestamp: float          # Unix timestamp (nanoseconds / 1e9)
+    timestamp: float         # Later exchange timestamp of the quote and trade
     symbol: str              # e.g., "BTC/USD"
     bid: float               # Best bid price
     ask: float               # Best ask price
@@ -48,45 +61,43 @@ class Tick:
         return asdict(self)
 
     @classmethod
-    def from_kraken_message(cls, msg: list, symbol: str) -> "Tick":
-        """
-        Parse Kraken WebSocket V2 tick message.
-
-        V2 message format (ticker channel):
-        [
-            <channel_id>,
-            {
-                "bid": <price>,
-                "ask": <price>,
-                "last": <price>,
-                "volume": <volume>,
-                "vwap": <vwap>,
-                "low": <low>,
-                "high": <high>,
-                "change": <change>,
-                "change_pct": <change_pct>
-            },
-            "<channel_name>",
-            "<pair>"
-        ]
-        """
-        if not msg or len(msg) < 2:
-            raise ValueError(f"Invalid Kraken message format: {msg}")
-
-        data = msg[1]
-        timestamp = datetime.utcnow().timestamp()
-
+    def from_kraken_message(cls, quote: dict, trade: dict) -> "Tick":
+        """Combine validated Kraken v2 ticker and trade data for one symbol."""
+        if quote["symbol"] != trade["symbol"]:
+            raise ValueError("Ticker and trade symbols do not match")
+        bid = _number(quote, "bid", positive=True)
+        ask = _number(quote, "ask", positive=True)
         return cls(
-            timestamp=timestamp,
-            symbol=symbol,
-            bid=float(data.get("bid", 0)),
-            ask=float(data.get("ask", 0)),
-            mid=(float(data.get("bid", 0)) + float(data.get("ask", 0))) / 2,
-            bid_size=float(data.get("bid_qty", 0)),
-            ask_size=float(data.get("ask_qty", 0)),
-            last_trade_price=float(data.get("last", 0)),
-            last_trade_size=float(data.get("volume", 0)),
+            timestamp=max(_timestamp(quote), _timestamp(trade)),
+            symbol=quote["symbol"],
+            bid=bid,
+            ask=ask,
+            mid=(bid + ask) / 2,
+            bid_size=_number(quote, "bid_qty"),
+            ask_size=_number(quote, "ask_qty"),
+            last_trade_price=_number(trade, "price", positive=True),
+            last_trade_size=_number(trade, "qty", positive=True),
         )
+
+
+def _number(data: dict, key: str, *, positive: bool = False) -> float:
+    value = data[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"Invalid {key}")
+    value = float(value)
+    if not math.isfinite(value) or value < 0 or (positive and value == 0):
+        raise ValueError(f"Invalid {key}")
+    return value
+
+
+def _timestamp(data: dict) -> float:
+    value = data["timestamp"]
+    if not isinstance(value, str):
+        raise TypeError("Invalid timestamp")
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        raise ValueError("Timestamp must include a timezone")
+    return parsed.timestamp()
 
 
 class KrakenWebSocketV2:
@@ -97,8 +108,7 @@ class KrakenWebSocketV2:
 
     Channels:
     - ticker: Real-time bid/ask updates
-    - ohlc: 1m OHLC candles
-    - spread: Spread updates
+    - trade: Latest executed trade price and size
     """
 
     KRAKEN_WS_URL = "wss://ws.kraken.com/v2"
@@ -108,14 +118,14 @@ class KrakenWebSocketV2:
         self,
         pairs: list[str],
         buffer_path: str | None = None,
-        tick_callback: Callable[[Tick], None] | None = None,
+        tick_callback: Callable[[Tick], Awaitable[None]] | None = None,
     ):
         """
         Initialize Kraken WebSocket V2 client.
 
         Args:
             pairs: List of trading pairs, e.g., ["BTC/USD", "ETH/USD"]
-            buffer_path: Path to store ticks (SQLite DB)
+            buffer_path: SQLite directory; use persistent storage for replay
             tick_callback: Async callback function for incoming ticks
         """
         self.pairs = pairs
@@ -125,6 +135,8 @@ class KrakenWebSocketV2:
         self.ticks_received = 0
         self.last_tick_time = None
         self.connection_start_time = None
+        self._quotes: dict[str, dict] = {}
+        self._trades: dict[str, dict] = {}
 
         # Storage setup
         self.buffer_path = Path(buffer_path or os.getenv(
@@ -184,17 +196,23 @@ class KrakenWebSocketV2:
             True if successful
         """
         try:
+            self._quotes.clear()
+            self._trades.clear()
+            if self.ws:
+                await self.ws.close()
+                self.ws = None
             logger.info(f"Connecting to {self.KRAKEN_WS_URL}")
             self.ws = await websockets.connect(
                 self.KRAKEN_WS_URL,
                 ping_interval=self.PING_INTERVAL,
             )
             self.connected = True
-            self.connection_start_time = datetime.utcnow()
+            self.connection_start_time = datetime.now(UTC)
 
-            # Subscribe to ticker channel for each pair
+            # Subscribe to both channels for each pair.
             for pair in self.pairs:
                 await self._subscribe_ticker(pair)
+                await self._subscribe_trade(pair)
 
             logger.info("✅ Connected to Kraken WebSocket V2")
             return True
@@ -202,6 +220,9 @@ class KrakenWebSocketV2:
         except Exception as e:
             logger.error(f"❌ WebSocket connection failed: {e}")
             self.connected = False
+            if self.ws:
+                await self.ws.close()
+                self.ws = None
             return False
 
     async def _subscribe_ticker(self, pair: str):
@@ -210,11 +231,20 @@ class KrakenWebSocketV2:
             "method": "subscribe",
             "params": {
                 "channel": "ticker",
-                "pair": [pair],
+                "symbol": [pair],
+                "event_trigger": "bbo",
             },
         }
         await self.ws.send(json.dumps(subscription))
         logger.info(f"Subscribed to ticker for {pair}")
+
+    async def _subscribe_trade(self, pair: str):
+        """Request the latest trades, then live trade updates."""
+        subscription = {
+            "method": "subscribe",
+            "params": {"channel": "trade", "symbol": [pair], "snapshot": True},
+        }
+        await self.ws.send(json.dumps(subscription))
 
     async def disconnect(self):
         """Gracefully disconnect from WebSocket"""
@@ -228,7 +258,7 @@ class KrakenWebSocketV2:
         Main loop: listen for ticks indefinitely with auto-reconnect.
 
         Incoming messages are:
-        1. Stored to SQLite on NVMe
+        1. Stored to the configured SQLite buffer (best effort)
         2. Passed to callback (if provided)
         """
         reconnect_count = 0
@@ -247,6 +277,8 @@ class KrakenWebSocketV2:
             try:
                 async for message in self.ws:
                     await self._handle_message(message)
+                self.connected = False
+                await asyncio.sleep(5)
 
             except websockets.exceptions.ConnectionClosed:
                 logger.warning(
@@ -260,32 +292,76 @@ class KrakenWebSocketV2:
                 await asyncio.sleep(5)
 
     async def _handle_message(self, raw_msg: str):
-        """Process incoming WebSocket message"""
+        """Process v2 envelopes, discarding incomplete or invalid data entries."""
         try:
             msg = json.loads(raw_msg)
-
-            # Ignore subscription confirmations
-            if isinstance(msg, dict) and "result" in msg:
-                logger.debug(f"Subscription result: {msg}")
+            if not isinstance(msg, dict):
+                return
+            if msg.get("method") == "subscribe":
+                if msg.get("success") is False:
+                    logger.error("Kraken subscription failed: %s", msg.get("error"))
+                    self.connected = False
+                    if self.ws:
+                        await self.ws.close()
+                return
+            channel = msg.get("channel")
+            if channel not in ("ticker", "trade") or msg.get("type") not in (
+                "snapshot", "update"
+            ) or not isinstance(msg.get("data"), list):
                 return
 
-            # Handle ticker data
-            if isinstance(msg, list) and len(msg) >= 3:
-                channel_name = msg[2]
-                if channel_name == "ticker":
-                    pair = msg[3] if len(msg) > 3 else self.pairs[0]
-                    tick = Tick.from_kraken_message(msg, pair)
-                    await self._store_tick(tick)
+            changed = set()
+            for entry in msg["data"]:
+                try:
+                    if not isinstance(entry, dict):
+                        raise TypeError("Entry is not an object")
+                    symbol = entry["symbol"]
+                    if not isinstance(symbol, str) or symbol not in self.pairs:
+                        raise ValueError("Unexpected symbol")
+                    timestamp = _timestamp(entry)
+                    if channel == "ticker":
+                        _number(entry, "bid", positive=True)
+                        _number(entry, "ask", positive=True)
+                        _number(entry, "bid_qty")
+                        _number(entry, "ask_qty")
+                        previous = self._quotes.get(symbol)
+                        if previous and timestamp < _timestamp(previous):
+                            continue
+                        self._quotes[symbol] = entry
+                    else:
+                        _number(entry, "price", positive=True)
+                        _number(entry, "qty", positive=True)
+                        trade_id = entry["trade_id"]
+                        if isinstance(trade_id, bool) or not isinstance(trade_id, int):
+                            raise ValueError("Invalid trade_id")
+                        previous = self._trades.get(symbol)
+                        if previous and trade_id <= previous["trade_id"]:
+                            continue
+                        self._trades[symbol] = entry
+                    changed.add(symbol)
+                except (KeyError, TypeError, ValueError, OverflowError) as e:
+                    logger.warning("Discarding invalid Kraken %s entry: %s", channel, e)
+                    continue
+                if msg["type"] == "update":
+                    await self._emit_tick(symbol)
 
-                    # Call callback if provided
-                    if self.tick_callback:
-                        await self.tick_callback(tick)
+            # A trade snapshot can contain 50 historical trades: emit only the
+            # most recent per symbol rather than replaying them as live ticks.
+            if msg["type"] == "snapshot":
+                for symbol in sorted(changed):
+                    await self._emit_tick(symbol)
+        except json.JSONDecodeError as e:
+            logger.warning("Invalid Kraken message: %s", e)
 
-                    self.ticks_received += 1
-                    self.last_tick_time = datetime.utcnow()
-
-        except Exception as e:
-            logger.warning(f"Error handling message: {e}")
+    async def _emit_tick(self, symbol: str):
+        if symbol not in self._quotes or symbol not in self._trades:
+            return
+        tick = Tick.from_kraken_message(self._quotes[symbol], self._trades[symbol])
+        await self._store_tick(tick)
+        if self.tick_callback:
+            await self.tick_callback(tick)
+        self.ticks_received += 1
+        self.last_tick_time = datetime.now(UTC)
 
     async def _store_tick(self, tick: Tick):
         """Store tick to SQLite database"""
@@ -318,7 +394,7 @@ class KrakenWebSocketV2:
 
     def cleanup_old_ticks(self):
         """Remove ticks older than retention period"""
-        cutoff_date = datetime.utcnow() - timedelta(days=self.retention_days)
+        cutoff_date = datetime.now(UTC) - timedelta(days=self.retention_days)
         cutoff_timestamp = cutoff_date.timestamp()
 
         try:
@@ -350,7 +426,7 @@ class KrakenWebSocketV2:
         Returns:
             List of Tick objects
         """
-        cutoff = datetime.utcnow().timestamp() - seconds
+        cutoff = time.time() - seconds
 
         try:
             conn = sqlite3.connect(self.db_path)
@@ -388,7 +464,7 @@ class KrakenWebSocketV2:
         """Get connection & throughput metrics"""
         uptime = None
         if self.connection_start_time:
-            uptime = (datetime.utcnow() -
+            uptime = (datetime.now(UTC) -
                       self.connection_start_time).total_seconds()
 
         ticks_per_sec = 0
@@ -409,7 +485,7 @@ class KrakenWebSocketV2:
 @asynccontextmanager
 async def kraken_websocket_session(
     pairs: list[str],
-    tick_callback: Callable[[Tick], None] | None = None,
+    tick_callback: Callable[[Tick], Awaitable[None]] | None = None,
 ):
     """
     Context manager for Kraken WebSocket session.

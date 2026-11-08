@@ -1,0 +1,22 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-path-master-ticks
+provisioner: rancher.io/local-path
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  nodePath: /mnt/nvme_data/trading_db
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: market-data-relay-ticks
+  namespace: trading-bot
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path-master-ticks
+  resources:
+    requests:
+      storage: 20Gi

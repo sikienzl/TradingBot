@@ -17,26 +17,13 @@ fi
 
 [[ -d "$SOURCE_DIR" ]] || _die "Source directory not found: $SOURCE_DIR"
 
-if [[ ! -f "${SOURCE_DIR}/deploy/grafana-datasource.yml" ]]; then
+if [[ ! -f "${SOURCE_DIR}/deploy/prometheus.yml" ]]; then
   _die "Monitoring configs not found in source directory: ${SOURCE_DIR}"
 fi
 
 _info "Installing monitoring dependencies..."
 apt-get update -q
-apt-get install -y -q prometheus prometheus-node-exporter apt-transport-https software-properties-common wget gpg rsync python3-numpy python3-pandas python3-pydantic
-
-if [[ ! -f /etc/apt/sources.list.d/grafana.list ]]; then
-  _info "Adding Grafana APT repository..."
-  mkdir -p /etc/apt/keyrings
-  wget -q -O /tmp/grafana.gpg.asc https://apt.grafana.com/gpg.key
-  gpg --batch --yes --dearmor -o /etc/apt/keyrings/grafana.gpg /tmp/grafana.gpg.asc
-  rm -f /tmp/grafana.gpg.asc
-  echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" \
-    > /etc/apt/sources.list.d/grafana.list
-  apt-get update -q
-fi
-
-apt-get install -y -q grafana
+apt-get install -y -q prometheus prometheus-node-exporter rsync python3-numpy python3-pandas python3-pydantic
 
 mkdir -p "$INSTALL_DIR"
 
@@ -94,29 +81,9 @@ systemctl enable --now node-exporter-textfile.service
 systemctl enable --now scorecard-status.timer
 systemctl restart prometheus
 
-# ── Grafana provisioning ───────────────────────────────────────────────────────
-_info "Configuring Grafana..."
-mkdir -p /etc/grafana/provisioning/datasources
-mkdir -p /etc/grafana/provisioning/dashboards
-mkdir -p /etc/grafana/dashboards
-
-cp "${SOURCE_DIR}/deploy/grafana-datasource.yml"              /etc/grafana/provisioning/datasources/trading.yml
-cp "${SOURCE_DIR}/deploy/grafana-dashboard-provisioning.yml"  /etc/grafana/provisioning/dashboards/trading.yml
-cp "${SOURCE_DIR}/deploy/grafana-dashboard.json"              /etc/grafana/dashboards/trading-bot.json
-
-mkdir -p /etc/systemd/system/grafana-server.service.d
-cp "${SOURCE_DIR}/deploy/grafana-memory-limit.conf" /etc/systemd/system/grafana-server.service.d/memory-limit.conf
-cp "${SOURCE_DIR}/deploy/grafana-low-power.conf" /etc/systemd/system/grafana-server.service.d/low-power.conf
-
-systemctl daemon-reload
-systemctl enable --now grafana-server
-systemctl restart grafana-server
-_ok "Grafana enabled. Dashboard will be available at http://<host-ip>:3000"
-
 _ok "Monitoring services enabled."
 
 echo
 echo "Browser endpoints (LAN):"
-echo "  Grafana:       http://<host-ip>:3000   (admin / admin)"
 echo "  Prometheus:    http://<host-ip>:9090"
 echo "  Node Exporter: http://<host-ip>:9100/metrics"

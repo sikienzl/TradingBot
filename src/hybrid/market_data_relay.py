@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import time
+import uuid
 from collections import defaultdict
 
 from src.hybrid.grpc_bridge import EdgeFilterRpcClient, grpc_available
@@ -15,12 +16,18 @@ logger = logging.getLogger(__name__)
 
 
 class MarketDataRelayService:
+    """Relay rolling windows with process-local, per-pair tick sequence numbers.
+
+    The stream ID changes on restart; sequence numbers are not durable.
+    """
+
     def __init__(self):
         self.pairs = os.getenv("CRYPTO_PAIRS", "BTC/USD,ETH/USD").split(",")
         self.window_size = int(os.getenv("HAILO8_WINDOW_SIZE", "100"))
         self.flush_every_ticks = int(
             os.getenv("HAILO8_RELAY_FLUSH_TICKS", "10"))
         self.node_name = os.getenv("NODE_NAME")
+        self.stream_id = uuid.uuid4().hex
         self.target = os.getenv("HAILO8_EDGE_GRPC_TARGET",
                                 "trading-hailo-worker:50051")
         self.metrics_port = int(os.getenv("HAILO8_RELAY_METRICS_PORT", "9203"))
@@ -59,7 +66,12 @@ class MarketDataRelayService:
             ticks=list(buffer),
             source="kraken-websocket-relay",
             node_name=self.node_name,
-            metadata={"flush_every_ticks": self.flush_every_ticks},
+            metadata={
+                "flush_every_ticks": self.flush_every_ticks,
+                "relay_stream_id": self.stream_id,
+                "relay_first_sequence": self.counters[tick.symbol] - len(buffer) + 1,
+                "relay_last_sequence": self.counters[tick.symbol],
+            },
         )
         ack = await self.client.submit_market_snapshot(snapshot)
         self.service_metrics.observe_event(

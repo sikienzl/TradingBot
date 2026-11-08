@@ -6,7 +6,7 @@ Downloads the Time-Series-Transformer ONNX model from a configurable URL
 and places it at the path expected by HAILO8_MODEL_PATH.
 
 Configuration via environment variables (or .env file):
-  MODEL_DOWNLOAD_URL        Download URL (required — no default)
+  MODEL_DOWNLOAD_URL        Download URL (required when a download is needed)
   MODEL_DOWNLOAD_SHA256     Expected SHA-256 hex digest for integrity check (optional)
   HAILO8_MODEL_PATH         Target path (default: /models/hailo/timeseries_transformer.onnx)
   MODEL_DOWNLOAD_RETRIES    Number of retry attempts (default: 3)
@@ -20,9 +20,12 @@ Usage:
 
 import argparse
 import hashlib
+import http.client
 import logging
 import os
+import re
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -61,28 +64,25 @@ def _sha256_of_file(path: Path) -> str:
 
 def _download_with_progress(url: str, dest: Path, timeout: int) -> None:
     """Download *url* → *dest* with a simple progress indicator."""
-
-    def _reporthook(count: int, block_size: int, total_size: int) -> None:
-        if total_size <= 0:
-            sys.stdout.write(f"\r  Downloaded {count * block_size / 1024:.0f} KB")
-        else:
-            pct = min(count * block_size / total_size * 100, 100)
-            mb = count * block_size / 1024 / 1024
-            total_mb = total_size / 1024 / 1024
-            sys.stdout.write(f"\r  {pct:5.1f}%  {mb:.1f}/{total_mb:.1f} MB")
-        sys.stdout.flush()
-
-    # urllib does not accept a single timeout kwarg in urlretrieve; use opener
-    opener = urllib.request.build_opener()
-    opener.addheaders = [("User-Agent", "TradingBot/1.0 model-downloader")]
-
-    import socket
-    old_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(timeout)
-    try:
-        urllib.request.urlretrieve(url, filename=str(dest), reporthook=_reporthook)
-    finally:
-        socket.setdefaulttimeout(old_timeout)
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "TradingBot/1.0 model-downloader"}
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response, dest.open("wb") as out:
+        length = response.headers.get("Content-Length")
+        total_size = int(length) if length is not None else None
+        downloaded = 0
+        while chunk := response.read(64 * 1024):
+            out.write(chunk)
+            downloaded += len(chunk)
+            if total_size:
+                sys.stdout.write(f"\r  {min(downloaded / total_size * 100, 100):5.1f}%")
+            else:
+                sys.stdout.write(f"\r  Downloaded {downloaded / 1024:.0f} KB")
+            sys.stdout.flush()
+        if total_size is not None and downloaded != total_size:
+            raise OSError("Download length does not match Content-Length")
+        if not downloaded:
+            raise OSError("Downloaded file is empty")
     sys.stdout.write("\n")
 
 
@@ -111,10 +111,19 @@ def download_model(
     Raises:
         SystemExit on unrecoverable error.
     """
+    if expected_sha256 and not re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha256):
+        logger.error("MODEL_DOWNLOAD_SHA256 must contain exactly 64 hexadecimal characters.")
+        sys.exit(1)
+    if retries < 1 or timeout < 1:
+        logger.error("Retries and timeout must be positive integers.")
+        sys.exit(1)
+
     target_path = Path(target_path).resolve()
-    target_path.parent.mkdir(parents=True, exist_ok=True)
 
     if target_path.exists() and not force:
+        if not target_path.is_file() or target_path.stat().st_size == 0:
+            logger.error("Existing model is not a non-empty regular file: %s", target_path)
+            sys.exit(1)
         logger.info("Model already exists at %s", target_path)
         if expected_sha256:
             actual = _sha256_of_file(target_path)
@@ -127,22 +136,44 @@ def download_model(
                     "  expected: %s\n  actual:   %s", expected_sha256, actual
                 )
         else:
-            logger.info("Skipping download (use --force to overwrite).")
+            logger.warning(
+                "Skipping download without verifying the existing file "
+                "(use --force to overwrite)."
+            )
             return target_path
 
-    tmp_path = target_path.with_suffix(".tmp")
+    if not url:
+        logger.error("MODEL_DOWNLOAD_URL is required when a download is needed.")
+        sys.exit(1)
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
 
     for attempt in range(1, retries + 1):
         logger.info("Downloading model (attempt %d/%d)…", attempt, retries)
-        logger.info("  From: %s", url)
         logger.info("  To:   %s", target_path)
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{target_path.name}.", suffix=".part", dir=target_path.parent)
+        os.close(fd)
+        tmp_path = Path(tmp_name)
         try:
             _download_with_progress(url, tmp_path, timeout)
-            break
-        except (OSError, urllib.error.URLError, ValueError) as exc:
-            logger.warning("Download attempt %d failed: %s", attempt, exc)
-            if tmp_path.exists():
-                tmp_path.unlink()
+            if expected_sha256:
+                actual = _sha256_of_file(tmp_path)
+                if actual.lower() != expected_sha256.lower():
+                    logger.error("SHA-256 mismatch; downloaded file was not installed.")
+                    sys.exit(1)
+                logger.info("✅ SHA-256 verified.")
+            else:
+                logger.warning(
+                    "No SHA-256 provided — skipping integrity check. "
+                    "A digest from a trusted source can detect mismatched content."
+                )
+            size_mb = tmp_path.stat().st_size / 1024 / 1024
+            os.replace(tmp_path, target_path)
+            logger.info("✅ Model saved: %s (%.1f MB)", target_path, size_mb)
+            return target_path
+        except (OSError, urllib.error.URLError, ValueError, http.client.HTTPException) as exc:
+            # Exception messages may contain URL credentials or query parameters.
+            logger.warning("Download attempt %d failed (%s).", attempt, type(exc).__name__)
             if attempt < retries:
                 wait = 5 * attempt
                 logger.info("Retrying in %d s…", wait)
@@ -150,30 +181,8 @@ def download_model(
             else:
                 logger.error("All %d download attempts failed. Exiting.", retries)
                 sys.exit(1)
-
-    # Integrity check
-    if expected_sha256:
-        actual = _sha256_of_file(tmp_path)
-        if actual.lower() != expected_sha256.lower():
-            logger.error(
-                "❌ SHA-256 integrity check FAILED:\n"
-                "  expected: %s\n  actual:   %s\n"
-                "  The downloaded file may be corrupted or tampered with. Aborting.",
-                expected_sha256, actual,
-            )
+        finally:
             tmp_path.unlink(missing_ok=True)
-            sys.exit(1)
-        logger.info("✅ SHA-256 verified.")
-    else:
-        logger.warning(
-            "No SHA-256 provided — skipping integrity check. "
-            "Set MODEL_DOWNLOAD_SHA256 for tamper protection."
-        )
-
-    tmp_path.rename(target_path)
-    size_mb = target_path.stat().st_size / 1024 / 1024
-    logger.info("✅ Model saved: %s (%.1f MB)", target_path, size_mb)
-    return target_path
 
 
 def main() -> None:
@@ -214,16 +223,6 @@ def main() -> None:
         help="Overwrite existing model (env: MODEL_DOWNLOAD_FORCE=true)",
     )
     args = parser.parse_args()
-
-    if not args.url:
-        logger.error(
-            "MODEL_DOWNLOAD_URL is not set.\n"
-            "Set it via environment variable or pass --url <url>.\n"
-            "Example:\n"
-            "  MODEL_DOWNLOAD_URL=https://your-model-host/timeseries_transformer.onnx \\\n"
-            "  python scripts/download_onnx_model.py"
-        )
-        sys.exit(1)
 
     download_model(
         url=args.url,

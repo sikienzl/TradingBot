@@ -5,6 +5,7 @@ resources:
   - ../../base
   - deployment-relay.yaml
   - service-relay.yaml
+  - tick-storage.yaml
 
 namespace: trading-bot
 

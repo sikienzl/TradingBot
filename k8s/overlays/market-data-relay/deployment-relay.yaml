@@ -8,6 +8,8 @@ metadata:
     component: market-data-relay
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: trading-bot
@@ -52,7 +54,7 @@ spec:
                 fieldRef:
                   fieldPath: spec.nodeName
             - name: HAILO8_LOCAL_TICK_PATH
-              value: "/tmp/trading_ticks"
+              value: "/var/lib/trading-ticks"
           ports:
             - name: metrics
               containerPort: 9203
@@ -69,3 +71,10 @@ spec:
             runAsNonRoot: true
             runAsUser: 1000
             allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: tick-storage
+              mountPath: /var/lib/trading-ticks
+      volumes:
+        - name: tick-storage
+          persistentVolumeClaim:
+            claimName: market-data-relay-ticks

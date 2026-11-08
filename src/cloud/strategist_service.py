@@ -444,7 +444,7 @@ class GPT5StrategistService:
                 "confidence": 0.85,
                 "reasoning": "[SHADOW] Simulated response; no trade may be executed",
                 "risk_level": 0.4,
-                "position_size_pct": 1.0,
+                "position_size_pct": 0.0,
                 "tokens_input": 0,
                 "tokens_output": 0,
                 "cost_usd": 0.0,

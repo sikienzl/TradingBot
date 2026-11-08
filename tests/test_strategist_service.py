@@ -3,7 +3,9 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, Mock, patch
 
 from src.cloud.strategist_service import GPT5StrategistService
+from src.hailo.edge_filter_service import HailoEdgeFilterService
 from src.hybrid.decision_gate import AnomalyAlert, HybridDecisionGate
+from src.hybrid.transport import EdgeAlertPayload
 
 
 class _AsyncContext:
@@ -105,6 +107,39 @@ def test_shadow_response_cannot_authorize_trade() -> None:
     response = asyncio.run(service._call_gpt5("test prompt"))
 
     assert response["decision"] == "VETO"
+    assert response["position_size_pct"] == 0.0
+
+
+def test_edge_strategist_shadow_pipeline_never_calls_api_or_executes_order() -> None:
+    strategist = _service()
+    strategist.api_key = "test-key"
+    strategist.shadow_mode = True
+    strategist._call_gpt5 = GPT5StrategistService._call_gpt5.__get__(strategist)
+    edge = HailoEdgeFilterService.__new__(HailoEdgeFilterService)
+    edge.node_name = "test-edge"
+    edge.strategist_timeout = 10
+    edge.metrics = {"alerts_forwarded": 0}
+    edge.service_metrics = Mock()
+    edge.strategist_client = Mock()
+
+    async def forward(payload, timeout):
+        return await strategist.process_anomaly_payload(payload)
+
+    edge.strategist_client.process_anomaly_alert = AsyncMock(
+        side_effect=forward
+    )
+
+    with patch("src.cloud.strategist_service.aiohttp.ClientSession") as http:
+        asyncio.run(edge.emit_alert(_alert()))
+
+    http.assert_not_called()
+    edge.strategist_client.process_anomaly_alert.assert_awaited_once()
+    payload = edge.strategist_client.process_anomaly_alert.await_args.args[0]
+    assert isinstance(payload, EdgeAlertPayload)
+    decision = asyncio.run(strategist.process_anomaly_payload(payload))
+    assert decision.decision == "VETO"
+    assert decision.position_size_pct == 0.0
+    assert edge.metrics["alerts_forwarded"] == 1
 
 
 def test_live_request_uses_bearer_auth_and_openai_compatible_payload() -> None:

@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import time
+from collections import OrderedDict
 from datetime import datetime
 
 from src.hailo.inference import AnomalyDetector, TimeSeriesTransformerONNX
@@ -80,6 +81,9 @@ class HailoEdgeFilterService:
         # WebSocket client
         self.ws_client = None
         self.grpc_server = None
+        self._snapshot_lock = asyncio.Lock()
+        self._relay_sequences: OrderedDict[tuple[str, str], int] = OrderedDict()
+        self._blocked_snapshot_pairs: set[str] = set()
         self.strategist_client = None
         if self.strategist_target and grpc_available():
             self.strategist_client = StrategistRpcClient(
@@ -129,8 +133,6 @@ class HailoEdgeFilterService:
                 # Run inference & check for anomalies
                 alert_dict = self.detector.update(tick_dict)
 
-            self.metrics["ticks_processed"] += 1
-            self.metrics["last_update"] = datetime.utcnow().isoformat()
             if self.model is not None:
                 self.metrics["inference_time_ms"] = round(
                     self.model.last_inference_seconds * 1000.0, 3
@@ -138,12 +140,7 @@ class HailoEdgeFilterService:
                 self.service_metrics.set_value(
                     "last_inference_ms", self.metrics["inference_time_ms"]
                 )
-            self.service_metrics.observe_event(
-                "tick_processed", time.perf_counter() - started
-            )
-            self.service_metrics.set_value(
-                "ticks_processed", self.metrics["ticks_processed"])
-
+            anomaly_alert = None
             if alert_dict:
                 self.metrics["anomalies_detected"] += 1
                 self.service_metrics.observe_event("anomaly_detected")
@@ -159,52 +156,121 @@ class HailoEdgeFilterService:
                     self.metrics["alerts_deduplicated"] += 1
                     logger.debug(
                         "Bloom filter suppressed duplicate alert: %s", bloom_key)
-                    return None
-                self._alert_bloom.add(bloom_key)
+                else:
+                    self._alert_bloom.add(bloom_key)
 
-                # Periodically reset the bloom filter to allow new alerts after
-                # the suppression window expires.
-                if self.metrics["ticks_processed"] % self._bloom_reset_ticks == 0:
-                    self._alert_bloom.clear()
-                    logger.debug("Bloom filter reset after %d ticks", self._bloom_reset_ticks)
+                    # Preserve the existing reset cadence for non-duplicate alerts.
+                    if (self.metrics["ticks_processed"] + 1) % self._bloom_reset_ticks == 0:
+                        self._alert_bloom.clear()
+                        logger.debug("Bloom filter reset after %d ticks", self._bloom_reset_ticks)
 
-                # Create AnomalyAlert for hybrid gate
-                anomaly_alert = AnomalyAlert(
-                    timestamp=datetime.utcnow(),
-                    hailo_score=alert_dict["anomaly_score"],
-                    window_size=alert_dict["window_size"],
-                    signal_type=alert_dict["signal_type"],
-                    confidence=alert_dict["confidence"],
-                    market_context={
-                        **self.detector.get_buffer_stats(),
-                        "inference_latency_ms": alert_dict.get("inference_latency_ms", 0.0),
-                        "model_provider": alert_dict.get("model_provider", "unknown"),
-                    },
-                    coin=symbol,
-                )
+                    anomaly_alert = AnomalyAlert(
+                        timestamp=datetime.utcnow(),
+                        hailo_score=alert_dict["anomaly_score"],
+                        window_size=alert_dict["window_size"],
+                        signal_type=alert_dict["signal_type"],
+                        confidence=alert_dict["confidence"],
+                        market_context={
+                            **self.detector.get_buffer_stats(),
+                            "inference_latency_ms": alert_dict.get("inference_latency_ms", 0.0),
+                            "model_provider": alert_dict.get("model_provider", "unknown"),
+                        },
+                        coin=symbol,
+                    )
+                    await self.emit_alert(anomaly_alert)
 
-                # Emit alert (via Redis/RabbitMQ in production)
-                await self.emit_alert(anomaly_alert)
-                return anomaly_alert
+            self.service_metrics.observe_event(
+                "tick_processed", time.perf_counter() - started
+            )
+            self.service_metrics.set_value(
+                "ticks_processed", self.metrics["ticks_processed"] + 1)
+            self.metrics["ticks_processed"] += 1
+            self.metrics["last_update"] = datetime.utcnow().isoformat()
+            return anomaly_alert
         except Exception as e:
             logger.error(f"Error processing tick: {e}")
             self.service_metrics.observe_event("tick_error")
-        return None
+            raise
 
     async def process_market_snapshot(self, snapshot: MarketSnapshotPayload) -> TransportAck:
-        """Consume a market snapshot sent by the master-node relay."""
+        """Consume a relay window, skipping already seen sequenced ticks.
+
+        Sequence watermarks are in-memory and bounded; restarts and evictions
+        can replay ticks. Legacy snapshots without sequence metadata retain
+        their original processing behavior. Gaps are logged, not recovered.
+        On error or cancellation, the affected pair is blocked for the life
+        of this process, including new stream IDs and unsequenced snapshots.
+        The detector or alert delivery may already have side effects; no
+        automatic replay or rollback is safe. Blocks are not durable across
+        restarts and require operator reconciliation before restarting.
+        """
         if not snapshot.ticks:
             return TransportAck(accepted=False, message="snapshot did not contain ticks")
         started = time.perf_counter()
 
-        latest_alert = None
-        for tick_dict in snapshot.tick_dicts():
-            latest_alert = await self.process_tick_dict(tick_dict, snapshot.pair) or latest_alert
+        sequence_keys = ("relay_stream_id", "relay_first_sequence", "relay_last_sequence")
+        sequenced = any(key in snapshot.metadata for key in sequence_keys)
+        if sequenced:
+            stream_id = snapshot.metadata.get("relay_stream_id")
+            first = snapshot.metadata.get("relay_first_sequence")
+            last = snapshot.metadata.get("relay_last_sequence")
+            if (
+                not isinstance(stream_id, str) or not stream_id
+                or type(first) is not int or type(last) is not int
+                or first < 1 or last - first + 1 != len(snapshot.ticks)
+            ):
+                return TransportAck(accepted=False, message="invalid relay sequence metadata")
+
+        async with self._snapshot_lock:
+            if snapshot.pair in self._blocked_snapshot_pairs:
+                return TransportAck(
+                    accepted=False,
+                    message="pair blocked after uncertain tick processing failure",
+                    metadata={"pair": snapshot.pair, "stream_blocked": True, "processed_tick_count": 0},
+                )
+            ticks = snapshot.tick_dicts()
+            key = (snapshot.pair, stream_id) if sequenced else None
+            previous = self._relay_sequences.get(key) if key else None
+            if sequenced and first > (previous or 0) + 1:
+                logger.warning(
+                    "Relay sequence gap for %s: expected %d, received %d",
+                    snapshot.pair, (previous or 0) + 1, first,
+                )
+            if previous is not None:
+                ticks = ticks[max(0, previous - first + 1):]
+
+            latest_alert = None
+            for index, tick_dict in enumerate(ticks):
+                try:
+                    latest_alert = await self.process_tick_dict(tick_dict, snapshot.pair) or latest_alert
+                except asyncio.CancelledError:
+                    self._blocked_snapshot_pairs.add(snapshot.pair)
+                    logger.error("Snapshot cancelled during tick processing; blocking pair %s", snapshot.pair)
+                    raise
+                except Exception:
+                    self._blocked_snapshot_pairs.add(snapshot.pair)
+                    logger.exception("Snapshot tick failed; blocking pair %s", snapshot.pair)
+                    return TransportAck(
+                        accepted=False,
+                        message="tick processing failed; pair blocked due to uncertain side effects",
+                        metadata={
+                            "pair": snapshot.pair,
+                            "tick_count": len(snapshot.ticks),
+                            "processed_tick_count": index,
+                            "failed_sequence": last - len(ticks) + index + 1 if key else None,
+                            "stream_blocked": True,
+                        },
+                    )
+                if key:
+                    self._relay_sequences[key] = last - len(ticks) + index + 1
+                    self._relay_sequences.move_to_end(key)
+                    if len(self._relay_sequences) > 1024:
+                        self._relay_sequences.popitem(last=False)
 
         self.service_metrics.observe_event(
             "market_snapshot", time.perf_counter() - started
         )
-        self.service_metrics.set_value("snapshot_ticks", len(snapshot.ticks))
+        self.service_metrics.set_value("snapshot_ticks", len(ticks))
 
         return TransportAck(
             accepted=True,
@@ -212,6 +278,7 @@ class HailoEdgeFilterService:
             metadata={
                 "pair": snapshot.pair,
                 "tick_count": len(snapshot.ticks),
+                "processed_tick_count": len(ticks),
                 "alert_emitted": latest_alert is not None,
             },
         )
