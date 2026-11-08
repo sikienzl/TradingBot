@@ -41,20 +41,14 @@ docker build -f docker/cloud-strategist.Dockerfile -t trading-cloud:latest .
 ### Phase 2: Build & Deploy
 
 ```bash
-# Apply base configuration
-kubectl apply -k k8s/base/
-
-# Deploy Hailo-Worker Daemonset (Node 2 only)
-kubectl apply -f k8s/overlays/hailo-worker/
-
-# Deploy market-data relay on the master node (Pi 1 -> Pi 2 gRPC stream)
-kubectl apply -k k8s/overlays/market-data-relay/
-
-# Deploy Cloud-Strategist Deployment (Node 1+)
-kubectl apply -f k8s/overlays/cloud-strategist/
+# Deploy the complete staging or production profile (choose one).
+# These overlays reference shared resources outside their directories.
+kustomize build --load-restrictor LoadRestrictionsNone k8s/overlays/staging/ | kubectl apply -f -
+# Or the production profile, which also stays in dry-run/shadow mode by default:
+kustomize build --load-restrictor LoadRestrictionsNone k8s/overlays/production/ | kubectl apply -f -
 
 # Deploy Postgres analytics on the SSD1-backed master node
-kubectl apply -k k8s/overlays/postgres-analytics/
+kustomize build --load-restrictor LoadRestrictionsNone k8s/overlays/postgres-analytics/ | kubectl apply -f -
 
 # Verify pods are running
 kubectl get pods -n trading-bot
@@ -160,6 +154,13 @@ See `.env.hailo8.example` for the full list:
 - `KRAKEN_WEBSOCKET_V2_ENABLED`: Enable WebSocket instead of CCXT polling
 - `ANALYTICS_DB_HOST`: K3s service name for the master-node Postgres sink
 
+The shared base and production configurations default to `DRY_RUN=true` and
+`GPT5_SHADOW_MODE=true`. To opt into live trading, deliberately set both values
+to `false` in the production patch, inspect the rendered manifests, and replace
+all placeholder credentials before applying. The runtime does not use the
+Kubernetes API, so the shared service account has no Kubernetes permissions
+and does not mount an API token.
+
 ## Analytics Storage Layout
 
 - The master node NVMe path hosts the canonical Postgres analytics database via the `local-path-master-ssd1` StorageClass.
@@ -196,7 +197,7 @@ This prints the active Postgres `data_directory` and the current row counts / la
 To generate analytics rows inside the cluster, deploy the dedicated dry-run writer workload:
 
 ```bash
-kubectl apply -k k8s/overlays/analytics-writer/
+kustomize build --load-restrictor LoadRestrictionsNone k8s/overlays/analytics-writer/ | kubectl apply -f -
 kubectl -n trading-bot rollout status deploy/trading-analytics-writer
 ```
 

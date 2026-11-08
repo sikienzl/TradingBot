@@ -121,6 +121,13 @@ jobs:
             fi
           fi
 
+      - name: Enforce hybrid runtime lint
+        run: |
+          ruff check \
+            src/cloud/strategist_service.py \
+            src/hybrid/decision_gate.py \
+            tests/test_strategist_service.py
+
   tests:
     name: Unit tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest

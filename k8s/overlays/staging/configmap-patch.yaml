@@ -1,0 +1,12 @@
+- op: replace
+  path: /data/DRY_RUN
+  value: "true"
+- op: replace
+  path: /data/GPT5_SHADOW_MODE
+  value: "true"
+- op: replace
+  path: /data/LOG_LEVEL
+  value: DEBUG
+- op: replace
+  path: /data/HAILO8_ANOMALY_THRESHOLD
+  value: "70"

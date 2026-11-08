@@ -4,26 +4,28 @@ kind: Kustomization
 namespace: trading-bot-staging
 
 resources:
-  - ../../base/namespace.yaml
+  - namespace.yaml
   - ../../base/service-account.yaml
   - ../../base/configmap-hybrid.yaml
+  - ../hailo-worker/pvc-nvme.yaml
+  - ../hailo-worker/pvc-onnx-model.yaml
+  - ../hailo-worker/daemonset-hailo.yaml
+  - ../hailo-worker/service-hailo.yaml
+  - ../cloud-strategist/deployment-cloud.yaml
+  - ../cloud-strategist/service.yaml
+  - ../market-data-relay/deployment-relay.yaml
+  - ../market-data-relay/service-relay.yaml
 
 commonLabels:
   environment: staging
 
-# Staging: single replica to save resources
 replicas:
-  - name: hailo-worker
-    count: 1
-  - name: cloud-strategist
+  - name: trading-cloud-strategist
     count: 1
 
 patches:
-  - path: resource-limits-staging.yaml
-
-configMapGenerator:
-  - name: trading-env-staging
-    literals:
-      - DRY_RUN=true
-      - LOG_LEVEL=DEBUG
-      - HAILO8_ANOMALY_THRESHOLD=70
+  - path: configmap-patch.yaml
+    target:
+      version: v1
+      kind: ConfigMap
+      name: trading-bot-hybrid-config

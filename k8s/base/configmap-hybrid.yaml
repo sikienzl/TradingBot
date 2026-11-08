@@ -17,7 +17,7 @@ data:
   # Hailo-8 Configuration
   HAILO8_ENABLED: "true"
   HAILO8_MARKETDATA_MODE: "grpc"
-  HAILO8_MODEL_PATH: "/app/model/hailo_prefilter/timeseries_transformer.onnx"
+  HAILO8_MODEL_PATH: "/models/timeseries_transformer.onnx"
   HAILO8_MODEL_CONFIG_PATH: "/app/model/hailo_prefilter/model_config.json"
   HAILO8_BATCH_SIZE: "32"
   HAILO8_INFERENCE_INTERVAL_MS: "100"
@@ -64,7 +64,7 @@ data:
   # Trading Core
   EXCHANGE: "kraken"
   BASE_CURRENCY: "EUR"
-  DRY_RUN: "false"
+  DRY_RUN: "true"
   MIN_ENTRY_SCORE: "65"
   FALLBACK_MIN_SCORE: "50"
   TABULAR_MIN_CONFIDENCE: "0.5"

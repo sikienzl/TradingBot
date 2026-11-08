@@ -8,7 +8,7 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -50,9 +50,6 @@ class HybridDecisionGate:
             "HYBRID_GATE_USE_HISTORICAL_DATA", "true").lower() == "true"
         self.emit_metrics = os.getenv(
             "HYBRID_GATE_EMIT_METRICS", "true").lower() == "true"
-        self.gpt5_calls_today = 0
-        self.skip_after_daily_calls = int(
-            os.getenv("HYBRID_GATE_SKIP_AFTER_DAILY_CALLS", "50"))
 
         logger.info(f"HybridDecisionGate initialized: enabled={self.enabled}")
 
@@ -81,11 +78,11 @@ class HybridDecisionGate:
 
     async def evaluate(self, alert: AnomalyAlert) -> dict[str, Any] | None:
         """
-        Evaluate Hailo alert and decide whether to call GPT-5.
+        Filter an alert and indicate whether it is eligible for GPT evaluation.
 
         Returns:
             None if alert not critical enough
-            Dict with GPT-5 decision if executed
+            A gate result for alerts that pass the configured threshold.
         """
 
         if not self.enabled:
@@ -96,33 +93,12 @@ class HybridDecisionGate:
             logger.debug(f"Alert below threshold: score={alert.hailo_score}")
             return None
 
-        # Check daily call limit
-        if self.gpt5_calls_today >= self.skip_after_daily_calls:
-            logger.warning(
-                f"Daily GPT-5 call limit reached ({self.gpt5_calls_today})")
-            return None
-
         logger.info(
             f"🚨 ANOMALY ALERT: score={alert.hailo_score}, coin={alert.coin}, type={alert.signal_type}")
-        logger.info("Triggering GPT-5 Chief Strategist evaluation...")
-
-        # Lazy-import to avoid circular dependency; GPT5StrategistService lives in cloud layer
-        try:
-            try:
-                from src.cloud.strategist_service import GPT5StrategistService  # noqa: PLC0415
-            except ModuleNotFoundError:
-                from cloud.strategist_service import GPT5StrategistService  # type: ignore[no-redef]  # noqa: PLC0415
-            strategist = GPT5StrategistService()
-            decision = await strategist.process_anomaly_alert(alert)
-            self.gpt5_calls_today += 1
-            return decision
-        except Exception as exc:
-            logger.error("GPT-5 strategist call failed: %s", exc)
-            return {"decision": "VETO", "reason": f"Strategist error: {exc}"}
-
-    def reset_daily_counter(self):
-        """Reset call counter at midnight"""
-        self.gpt5_calls_today = 0
+        return {
+            "action": "call_gpt5",
+            "reason": f"High anomaly score ({alert.hailo_score:.2f})",
+        }
 
 
 async def example_workflow():
@@ -132,7 +108,7 @@ async def example_workflow():
 
     # Simulated alert from Hailo-8
     alert = AnomalyAlert(
-        timestamp=datetime.now(),
+        timestamp=datetime.now(UTC),
         hailo_score=92.5,
         window_size=100,
         signal_type="breakout",

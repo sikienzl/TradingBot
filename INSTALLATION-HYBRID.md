@@ -145,10 +145,10 @@ kubectl apply -k k8s/base/
 sleep 5
 
 # Deploy Hailo worker (DaemonSet on Node 2)
-kubectl apply -k k8s/overlays/hailo-worker/
+kustomize build --load-restrictor LoadRestrictionsNone k8s/overlays/hailo-worker/ | kubectl apply -f -
 
 # Deploy Cloud strategist (Deployment on Node 1)
-kubectl apply -k k8s/overlays/cloud-strategist/
+kustomize build --load-restrictor LoadRestrictionsNone k8s/overlays/cloud-strategist/ | kubectl apply -f -
 
 # Verify pods are running
 kubectl get pods -n trading-bot

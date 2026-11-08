@@ -27,6 +27,8 @@ data/research_signal_raw_test.json
 # Model artifacts
 catboost_info/
 old_data/
+hailo_dataflow_compiler-*.whl
+hailort_*.deb
 
 # Results & checkpoints
 results/

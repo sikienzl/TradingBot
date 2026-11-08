@@ -66,9 +66,14 @@ The worker now supports two inference modes:
 
 Deployment and compile details are documented in [docs/hailo_hybrid_cluster.md](docs/hailo_hybrid_cluster.md).
 
-For a clear, practical walkthrough of running the Hailo Dataflow Compiler
-using Docker (Windows-focused), see this guide — it explains the process
-well: https://medium.com/@mgreiner79/how-to-run-hailo-dataflow-compiler-using-docker-on-windows-8442a0215c53
+This repository includes an x86_64 compiler environment at
+[`docker/hailo-compiler.Dockerfile`](docker/hailo-compiler.Dockerfile). Its setup
+is adapted for this project and inspired by
+[How to run Hailo Dataflow Compiler using Docker on Windows](https://medium.com/@mgreiner79/how-to-run-hailo-dataflow-compiler-using-docker-on-windows-8442a0215c53).
+The proprietary Hailo wheel and DEB must be kept outside the repository and
+are passed to the local BuildKit builder in a separate named context. See
+[the compiler setup instructions](docs/hailo_hybrid_cluster.md#compile-workflow)
+for the private package directory and build command.
 
 ## Quickstart (60 seconds)
 

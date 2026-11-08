@@ -43,8 +43,9 @@ class GPT5StrategistService:
 
     def __init__(self):
         """Initialize GPT-5 service"""
-        self.enabled = os.getenv("GPT5_ENABLED", "true").lower() == "true"
-        self.api_endpoint = os.getenv("GPT5_API_ENDPOINT")
+        self.enabled = os.getenv("GPT5_ENABLED", "false").lower() == "true"
+        self.api_endpoint = os.getenv(
+            "GPT5_API_ENDPOINT", "https://api.mammouth.ai/v1/chat/completions")
         self.api_key = os.getenv("GPT5_API_KEY")
         self.model = os.getenv("GPT5_MODEL", "gpt-5.4-nano")
         self.max_calls_per_day = int(
@@ -52,6 +53,10 @@ class GPT5StrategistService:
         self.max_spend_per_month = float(
             os.getenv("GPT5_MAX_SPEND_PER_MONTH_USD", "500")
         )
+        self.skip_after_daily_calls = int(
+            os.getenv("HYBRID_GATE_SKIP_AFTER_DAILY_CALLS", "50"))
+        self.request_timeout = float(
+            os.getenv("GPT5_REQUEST_TIMEOUT_SEC", "30"))
         self.shadow_mode = os.getenv(
             "GPT5_SHADOW_MODE", "false").lower() == "true"
         self.grpc_enabled = os.getenv(
@@ -64,6 +69,7 @@ class GPT5StrategistService:
 
         # Hybrid gate
         self.hybrid_gate = HybridDecisionGate()
+        self._request_lock = asyncio.Lock()
 
         # Persistent spend/call tracking — survives restarts
         self._spend_state_path = os.getenv(
@@ -128,6 +134,12 @@ class GPT5StrategistService:
             logger.warning("Could not persist GPT5 spend state: %s", exc)
 
     async def process_anomaly_alert(self, alert: AnomalyAlert) -> dict[str, Any]:
+        async with self._request_lock:
+            return await self._process_anomaly_alert_locked(alert)
+
+    async def _process_anomaly_alert_locked(
+        self, alert: AnomalyAlert
+    ) -> dict[str, Any]:
         """
         Process anomaly alert from Hailo-8.
 
@@ -145,6 +157,13 @@ class GPT5StrategistService:
         """
 
         started = time.perf_counter()
+        if not self.enabled:
+            return {
+                "decision": "VETO",
+                "reason": "GPT5 strategist is disabled",
+                "risk_level": 0.0,
+            }
+
         # Check hybrid gate
         gate_result = await self.hybrid_gate.evaluate(alert)
         if gate_result is None:
@@ -157,6 +176,15 @@ class GPT5StrategistService:
                 "risk_level": 0.0,
             }
 
+        budget_reason = self._budget_limit_reason()
+        if budget_reason:
+            logger.warning("GPT-5 request blocked: %s", budget_reason)
+            return {
+                "decision": "VETO",
+                "reason": budget_reason,
+                "risk_level": 0.0,
+            }
+
         logger.info(
             f"🚨 Processing anomaly: {alert.coin}, score={alert.hailo_score}")
 
@@ -165,6 +193,10 @@ class GPT5StrategistService:
 
         # Prepare prompt for GPT-5
         prompt = self._build_gpt5_prompt(alert, macro_context)
+
+        self.metrics["calls_today"] += 1
+        self.metrics["calls_total"] += 1
+        self._save_spend_state()
 
         # Call GPT-5 API
         gpt5_response = await self._call_gpt5(prompt)
@@ -191,6 +223,25 @@ class GPT5StrategistService:
         logger.info(
             f"✅ Decision: {decision['decision']} - {decision['reason']}")
         return decision
+
+    def _budget_limit_reason(self) -> str | None:
+        """Return a reason when configured request or spend limits are reached."""
+        calls_today = self.metrics["calls_today"]
+        daily_limits = [
+            limit for limit in (
+                self.max_calls_per_day,
+                self.skip_after_daily_calls,
+            )
+            if limit > 0
+        ]
+        if daily_limits and calls_today >= min(daily_limits):
+            return f"Daily GPT-5 call limit reached ({calls_today})"
+        if (
+            self.max_spend_per_month > 0
+            and self.metrics["spend_month_usd"] >= self.max_spend_per_month
+        ):
+            return "Monthly GPT-5 spend limit reached"
+        return None
 
     async def process_anomaly_payload(
         self,
@@ -389,9 +440,9 @@ class GPT5StrategistService:
             logger.info("📋 Shadow mode: simulating GPT-5 response (no real API call)")
             self.service_metrics.observe_event("shadow_call")
             return {
-                "decision": "GO",
+                "decision": "VETO",
                 "confidence": 0.85,
-                "reasoning": "[SHADOW] Anomaly appears genuine based on context",
+                "reasoning": "[SHADOW] Simulated response; no trade may be executed",
                 "risk_level": 0.4,
                 "position_size_pct": 1.0,
                 "tokens_input": 0,
@@ -405,6 +456,8 @@ class GPT5StrategistService:
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
                 }
+                headers["Authorization"] = f"Bearer {self.api_key}"
+                headers["Accept"] = "application/json"
                 payload = {
                     "model": self.model,
                     "messages": [{"role": "user", "content": prompt}],
@@ -416,7 +469,7 @@ class GPT5StrategistService:
                     self.api_endpoint,
                     json=payload,
                     headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=30),
+                    timeout=aiohttp.ClientTimeout(total=self.request_timeout),
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
@@ -425,12 +478,18 @@ class GPT5StrategistService:
                     else:
                         logger.error(f"GPT-5 API error: {resp.status}")
                         self.service_metrics.observe_event("api_call_error")
-                        return {"decision": "ERROR", "reason": f"API error: {resp.status}"}
+                        return {
+                            "decision": "VETO",
+                            "reasoning": f"API error: {resp.status}",
+                        }
 
-        except (TimeoutError, aiohttp.ClientError) as e:
+        except (TimeoutError, aiohttp.ClientError, ValueError) as e:
             logger.error(f"GPT-5 call failed: {e}")
             self.service_metrics.observe_event("api_call_exception")
-            return {"decision": "ERROR", "reason": f"Exception: {e!s}"}
+            return {
+                "decision": "VETO",
+                "reasoning": "Strategist API request failed",
+            }
 
     def _extract_gpt5_response(self, api_response: dict) -> dict:
         """Parse GPT-5 API response"""
@@ -441,6 +500,8 @@ class GPT5StrategistService:
 
             if json_start >= 0 and json_end > json_start:
                 response_json = json.loads(content[json_start:json_end])
+                if not isinstance(response_json, dict):
+                    raise ValueError("Strategist response JSON must be an object")
                 return response_json
             else:
                 logger.warning("No JSON found in response")
@@ -448,23 +509,46 @@ class GPT5StrategistService:
 
         except (KeyError, IndexError, ValueError, TypeError, json.JSONDecodeError) as e:
             logger.error(f"Response parsing error: {e}")
-            return {"decision": "ERROR", "reason": f"Parse error: {e!s}"}
+            return {"decision": "VETO", "reasoning": "Invalid strategist response"}
 
     def _parse_gpt5_response(self, gpt5_reply: dict) -> dict[str, Any]:
         """Convert GPT-5 response to trading decision"""
+        decision = gpt5_reply.get("decision")
+        if decision not in {"GO", "VETO"}:
+            return {
+                "decision": "VETO",
+                "reason": "Invalid strategist decision",
+                "risk_level": 0.0,
+                "confidence": 0.0,
+                "position_size_pct": 0.0,
+            }
+
+        try:
+            risk_level = float(gpt5_reply.get("risk_level", 0.5))
+            confidence = float(gpt5_reply.get("confidence", 0.0))
+            position_size_pct = float(gpt5_reply.get("position_size_pct", 1.0))
+        except (TypeError, ValueError):
+            decision = "VETO"
+            risk_level = confidence = position_size_pct = 0.0
+
+        if not (
+            0.0 <= risk_level <= 1.0
+            and 0.0 <= confidence <= 1.0
+            and 0.0 <= position_size_pct <= 100.0
+        ):
+            decision = "VETO"
+            risk_level = confidence = position_size_pct = 0.0
+
         return {
-            "decision": gpt5_reply.get("decision", "VETO"),
+            "decision": decision,
             "reason": gpt5_reply.get("reasoning", "Unknown"),
-            "risk_level": float(gpt5_reply.get("risk_level", 0.5)),
-            "confidence": float(gpt5_reply.get("confidence", 0.0)),
-            "position_size_pct": float(gpt5_reply.get("position_size_pct", 1.0)),
+            "risk_level": risk_level,
+            "confidence": confidence,
+            "position_size_pct": position_size_pct,
         }
 
     def _update_metrics(self, gpt5_response: dict):
         """Update metrics from GPT-5 call"""
-        self.metrics["calls_today"] += 1
-        self.metrics["calls_total"] += 1
-
         tokens_in = gpt5_response.get("tokens_input", 0)
         tokens_out = gpt5_response.get("tokens_output", 0)
         self.metrics["tokens_used"] += tokens_in + tokens_out
@@ -500,10 +584,10 @@ async def _daily_counter_reset_task(service: "GPT5StrategistService") -> None:
             tomorrow_midnight.isoformat(),
         )
         await asyncio.sleep(wait_seconds)
-        service.metrics["calls_today"] = 0
-        service.metrics["state_date"] = tomorrow_midnight.date().isoformat()
-        service.hybrid_gate.reset_daily_counter()
-        service._save_spend_state()
+        async with service._request_lock:
+            service.metrics["calls_today"] = 0
+            service.metrics["state_date"] = tomorrow_midnight.date().isoformat()
+            service._save_spend_state()
         logger.info("Daily GPT-5 call counter reset (new day: %s UTC)", tomorrow_midnight.date())
 
 
