@@ -52,10 +52,10 @@ The compiler wheel and HailoRT package are proprietary vendor-provided build
 inputs. They must not be added to Git and should be obtained under the
 applicable Hailo terms. Keep them outside the repository and pass them to
 BuildKit as a separate named context. The following commands use the files in
-`$HOME/Schreibtisch/hailo_8/`:
+`$HOME/hailo_8/`:
 
 ```text
-$HOME/Schreibtisch/hailo_8/
+$HOME/hailo_8/
 ├── hailo_dataflow_compiler-3.34.0-py3-none-linux_x86_64.whl
 └── hailort_4.24.0_amd64.deb
 ```
@@ -64,14 +64,14 @@ Create a private directory for only the two required build inputs. Hard links
 keep the originals in place without making a full copy:
 
 ```sh
-mkdir -m 700 "$HOME/Schreibtisch/hailo_8/build-inputs"
+mkdir -m 700 "$HOME/hailo_8/build-inputs"
 chmod 600 \
-  "$HOME/Schreibtisch/hailo_8/hailo_dataflow_compiler-3.34.0-py3-none-linux_x86_64.whl" \
-  "$HOME/Schreibtisch/hailo_8/hailort_4.24.0_amd64.deb"
-ln "$HOME/Schreibtisch/hailo_8/hailo_dataflow_compiler-3.34.0-py3-none-linux_x86_64.whl" \
-  "$HOME/Schreibtisch/hailo_8/build-inputs/compiler.whl"
-ln "$HOME/Schreibtisch/hailo_8/hailort_4.24.0_amd64.deb" \
-  "$HOME/Schreibtisch/hailo_8/build-inputs/hailort.deb"
+  "$HOME/hailo_8/hailo_dataflow_compiler-3.34.0-py3-none-linux_x86_64.whl" \
+  "$HOME/hailo_8/hailort_4.24.0_amd64.deb"
+ln "$HOME/hailo_8/hailo_dataflow_compiler-3.34.0-py3-none-linux_x86_64.whl" \
+  "$HOME/hailo_8/build-inputs/compiler.whl"
+ln "$HOME/hailo_8/hailort_4.24.0_amd64.deb" \
+  "$HOME/hailo_8/build-inputs/hailort.deb"
 ```
 
 The separate `hailort-pcie-driver_4.24.0_all.deb` is a host driver package,
@@ -83,7 +83,7 @@ Build and start the compiler environment from an x86_64 Docker host:
 ```sh
 DOCKER_BUILDKIT=1 docker buildx build --platform linux/amd64 --load \
   -f docker/hailo-compiler.Dockerfile \
-  --build-context hailo_packages="$HOME/Schreibtisch/hailo_8/build-inputs" \
+  --build-context hailo_packages="$HOME/hailo_8/build-inputs" \
   -t trading-hailo-compiler:3.34.0 .
 
 docker run --rm -it --platform linux/amd64 \
