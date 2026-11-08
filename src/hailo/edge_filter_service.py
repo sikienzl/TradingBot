@@ -10,10 +10,11 @@ Connects to Kraken WebSocket, runs continuous inference, buffers ticks to NVMe.
 import asyncio
 import json
 import logging
+import math
 import os
 import time
 from collections import OrderedDict
-from datetime import datetime
+from datetime import UTC, datetime
 
 from src.hailo.inference import AnomalyDetector, TimeSeriesTransformerONNX
 from src.hailo.preprocessing import PREPROCESSING_VERSION
@@ -45,7 +46,11 @@ class HailoEdgeFilterService:
     def __init__(self):
         """Initialize edge service"""
         self.enabled = os.getenv("HAILO8_ENABLED", "true").lower() == "true"
-        self.pairs = os.getenv("CRYPTO_PAIRS", "BTC/USD,ETH/USD").split(",")
+        self.pairs = [pair.strip() for pair in
+                      os.getenv("CRYPTO_PAIRS", "BTC/USD,ETH/USD").split(",")
+                      if pair.strip()]
+        if not self.pairs or len(set(self.pairs)) != len(self.pairs):
+            raise ValueError("CRYPTO_PAIRS must contain unique, non-empty pairs")
         self.marketdata_mode = os.getenv(
             "HAILO8_MARKETDATA_MODE", "websocket").lower()
         self.node_name = os.getenv("NODE_NAME")
@@ -54,12 +59,19 @@ class HailoEdgeFilterService:
         self.strategist_target = os.getenv("CLOUD_STRATEGIST_GRPC_TARGET", "")
         self.strategist_timeout = float(
             os.getenv("CLOUD_STRATEGIST_GRPC_TIMEOUT_SEC", "10"))
+        self.alert_fallback_mode = os.getenv(
+            "HAILO8_ALERT_FALLBACK_MODE", "fail_closed").strip().lower()
+        self.alert_fallback_path = os.getenv("HAILO8_ALERT_FALLBACK_PATH", "").strip()
+        if self.alert_fallback_mode not in {"fail_closed", "legacy_jsonl"}:
+            raise ValueError("HAILO8_ALERT_FALLBACK_MODE must be fail_closed or legacy_jsonl")
+        if self.alert_fallback_mode == "legacy_jsonl" and not self.alert_fallback_path:
+            raise ValueError("HAILO8_ALERT_FALLBACK_PATH is required for legacy_jsonl")
         self.metrics_port = int(os.getenv("HAILO8_METRICS_PORT", "9201"))
         self.service_metrics = ServiceMetrics("edge_filter", self.metrics_port)
 
         # Load ONNX model (cluster-only mode tolerates missing model and runs pass-through).
         self.model = None
-        self.detector = None
+        self.detectors: dict[str, AnomalyDetector] = {}
         self.inference_enabled = True
         model_path = os.getenv(
             "HAILO8_MODEL_PATH",
@@ -69,11 +81,15 @@ class HailoEdgeFilterService:
         window_size = int(os.getenv("HAILO8_WINDOW_SIZE", "100"))
         try:
             self.model = TimeSeriesTransformerONNX(model_path)
-            self.detector = AnomalyDetector(
-                self.model, threshold=threshold, window_size=window_size
-            )
+            self.detectors = {
+                pair: AnomalyDetector(
+                    self.model, threshold=threshold, window_size=window_size
+                )
+                for pair in self.pairs
+            }
         except Exception as e:
             self.inference_enabled = False
+            self.detectors.clear()
             logger.warning(
                 f"Inference disabled (model/runtime unavailable): {e}. "
                 "Worker continues in pass-through mode."
@@ -82,6 +98,7 @@ class HailoEdgeFilterService:
         self.ws_client = None
         self.grpc_server = None
         self._snapshot_lock = asyncio.Lock()
+        self._tick_lock = asyncio.Lock()
         self._relay_sequences: OrderedDict[tuple[str, str], int] = OrderedDict()
         self._blocked_snapshot_pairs: set[str] = set()
         self.strategist_client = None
@@ -120,18 +137,25 @@ class HailoEdgeFilterService:
         await self.process_tick_dict(tick_dict, tick.symbol)
 
     async def process_tick_dict(self, tick_dict: dict, symbol: str) -> AnomalyAlert | None:
-        """Run inference for a single tick dictionary."""
+        """Serialize access to shared model, detectors, metrics and alert delivery."""
+        async with self._tick_lock:
+            return await self._process_tick_dict_locked(tick_dict, symbol)
+
+    async def _process_tick_dict_locked(self, tick_dict: dict, symbol: str) -> AnomalyAlert | None:
         started = time.perf_counter()
 
         try:
+            if symbol not in self.pairs:
+                raise ValueError(f"Unconfigured tick symbol: {symbol}")
+            if tick_dict.get("symbol") not in (None, "", symbol):
+                raise ValueError("Tick symbol does not match market snapshot pair")
             alert_dict = None
-            if self.inference_enabled and self.detector is not None:
+            detector = self.detectors.get(symbol)
+            if self.inference_enabled and detector is not None:
                 if self.model.preprocessing_version == PREPROCESSING_VERSION:
-                    if tick_dict.get("symbol") not in (None, "", symbol):
-                        raise ValueError("Tick symbol does not match market snapshot pair")
                     tick_dict = {**tick_dict, "symbol": symbol}
                 # Run inference & check for anomalies
-                alert_dict = self.detector.update(tick_dict)
+                alert_dict = detector.update(tick_dict)
 
             if self.model is not None:
                 self.metrics["inference_time_ms"] = round(
@@ -165,13 +189,13 @@ class HailoEdgeFilterService:
                         logger.debug("Bloom filter reset after %d ticks", self._bloom_reset_ticks)
 
                     anomaly_alert = AnomalyAlert(
-                        timestamp=datetime.utcnow(),
+                        timestamp=datetime.now(UTC),
                         hailo_score=alert_dict["anomaly_score"],
                         window_size=alert_dict["window_size"],
                         signal_type=alert_dict["signal_type"],
                         confidence=alert_dict["confidence"],
                         market_context={
-                            **self.detector.get_buffer_stats(),
+                            **detector.get_buffer_stats(),
                             "inference_latency_ms": alert_dict.get("inference_latency_ms", 0.0),
                             "model_provider": alert_dict.get("model_provider", "unknown"),
                         },
@@ -185,7 +209,7 @@ class HailoEdgeFilterService:
             self.service_metrics.set_value(
                 "ticks_processed", self.metrics["ticks_processed"] + 1)
             self.metrics["ticks_processed"] += 1
-            self.metrics["last_update"] = datetime.utcnow().isoformat()
+            self.metrics["last_update"] = datetime.now(UTC).isoformat()
             return anomaly_alert
         except Exception as e:
             logger.error(f"Error processing tick: {e}")
@@ -206,6 +230,25 @@ class HailoEdgeFilterService:
         """
         if not snapshot.ticks:
             return TransportAck(accepted=False, message="snapshot did not contain ticks")
+        if not isinstance(snapshot.pair, str) or not snapshot.pair:
+            return TransportAck(accepted=False, message="snapshot pair is required")
+        if snapshot.pair not in self.pairs:
+            return TransportAck(accepted=False, message="snapshot pair is not configured")
+        for tick in snapshot.ticks:
+            values = (
+                tick.timestamp, tick.bid, tick.ask, tick.mid, tick.bid_size,
+                tick.ask_size, tick.last_trade_price, tick.last_trade_size,
+            )
+            if (
+                tick.symbol != snapshot.pair
+                or any(not isinstance(value, (int, float)) or isinstance(value, bool)
+                       or not math.isfinite(value) for value in values)
+                or tick.timestamp < 0
+                or min(tick.bid, tick.ask, tick.mid, tick.last_trade_price) <= 0
+                or min(tick.bid_size, tick.ask_size, tick.last_trade_size) < 0
+            ):
+                self.service_metrics.observe_event("snapshot_invalid_tick")
+                return TransportAck(accepted=False, message="invalid tick or pair mismatch")
         started = time.perf_counter()
 
         sequence_keys = ("relay_stream_id", "relay_first_sequence", "relay_last_sequence")
@@ -236,6 +279,7 @@ class HailoEdgeFilterService:
                     "Relay sequence gap for %s: expected %d, received %d",
                     snapshot.pair, (previous or 0) + 1, first,
                 )
+                self.service_metrics.observe_event("snapshot_sequence_gap")
             if previous is not None:
                 ticks = ticks[max(0, previous - first + 1):]
 
@@ -245,10 +289,12 @@ class HailoEdgeFilterService:
                     latest_alert = await self.process_tick_dict(tick_dict, snapshot.pair) or latest_alert
                 except asyncio.CancelledError:
                     self._blocked_snapshot_pairs.add(snapshot.pair)
+                    self.service_metrics.observe_event("snapshot_cancelled")
                     logger.error("Snapshot cancelled during tick processing; blocking pair %s", snapshot.pair)
                     raise
                 except Exception:
                     self._blocked_snapshot_pairs.add(snapshot.pair)
+                    self.service_metrics.observe_event("snapshot_tick_failed")
                     logger.exception("Snapshot tick failed; blocking pair %s", snapshot.pair)
                     return TransportAck(
                         accepted=False,
@@ -280,17 +326,13 @@ class HailoEdgeFilterService:
                 "tick_count": len(snapshot.ticks),
                 "processed_tick_count": len(ticks),
                 "alert_emitted": latest_alert is not None,
+                "inference_enabled": self.inference_enabled and snapshot.pair in self.detectors,
             },
         )
 
     async def emit_alert(self, alert: AnomalyAlert):
         """
-        Send anomaly alert to Cloud Strategist service.
-
-        In production: via Kubernetes Inter-Pod Communication
-        - Option 1: Redis queue
-        - Option 2: RabbitMQ broker
-        - Option 3: Shared volume + file I/O
+        Send anomaly alert to the strategist or fail visibly.
         """
         logger.info(f"📤 Emitting alert: {alert}")
 
@@ -300,6 +342,7 @@ class HailoEdgeFilterService:
             metadata={"transport": "grpc" if self.strategist_client else "jsonl"},
         )
 
+        failure = None
         if self.strategist_client is not None:
             try:
                 decision = await self.strategist_client.process_anomaly_alert(
@@ -314,14 +357,30 @@ class HailoEdgeFilterService:
                 logger.info("Strategist decision: %s", decision.to_dict())
                 return
             except Exception as exc:
-                logger.warning("Failed to forward alert via gRPC: %s", exc)
+                logger.exception("Failed to forward alert via gRPC")
                 self.service_metrics.observe_event("alert_forward_failed")
+                failure = exc
+        else:
+            self.service_metrics.observe_event("alert_forward_unavailable")
+            logger.error("Strategist transport unavailable; alert not delivered")
 
-        # TODO: Implement actual alert transmission
-        # For now: log & write to JSON file (development)
-        alert_file = "/tmp/hailo_alerts.jsonl"
-        with open(alert_file, "a") as f:
-            f.write(json.dumps(alert_payload.to_dict()) + "\n")
+        if self.alert_fallback_mode != "legacy_jsonl":
+            raise RuntimeError("Strategist alert delivery failed") from failure
+
+        try:
+            await asyncio.to_thread(self._write_legacy_alert, alert_payload)
+        except (OSError, ValueError, TypeError):
+            self.service_metrics.observe_event("alert_fallback_failed")
+            logger.exception("Legacy JSONL alert fallback failed")
+            raise
+        self.service_metrics.observe_event("alert_fallback_written")
+        logger.warning(
+            "Alert written to legacy JSONL fallback; strategist delivery is unconfirmed"
+        )
+
+    def _write_legacy_alert(self, alert_payload: EdgeAlertPayload) -> None:
+        with open(self.alert_fallback_path, "a", encoding="utf-8") as file:
+            file.write(json.dumps(alert_payload.to_dict()) + "\n")
 
     async def run(self):
         """
@@ -373,19 +432,14 @@ class HailoEdgeFilterService:
 
     def get_metrics(self):
         """Get service metrics for Prometheus"""
-        if self.detector is None:
-            return {
-                **self.metrics,
-                "inference_enabled": False,
-                "detector_buffer_stats": {},
-                "detector_alerts": 0,
-                "marketdata_mode": self.marketdata_mode,
-            }
         return {
             **self.metrics,
-            "inference_enabled": True,
-            "detector_buffer_stats": self.detector.get_buffer_stats(),
-            "detector_alerts": len(self.detector.alerts),
+            "inference_enabled": self.inference_enabled and bool(self.detectors),
+            "detector_buffer_stats": {
+                pair: detector.get_buffer_stats()
+                for pair, detector in self.detectors.items()
+            },
+            "detector_alerts": sum(len(detector.alerts) for detector in self.detectors.values()),
             "marketdata_mode": self.marketdata_mode,
         }
 

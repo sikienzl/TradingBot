@@ -23,7 +23,7 @@ spec:
     spec:
       serviceAccountName: trading-bot-sa
 
-      # Download ONNX model on first pod start (or when PVC is empty).
+      # Publish the image's pinned ONNX, external data and config as one bundle.
       initContainers:
         - name: model-downloader
           image: trading-hailo:latest
@@ -31,15 +31,16 @@ spec:
           command:
             - python3
             - /app/scripts/download_onnx_model.py
+            - --bundle-source
+            - /app/model/hailo_prefilter
+            - --bundle-id
+            - 885570e115b82d3236ba9fc3f214fb89d76c386a9f6857881f86baad92130898
           envFrom:
             - configMapRef:
                 name: trading-bot-hybrid-config
             - secretRef:
                 name: trading-bot-credentials
                 optional: true
-          env:
-            - name: HAILO8_MODEL_PATH
-              value: /models/timeseries_transformer.onnx
           volumeMounts:
             - name: onnx-model-storage
               mountPath: /models
@@ -88,7 +89,11 @@ spec:
               fieldRef:
                 fieldPath: metadata.namespace
           - name: HAILO8_MODEL_PATH
-            value: /models/timeseries_transformer.onnx
+            value: /models/bundles/885570e115b82d3236ba9fc3f214fb89d76c386a9f6857881f86baad92130898/timeseries_transformer.onnx
+          - name: HAILO8_MODEL_CONFIG_PATH
+            value: /models/bundles/885570e115b82d3236ba9fc3f214fb89d76c386a9f6857881f86baad92130898/model_config.json
+          - name: HAILO8_HEF_PATH
+            value: /models/bundles/885570e115b82d3236ba9fc3f214fb89d76c386a9f6857881f86baad92130898/timeseries_transformer.hef
           - name: HAILO_METRICS_PORT
             value: "9201"
           - name: PYTHONPATH
@@ -115,6 +120,7 @@ spec:
         volumeMounts:
           - name: onnx-model-storage
             mountPath: /models
+            readOnly: true
           - name: nvme-tick-storage
             mountPath: /mnt/nvme
           - name: logs

@@ -3,6 +3,7 @@ import io
 import json
 import socket
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import ClassVar
 from urllib.error import URLError
@@ -150,16 +151,20 @@ def test_overlay_model_paths_and_runtime_mount_contract():
     root = Path(__file__).resolve().parents[1]
     overlay = root / "k8s/overlays/hailo-worker"
     manifest = yaml.safe_load((overlay / "daemonset-hailo.yaml").read_text())
-    config = yaml.safe_load((root / "k8s/base/configmap-hybrid.yaml").read_text())["data"]
     pod = manifest["spec"]["template"]["spec"]
     init = pod["initContainers"][0]
     worker = pod["containers"][0]
     for container in (init, worker):
-        env = {item["name"]: item.get("value") for item in container["env"]}
-        assert env["HAILO8_MODEL_PATH"] == config["HAILO8_MODEL_PATH"]
         assert any(m["name"] == "onnx-model-storage" and m["mountPath"] == "/models"
                    for m in container["volumeMounts"])
-    assert config["HAILO8_MODEL_CONFIG_PATH"] == "/app/model/hailo_prefilter/model_config.json"
+    env = {item["name"]: item.get("value") for item in worker["env"]}
+    bundle_id = init["command"][init["command"].index("--bundle-id") + 1]
+    bundle = f"/models/bundles/{bundle_id}"
+    assert env["HAILO8_MODEL_PATH"] == f"{bundle}/timeseries_transformer.onnx"
+    assert env["HAILO8_MODEL_CONFIG_PATH"] == f"{bundle}/model_config.json"
+    assert env["HAILO8_HEF_PATH"] == f"{bundle}/timeseries_transformer.hef"
+    assert bundle_id == downloader._bundle_id(root / "model/hailo_prefilter", exact=False)
+    assert next(m for m in worker["volumeMounts"] if m["name"] == "onnx-model-storage")["readOnly"]
     image_config = json.loads((root / "model/hailo_prefilter/model_config.json").read_text())
     assert image_config.get("preprocessing_version", "legacy") == "legacy"
     volumes = {volume["name"]: volume["hostPath"] for volume in pod["volumes"] if "hostPath" in volume}
@@ -175,3 +180,117 @@ def test_overlay_model_paths_and_runtime_mount_contract():
         assert mounts[name]["mountPath"] == mount_path
         assert mounts[name]["readOnly"] is True
     assert volumes["hailo-device"] == {"path": "/dev/hailo0", "type": "CharDevice"}
+
+
+def _source_bundle(path):
+    path.mkdir()
+    for name in downloader.BUNDLE_FILES:
+        (path / name).write_bytes(name.encode())
+    return downloader._bundle_id(path, exact=True)
+
+
+def test_bundle_install_is_atomic_and_idempotent_with_concurrent_initializers(tmp_path):
+    source = tmp_path / "source"
+    bundle_id = _source_bundle(source)
+    root = tmp_path / "pvc"
+    old_model = root / "timeseries_transformer.onnx"
+    root.mkdir()
+    old_model.write_bytes(b"old model")
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        paths = list(executor.map(lambda _: downloader.install_bundle(source, root, bundle_id), range(4)))
+    assert all(path == root / bundle_id for path in paths)
+    assert downloader._bundle_id(paths[0], exact=True) == bundle_id
+    assert old_model.read_bytes() == b"old model"
+    assert {p.name for p in root.iterdir()} == {bundle_id, ".install.lock", old_model.name}
+
+
+@pytest.mark.parametrize("damage", ["missing", "changed", "extra", "symlink"])
+def test_existing_bundle_conflict_is_never_replaced(tmp_path, damage):
+    source = tmp_path / "source"
+    bundle_id = _source_bundle(source)
+    root = tmp_path / "pvc"
+    dest = downloader.install_bundle(source, root, bundle_id)
+    file = dest / downloader.BUNDLE_FILES[0]
+    if damage == "missing":
+        file.unlink()
+    elif damage == "changed":
+        file.write_bytes(b"changed")
+    elif damage == "extra":
+        (dest / "unexpected.hef").write_bytes(b"other model")
+    else:
+        file.unlink()
+        file.symlink_to(source / downloader.BUNDLE_FILES[0])
+    before = {p.name: (p.is_symlink(), p.read_bytes()) for p in dest.iterdir()}
+    with pytest.raises(ValueError):
+        downloader.install_bundle(source, root, bundle_id)
+    assert {p.name: (p.is_symlink(), p.read_bytes()) for p in dest.iterdir()} == before
+
+
+def test_bundle_failure_does_not_publish_or_damage_existing_models(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    bundle_id = _source_bundle(source)
+    root = tmp_path / "pvc"
+    root.mkdir()
+    other = root / "existing"
+    other.write_bytes(b"preserve")
+
+    def broken_copy(src, dst):
+        Path(dst).write_bytes(b"partial")
+        raise OSError("copy failed")
+
+    monkeypatch.setattr(downloader.shutil, "copyfile", broken_copy)
+    with pytest.raises(OSError):
+        downloader.install_bundle(source, root, bundle_id)
+    assert other.read_bytes() == b"preserve"
+    assert {p.name for p in root.iterdir()} == {"existing", ".install.lock"}
+
+
+def test_bundle_rejects_mismatched_image_before_touching_pvc(tmp_path):
+    source = tmp_path / "source"
+    bundle_id = _source_bundle(source)
+    (source / downloader.BUNDLE_FILES[1]).write_bytes(b"wrong")
+    root = tmp_path / "pvc"
+    with pytest.raises(ValueError):
+        downloader.install_bundle(source, root, bundle_id)
+    assert not root.exists()
+
+
+def test_new_bundle_version_coexists_with_previous_version(tmp_path):
+    source = tmp_path / "source"
+    first_id = _source_bundle(source)
+    root = tmp_path / "pvc"
+    first = downloader.install_bundle(source, root, first_id)
+    (source / "model_config.json").write_bytes(b"new config")
+    second_id = downloader._bundle_id(source, exact=True)
+    second = downloader.install_bundle(source, root, second_id)
+    assert first != second
+    assert downloader._bundle_id(first, exact=True) == first_id
+    assert downloader._bundle_id(second, exact=True) == second_id
+    assert (first / "model_config.json").read_bytes() == b"model_config.json"
+
+
+def test_bundle_cli_uses_pinned_id_and_ignores_single_file_download_settings(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    bundle_id = _source_bundle(source)
+    root = tmp_path / "pvc"
+    monkeypatch.setattr(downloader, "_load_dotenv", lambda: None)
+    monkeypatch.setenv("MODEL_DOWNLOAD_FORCE", "true")
+    monkeypatch.setenv("MODEL_DOWNLOAD_URL", "https://invalid.example/model")
+    monkeypatch.setattr(sys, "argv", [
+        "download_onnx_model.py", "--bundle-source", str(source),
+        "--bundle-root", str(root), "--bundle-id", bundle_id,
+    ])
+    downloader.main()
+    downloader.main()
+    assert downloader._bundle_id(root / bundle_id, exact=True) == bundle_id
+
+
+def test_real_bundle_loads_with_external_data_in_onnxruntime(tmp_path):
+    ort = pytest.importorskip("onnxruntime")
+    np = pytest.importorskip("numpy")
+    source = Path(__file__).resolve().parents[1] / "model/hailo_prefilter"
+    bundle_id = downloader._bundle_id(source, exact=False)
+    bundle = downloader.install_bundle(source, tmp_path / "pvc", bundle_id)
+    session = ort.InferenceSession(str(bundle / downloader.BUNDLE_FILES[0]), providers=["CPUExecutionProvider"])
+    outputs = session.run(None, {"input": np.zeros((1, 60, 9), dtype=np.float32)})
+    assert len(outputs) == 2 and all(np.isfinite(output).all() for output in outputs)

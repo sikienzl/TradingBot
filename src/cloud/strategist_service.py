@@ -203,6 +203,16 @@ class GPT5StrategistService:
 
         # Parse decision
         decision = self._parse_gpt5_response(gpt5_response)
+        if (self.shadow_mode or not self.api_key) and decision["decision"] != "VETO":
+            logger.error("Shadow strategist produced a non-VETO decision; forcing VETO")
+            self.service_metrics.observe_event("shadow_decision_blocked")
+            decision = {
+                "decision": "VETO",
+                "reason": "Shadow mode cannot authorize trades",
+                "risk_level": 0.0,
+                "confidence": 0.0,
+                "position_size_pct": 0.0,
+            }
 
         # Track metrics
         self._update_metrics(gpt5_response)
@@ -257,6 +267,7 @@ class GPT5StrategistService:
             metadata={
                 "coin": payload.coin,
                 "source_node": payload.source_node,
+                "shadow_mode": self.shadow_mode or not self.api_key,
             },
         )
 

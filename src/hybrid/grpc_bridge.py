@@ -80,7 +80,10 @@ class EdgeFilterRpcServer:
             },
         )
         self.server.add_generic_rpc_handlers((handler,))
-        self.server.add_insecure_port(f"{self.host}:{self.port}")
+        bound_port = self.server.add_insecure_port(f"{self.host}:{self.port}")
+        if not bound_port:
+            raise RuntimeError(f"Could not bind edge gRPC server to {self.host}:{self.port}")
+        self.port = bound_port
 
     async def _submit_market_snapshot(
         self,
@@ -124,7 +127,10 @@ class StrategistRpcServer:
             },
         )
         self.server.add_generic_rpc_handlers((handler,))
-        self.server.add_insecure_port(f"{self.host}:{self.port}")
+        bound_port = self.server.add_insecure_port(f"{self.host}:{self.port}")
+        if not bound_port:
+            raise RuntimeError(f"Could not bind strategist gRPC server to {self.host}:{self.port}")
+        self.port = bound_port
 
     async def _process_anomaly_alert(
         self,

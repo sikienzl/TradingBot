@@ -19,11 +19,13 @@ Usage:
 """
 
 import argparse
+import fcntl
 import hashlib
 import http.client
 import logging
 import os
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -37,6 +39,70 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("model_downloader")
+
+BUNDLE_FILES = (
+    "timeseries_transformer.onnx",
+    "timeseries_transformer.onnx.data",
+    "model_config.json",
+)
+
+
+def _bundle_id(directory: Path, *, exact: bool) -> str:
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValueError(f"Bundle is not a regular directory: {directory}")
+    if exact and {p.name for p in directory.iterdir()} != set(BUNDLE_FILES):
+        raise ValueError(f"Existing bundle contains missing or unexpected files: {directory}")
+    manifest = []
+    for name in BUNDLE_FILES:
+        path = directory / name
+        if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+            raise ValueError(f"Missing or invalid bundle file: {path}")
+        manifest.append(f"{name} {_sha256_of_file(path)}\n")
+    return hashlib.sha256("".join(manifest).encode("ascii")).hexdigest()
+
+
+def install_bundle(source: Path, root: Path, bundle_id: str) -> Path:
+    """Publish an immutable, content-addressed bundle under a cooperative PVC lock."""
+    if not re.fullmatch(r"[0-9a-f]{64}", bundle_id):
+        raise ValueError("Bundle ID must be a lowercase SHA-256 digest")
+    source, root = Path(source), Path(root)
+    if _bundle_id(source, exact=False) != bundle_id:
+        raise ValueError("Image bundle does not match the requested bundle ID")
+
+    root.mkdir(parents=True, exist_ok=True)
+    lock_path = root / ".install.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "r+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        destination = root / bundle_id
+        if destination.exists() or destination.is_symlink():
+            if _bundle_id(destination, exact=True) != bundle_id:
+                raise ValueError(f"Existing bundle does not match its ID: {destination}")
+            return destination
+
+        staging = Path(tempfile.mkdtemp(prefix=".bundle-", dir=root))
+        try:
+            for name in BUNDLE_FILES:
+                shutil.copyfile(source / name, staging / name)
+                with (staging / name).open("rb") as artifact:
+                    os.fsync(artifact.fileno())
+            if _bundle_id(staging, exact=True) != bundle_id:
+                raise ValueError("Copied bundle does not match the requested bundle ID")
+            directory_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            os.rename(staging, destination)
+            directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
+        return destination
 
 
 def _load_dotenv(path: str = ".env") -> None:
@@ -189,6 +255,9 @@ def main() -> None:
     _load_dotenv()
 
     parser = argparse.ArgumentParser(description="Download ONNX model for Hailo-8 edge filter")
+    parser.add_argument("--bundle-source", help="Install the three image artifacts as one bundle")
+    parser.add_argument("--bundle-root", default="/models/bundles", help="PVC bundle directory")
+    parser.add_argument("--bundle-id", help="Expected content-addressed bundle ID")
     parser.add_argument(
         "--url",
         default=os.getenv("MODEL_DOWNLOAD_URL", ""),
@@ -223,6 +292,17 @@ def main() -> None:
         help="Overwrite existing model (env: MODEL_DOWNLOAD_FORCE=true)",
     )
     args = parser.parse_args()
+
+    if args.bundle_source:
+        try:
+            path = install_bundle(Path(args.bundle_source), Path(args.bundle_root), args.bundle_id or "")
+        except (OSError, ValueError) as exc:
+            logger.error("Bundle installation failed: %s", exc)
+            sys.exit(1)
+        logger.info("Verified bundle at %s", path)
+        return
+    if args.bundle_id:
+        parser.error("--bundle-id requires --bundle-source")
 
     download_model(
         url=args.url,

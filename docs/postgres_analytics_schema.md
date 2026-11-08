@@ -7,6 +7,96 @@ All live orders, including protective sells, are currently blocked pending
 verified Kraken reconciliation and recovery. Existing positions must be
 managed directly on Kraken.
 
+## Recovery requirement and current limits
+
+`DRY_RUN_REQUIRE_POSTGRES_RECOVERY=true` is an opt-in safety requirement,
+not an implementation of recovery. The bot refuses to start before creating
+the analytics writer or initializing the exchange, regardless of PostgreSQL
+availability. The trade entry point also rejects both dry-run buys and sells
+when the requirement is set, including simulated protective sells. Accepted
+boolean values are `true/false`, `1/0`, `yes/no`, `y/n` and `on/off`
+(case-insensitive); invalid values reject configuration. The default is
+`false`, retaining the existing best-effort analytics behavior. A true value
+in either the inherited environment or the project `.env` enforces the
+requirement; an invalid value in either is rejected. With the
+requirement enabled, an external operator must manage real positions directly
+on the exchange; this switch does not enable any live orders.
+
+There is **no** PostgreSQL-backed portfolio recovery or runtime database
+fail-closed guarantee in the default mode. A connection or health check alone
+would not make the following operations atomic or safe:
+
+- The local portfolio file, trade journal, analytics events, and in-memory risk
+  state are written or updated separately; an interruption or an ambiguous DB
+  commit can leave them inconsistent. Failed portfolio saves are not a durable
+  transaction. Analytics snapshots are periodic and are not a recovery log.
+- Daily anchors, buy/sell timing, loss streaks and pauses, and other risk or
+  strategy state are not restored atomically with positions and executions.
+- Multiple bot instances lack a shared ownership/fencing protocol. Concurrent
+  state changes and stale writers are not prevented.
+- Partial exits, trailing/peak updates, and other position changes must be
+  captured with their trade and risk changes. Blocking protective sells on a
+  DB failure also leaves positions unprotected; it is not exchange protection.
+- Live trading additionally requires exchange order/fill reconciliation and
+  handling unknown outcomes; the existing live-order block remains in force.
+
+Local JSON recovery now restores the partial-take-profit timestamp and only
+replaces the in-memory portfolio after parsing the saved fields. This is a
+limited restart fix, not validation of a complete or crash-consistent state.
+Implementing durable recovery requires a versioned and validated state model,
+transactional and idempotent trade/state/risk updates, explicit recovery and
+reconciliation on startup, single-writer fencing, and integration tests against
+an isolated PostgreSQL instance including failure and concurrent-writer cases.
+
+### Experimental snapshot primitive (not bot recovery)
+
+`src.trading_safety.dry_run_store.DryRunStore` is a standalone, **unwired**
+building block. It does not change the startup or trade guards above. Given a
+factory for a fresh direct psycopg connection, an explicit scope, and a
+pre-created trusted schema in its `search_path`, it acquires a session
+advisory lock and can explicitly create `dry_run_snapshots_v1`. `save(state,
+expected_version)` atomically replaces a JSON-object snapshot with optimistic
+version checking (version 0 creates); `load()` returns the version and object.
+Call `close()` or use a context manager. Errors, version conflicts, and
+uncertain commit outcomes discard the connection: stop and reconcile before
+creating a new store, never blindly retry a trade. A snapshot contains only
+what its caller supplies and is not validated as a complete portfolio/risk
+model. Initialization is not a migration or schema compatibility check.
+If closing the connection raises a psycopg error, the store logs an error
+without masking an earlier failure; ownership release is then uncertain. The
+store is invalidated even if connection cleanup failed.
+
+The advisory lock excludes only cooperating writers using the identical scope
+and database; separate scope names or databases, direct SQL writers, session
+pooling, connection failover and split-brain deployments can bypass ownership.
+Use a dedicated direct session, no transparent reconnect or transaction-pooling
+proxy, trusted write privileges, and separately verified fencing across any
+failover. PostgreSQL durability depends on its configuration. Opt-in PostgreSQL
+integration tests exercise session ownership, version conflicts, restart,
+scope isolation and terminating an owned backend before the next write.
+They do not simulate an ambiguous in-flight commit, database crash, failover,
+split-brain, or runtime bot recovery. No bot-level recovery or duplicate-instance
+protection is claimed.
+The bot still changes peak prices outside trade execution, saves partial-exit
+flags after the sell, initializes balances and daily anchors separately, and
+uses file-backed journals/strategy state. These paths need a validated
+transactional domain model and failure/concurrency integration tests before the
+guard can safely be removed.
+
+Run the integration tests only against a disposable dedicated local database:
+
+```sh
+TRADING_SAFETY_TEST_DSN='postgresql://USER:PASSWORD@127.0.0.1:PORT/TEST_DB' \
+  .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_dry_run_store_postgres.py
+```
+
+Without this variable the tests skip; they reject non-loopback hosts. Each test
+creates a randomly named schema and drops only that schema in fixture teardown,
+including on ordinary test failures, and verifies its removal. An interrupted
+process or unavailable database can prevent cleanup; inspect and remove only
+the corresponding `dry_run_test_` schema in the disposable database if needed.
+The connection-abort test terminates only the backend it created.
+
 ## Goals
 
 - Keep the runtime path low-risk: inserts only, no read dependency.

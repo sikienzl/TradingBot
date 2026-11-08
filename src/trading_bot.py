@@ -360,17 +360,22 @@ class Portfolio:
                 return False
             with open(state_file, 'r') as f:
                 state = json.load(f)
-            self.cash = float(state.get('cash', 0.0))
-            self.holdings = {k: float(v)
-                             for k, v in state.get('holdings', {}).items()}
-            self.open_trades = state.get('open_trades', {})
+            cash = float(state.get('cash', 0.0))
+            holdings = {k: float(v)
+                        for k, v in state.get('holdings', {}).items()}
+            open_trades = state.get('open_trades', {})
             initial_value = state.get('initial_portfolio_value')
-            self.initial_portfolio_value = float(
+            initial_portfolio_value = float(
                 initial_value) if initial_value not in (None, '') else None
-            for trade in self.open_trades.values():
-                ts = trade.get('timestamp')
-                if isinstance(ts, str):
-                    trade['timestamp'] = datetime.fromisoformat(ts)
+            for trade in open_trades.values():
+                for field in ('timestamp', 'partial_tp_timestamp'):
+                    ts = trade.get(field)
+                    if isinstance(ts, str):
+                        trade[field] = datetime.fromisoformat(ts)
+            self.cash = cash
+            self.holdings = holdings
+            self.open_trades = open_trades
+            self.initial_portfolio_value = initial_portfolio_value
             logger.info(f"Portfolio state loaded from {state_file}")
             logger.info(f"  Cash: {self.cash:.2f} {self.base_currency}")
             logger.info(f"  Holdings: {self.holdings}")
@@ -443,8 +448,12 @@ class BotConfig:
     """Configuration class for the trading bot."""
 
     def __init__(self):
+        inherited_recovery_requirement = os.getenv('DRY_RUN_REQUIRE_POSTGRES_RECOVERY')
         # Ensure project .env wins over inherited shell/service variables.
         load_dotenv(override=True)
+        dotenv_recovery_requirement = os.getenv('DRY_RUN_REQUIRE_POSTGRES_RECOVERY')
+        if inherited_recovery_requirement is not None:
+            os.environ['DRY_RUN_REQUIRE_POSTGRES_RECOVERY'] = inherited_recovery_requirement
 
         def _env_bool(name: str, default: bool) -> bool:
             raw = os.getenv(name)
@@ -846,6 +855,20 @@ class BotConfig:
             os.getenv('PERFORMANCE_REPORT_EVERY', 1))
         self.analytics_db_enabled = _env_bool_any(
             ['ANALYTICS_DB_ENABLED', 'POSTGRES_ENABLED'], False)
+        recovery_values = (
+            inherited_recovery_requirement,
+            dotenv_recovery_requirement,
+        )
+        true_values = ('1', 'true', 'yes', 'y', 'on')
+        false_values = ('0', 'false', 'no', 'n', 'off')
+        parsed_recovery_values = [
+            value.strip().lower() for value in recovery_values if value is not None
+        ]
+        if any(value not in true_values + false_values for value in parsed_recovery_values):
+            raise ValueError('DRY_RUN_REQUIRE_POSTGRES_RECOVERY must be a boolean')
+        self.dry_run_require_postgres_recovery = any(
+            value in true_values for value in parsed_recovery_values
+        )
         self.analytics_db_url = _env_str_any(
             ['ANALYTICS_DB_URL', 'POSTGRES_URL'], '')
         self.analytics_db_host = _env_str_any(
@@ -1032,8 +1055,9 @@ class PostgresAnalyticsWriter:
             self._conn = self._psycopg.connect(**kwargs)
             self._conn.autocommit = True
             self._ensure_schema()
+            self._disabled_reason_logged = False
             return True
-        except (OSError, AttributeError, ValueError) as exc:
+        except (OSError, AttributeError, ValueError, self._psycopg.Error) as exc:
             if not self._disabled_reason_logged:
                 logger.warning(
                     'Failed to connect to analytics Postgres DB: %s', exc)
@@ -1151,7 +1175,7 @@ class PostgresAnalyticsWriter:
                         base_currency,
                     ),
                 )
-        except (OSError, AttributeError, ValueError) as exc:
+        except (OSError, AttributeError, ValueError, self._psycopg.Error) as exc:
             logger.warning(
                 'Failed to write trade event to analytics DB: %s', exc)
             self.close()
@@ -1206,7 +1230,7 @@ class PostgresAnalyticsWriter:
                         serialized_open_trades,
                     ),
                 )
-        except (OSError, AttributeError, ValueError) as exc:
+        except (OSError, AttributeError, ValueError, self._psycopg.Error) as exc:
             logger.warning(
                 'Failed to write portfolio snapshot to analytics DB: %s', exc)
             self.close()
@@ -1218,14 +1242,18 @@ class PostgresAnalyticsWriter:
             return
         try:
             conn.close()
-        except (OSError, AttributeError):
-            pass
+        except (OSError, AttributeError, self._psycopg.Error) as exc:
+            logger.warning('Failed to close analytics Postgres connection: %s', exc)
 
 
 class CryptoTradingBot:
     """Main class of the trading bot."""
 
     def __init__(self, config: BotConfig):
+        if getattr(config, 'dry_run_require_postgres_recovery', False):
+            raise RuntimeError(
+                "PostgreSQL dry-run recovery is not implemented; refusing to start."
+            )
         self.config = config
         self.portfolio = Portfolio(config.base_currency)
         self.analytics_writer = PostgresAnalyticsWriter(config)
@@ -4633,6 +4661,12 @@ class CryptoTradingBot:
             logger.error(
                 "LIVE order blocked: durable order recovery and Kraken reconciliation "
                 "are not implemented. Manage existing positions directly on Kraken."
+            )
+            return False
+
+        if getattr(self.config, 'dry_run_require_postgres_recovery', False):
+            logger.error(
+                "Dry-run trade blocked: PostgreSQL recovery is not implemented."
             )
             return False
 

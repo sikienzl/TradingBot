@@ -26,6 +26,8 @@ class MarketDataRelayService:
         self.window_size = int(os.getenv("HAILO8_WINDOW_SIZE", "100"))
         self.flush_every_ticks = int(
             os.getenv("HAILO8_RELAY_FLUSH_TICKS", "10"))
+        if self.window_size <= 0 or self.flush_every_ticks <= 0:
+            raise ValueError("Relay window size and flush interval must be positive")
         self.node_name = os.getenv("NODE_NAME")
         self.stream_id = uuid.uuid4().hex
         self.target = os.getenv("HAILO8_EDGE_GRPC_TARGET",
@@ -73,7 +75,12 @@ class MarketDataRelayService:
                 "relay_last_sequence": self.counters[tick.symbol],
             },
         )
-        ack = await self.client.submit_market_snapshot(snapshot)
+        try:
+            ack = await self.client.submit_market_snapshot(snapshot)
+        except Exception:
+            logger.exception("Snapshot transport failed for %s; no automatic retry", tick.symbol)
+            self.service_metrics.observe_event("flush_failed", time.perf_counter() - started)
+            return
         self.service_metrics.observe_event(
             "flush_snapshot", time.perf_counter() - started)
         self.service_metrics.set_value("flush_tick_count", len(buffer))
@@ -82,6 +89,9 @@ class MarketDataRelayService:
                 "Edge filter rejected snapshot for %s: %s", tick.symbol, ack.message)
             self.service_metrics.observe_event("flush_rejected")
         else:
+            if not ack.metadata.get("inference_enabled", True):
+                logger.warning("Edge accepted snapshot for %s with inference disabled", tick.symbol)
+                self.service_metrics.observe_event("flush_inference_disabled")
             logger.debug(f"✅ Flushed {len(buffer)} ticks for {tick.symbol} in {(time.perf_counter()-started)*1000:.1f}ms")
 
     async def run(self) -> None:
@@ -93,11 +103,14 @@ class MarketDataRelayService:
         
         self.service_metrics.set_up(True)
         logger.info("🔄 Market Relay service is running and listening for ticks...")
-        async with kraken_websocket_session(
-            pairs=self.pairs,
-            tick_callback=self.handle_tick,
-        ) as ws:
-            await ws.listen_forever()
+        try:
+            async with kraken_websocket_session(
+                pairs=self.pairs,
+                tick_callback=self.handle_tick,
+            ) as ws:
+                await ws.listen_forever()
+        finally:
+            self.service_metrics.set_up(False)
 
 
 async def main() -> None:

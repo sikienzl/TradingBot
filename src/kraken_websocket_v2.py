@@ -27,10 +27,11 @@ import json
 import logging
 import math
 import os
+import shutil
 import sqlite3
 import time
 from collections.abc import Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -40,6 +41,12 @@ import websockets
 from websockets.client import WebSocketClientProtocol
 
 logger = logging.getLogger(__name__)
+
+_STORAGE_HEALTH_INTERVAL_SECONDS = 60
+
+
+class TickStorageError(RuntimeError):
+    """A tick could not be persisted or read from the SQLite buffer."""
 
 
 @dataclass
@@ -138,6 +145,24 @@ class KrakenWebSocketV2:
         self._quotes: dict[str, dict] = {}
         self._trades: dict[str, dict] = {}
 
+        self.retention_days = int(
+            os.getenv("HAILO8_LOCAL_TICK_RETENTION_DAYS", "7")
+        )
+        if self.retention_days <= 0:
+            raise ValueError("HAILO8_LOCAL_TICK_RETENTION_DAYS must be positive")
+        self.max_db_bytes = int(
+            os.getenv("HAILO8_LOCAL_TICK_MAX_DB_BYTES", "0")
+        )
+        if self.max_db_bytes < 0:
+            raise ValueError("HAILO8_LOCAL_TICK_MAX_DB_BYTES cannot be negative")
+        self.warn_free_bytes = int(
+            os.getenv("HAILO8_LOCAL_TICK_WARN_FREE_BYTES", str(1024 ** 3))
+        )
+        if self.warn_free_bytes < 0:
+            raise ValueError("HAILO8_LOCAL_TICK_WARN_FREE_BYTES cannot be negative")
+        self._last_storage_health_check = 0.0
+        self._db_limit_warning_emitted = False
+
         # Storage setup
         self.buffer_path = Path(buffer_path or os.getenv(
             "HAILO8_LOCAL_TICK_PATH", "/tmp/trading_ticks"
@@ -145,47 +170,99 @@ class KrakenWebSocketV2:
         self.buffer_path.mkdir(parents=True, exist_ok=True)
         self.db_path = self.buffer_path / "kraken_ticks.db"
         self._init_db()
-
-        # Configuration
         self.reconnect_timeout = int(
             os.getenv("KRAKEN_WS_RECONNECT_TIMEOUT", "30")
         )
-        self.retention_days = int(
-            os.getenv("HAILO8_LOCAL_TICK_RETENTION_DAYS", "7")
-        )
+        self._check_storage_health(force=True)
 
         logger.info(
             f"KrakenWebSocketV2 initialized: pairs={pairs}, buffer={self.buffer_path}"
         )
 
+    @contextmanager
+    def _database(self):
+        """Open a bounded SQLite connection and always close it."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            if self.max_db_bytes:
+                page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+                page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+                max_pages = self.max_db_bytes // page_size
+                if max_pages < 1:
+                    logger.error(
+                        "SQLite DB quota for %s is too small: %d bytes "
+                        "(minimum page size: %d bytes)",
+                        self.db_path,
+                        self.max_db_bytes,
+                        page_size,
+                    )
+                    raise TickStorageError(
+                        f"SQLite DB quota for {self.db_path} is "
+                        f"{self.max_db_bytes} bytes, smaller than one "
+                        f"{page_size}-byte page"
+                    )
+                if page_count > max_pages:
+                    logger.error(
+                        "SQLite database %s already uses %d bytes, above "
+                        "configured %d-byte limit",
+                        self.db_path,
+                        page_count * page_size,
+                        self.max_db_bytes,
+                    )
+                    raise TickStorageError(
+                        f"SQLite database {self.db_path} already uses "
+                        f"{page_count * page_size} bytes, above its configured "
+                        f"{self.max_db_bytes}-byte limit"
+                    )
+                conn.execute(f"PRAGMA max_page_count = {max_pages}")
+            yield conn
+        finally:
+            conn.close()
+
     def _init_db(self):
         """Initialize SQLite database for tick storage"""
-        conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS ticks (
-                id INTEGER PRIMARY KEY,
-                timestamp REAL NOT NULL,
-                symbol TEXT NOT NULL,
-                bid REAL NOT NULL,
-                ask REAL NOT NULL,
-                mid REAL NOT NULL,
-                bid_size REAL NOT NULL,
-                ask_size REAL NOT NULL,
-                last_trade_price REAL NOT NULL,
-                last_trade_size REAL NOT NULL,
-                received_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_timestamp ON ticks(timestamp)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_symbol ON ticks(symbol)"
-        )
-        conn.commit()
-        conn.close()
+        try:
+            with self._database() as conn:
+                with conn:
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS ticks (
+                            id INTEGER PRIMARY KEY,
+                            timestamp REAL NOT NULL,
+                            symbol TEXT NOT NULL,
+                            bid REAL NOT NULL,
+                            ask REAL NOT NULL,
+                            mid REAL NOT NULL,
+                            bid_size REAL NOT NULL,
+                            ask_size REAL NOT NULL,
+                            last_trade_price REAL NOT NULL,
+                            last_trade_size REAL NOT NULL,
+                            received_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                        )
+                        """
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_timestamp ON ticks(timestamp)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_symbol ON ticks(symbol)"
+                    )
+                if self.max_db_bytes:
+                    page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+                    page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+                    max_pages = self.max_db_bytes // page_size
+                    if page_count > max_pages:
+                        raise TickStorageError(
+                            f"SQLite database {self.db_path} needs at least "
+                            f"{page_count * page_size} bytes, above its "
+                            f"configured {self.max_db_bytes}-byte limit"
+                        )
+                    conn.execute(f"PRAGMA max_page_count = {max_pages}")
+        except sqlite3.Error as exc:
+            logger.exception("Failed to initialize SQLite tick store at %s", self.db_path)
+            raise TickStorageError(
+                f"Failed to initialize SQLite tick store at {self.db_path}: {exc}"
+            ) from exc
         logger.info(f"Database initialized: {self.db_path}")
 
     async def connect(self) -> bool:
@@ -220,9 +297,12 @@ class KrakenWebSocketV2:
         except Exception as e:
             logger.error(f"❌ WebSocket connection failed: {e}")
             self.connected = False
-            if self.ws:
-                await self.ws.close()
-                self.ws = None
+            ws, self.ws = self.ws, None
+            if ws:
+                try:
+                    await ws.close()
+                except Exception:
+                    logger.exception("Failed to close WebSocket after connect failure")
             return False
 
     async def _subscribe_ticker(self, pair: str):
@@ -248,18 +328,24 @@ class KrakenWebSocketV2:
 
     async def disconnect(self):
         """Gracefully disconnect from WebSocket"""
-        if self.ws:
-            await self.ws.close()
-            self.connected = False
-            logger.info("Disconnected from Kraken WebSocket")
+        ws, self.ws = self.ws, None
+        self.connected = False
+        if ws:
+            try:
+                await ws.close()
+            finally:
+                logger.info("Disconnected from Kraken WebSocket")
 
     async def listen_forever(self):
         """
         Main loop: listen for ticks indefinitely with auto-reconnect.
 
         Incoming messages are:
-        1. Stored to the configured SQLite buffer (best effort)
+        1. Stored to the configured SQLite buffer
         2. Passed to callback (if provided)
+
+        A storage error stops this listener; it does not continue with ticks
+        that cannot be persisted.
         """
         reconnect_count = 0
 
@@ -279,6 +365,10 @@ class KrakenWebSocketV2:
                     await self._handle_message(message)
                 self.connected = False
                 await asyncio.sleep(5)
+
+            except TickStorageError:
+                logger.exception("Tick listener stopped because SQLite storage failed")
+                raise
 
             except websockets.exceptions.ConnectionClosed:
                 logger.warning(
@@ -364,53 +454,60 @@ class KrakenWebSocketV2:
         self.last_tick_time = datetime.now(UTC)
 
     async def _store_tick(self, tick: Tick):
-        """Store tick to SQLite database"""
+        """Persist a tick or raise instead of silently dropping it."""
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute(
-                """
-                INSERT INTO ticks (
-                    timestamp, symbol, bid, ask, mid,
-                    bid_size, ask_size, last_trade_price, last_trade_size
+            with self._database() as conn, conn:
+                conn.execute(
+                    """
+                        INSERT INTO ticks (
+                            timestamp, symbol, bid, ask, mid,
+                            bid_size, ask_size, last_trade_price, last_trade_size
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                    (
+                        tick.timestamp,
+                        tick.symbol,
+                        tick.bid,
+                        tick.ask,
+                        tick.mid,
+                        tick.bid_size,
+                        tick.ask_size,
+                        tick.last_trade_price,
+                        tick.last_trade_size,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    tick.timestamp,
-                    tick.symbol,
-                    tick.bid,
-                    tick.ask,
-                    tick.mid,
-                    tick.bid_size,
-                    tick.ask_size,
-                    tick.last_trade_price,
-                    tick.last_trade_size,
-                ),
-            )
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            logger.warning(f"Failed to store tick: {e}")
+        except TickStorageError:
+            raise
+        except sqlite3.Error as exc:
+            logger.exception("Failed to persist tick to SQLite at %s", self.db_path)
+            raise TickStorageError(
+                f"Failed to persist tick to SQLite at {self.db_path}: {exc}"
+            ) from exc
+        self._check_storage_health()
 
     def cleanup_old_ticks(self):
-        """Remove ticks older than retention period"""
+        """Explicitly remove ticks older than retention period; never automatic."""
         cutoff_date = datetime.now(UTC) - timedelta(days=self.retention_days)
         cutoff_timestamp = cutoff_date.timestamp()
 
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute(
-                "DELETE FROM ticks WHERE timestamp < ?",
-                (cutoff_timestamp,),
-            )
-            deleted = conn.total_changes
-            conn.commit()
-            conn.close()
-
+            with self._database() as conn, conn:
+                conn.execute(
+                    "DELETE FROM ticks WHERE timestamp < ?",
+                    (cutoff_timestamp,),
+                )
+                deleted = conn.total_changes
             logger.info(
                 f"Cleaned up {deleted} old ticks (>{self.retention_days}d)")
-        except Exception as e:
-            logger.error(f"Cleanup failed: {e}")
+        except TickStorageError:
+            raise
+        except sqlite3.Error as exc:
+            logger.exception("Failed to clean up old ticks in %s", self.db_path)
+            raise TickStorageError(
+                f"Failed to clean up old ticks in {self.db_path}: {exc}"
+            ) from exc
+        self._db_limit_warning_emitted = False
 
     def get_recent_ticks(
         self, symbol: str, limit: int = 100, seconds: int = 300
@@ -429,36 +526,96 @@ class KrakenWebSocketV2:
         cutoff = time.time() - seconds
 
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                """
-                SELECT * FROM ticks
-                WHERE symbol = ? AND timestamp > ?
-                ORDER BY timestamp DESC
-                LIMIT ?
-                """,
-                (symbol, cutoff, limit),
-            ).fetchall()
-            conn.close()
+            with self._database() as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    """
+                    SELECT * FROM ticks
+                    WHERE symbol = ? AND timestamp > ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    (symbol, cutoff, limit),
+                ).fetchall()
+        except TickStorageError:
+            raise
+        except sqlite3.Error as exc:
+            logger.exception("Failed to fetch ticks from SQLite at %s", self.db_path)
+            raise TickStorageError(
+                f"Failed to fetch ticks from SQLite at {self.db_path}: {exc}"
+            ) from exc
 
-            return [
-                Tick(
-                    timestamp=row["timestamp"],
-                    symbol=row["symbol"],
-                    bid=row["bid"],
-                    ask=row["ask"],
-                    mid=row["mid"],
-                    bid_size=row["bid_size"],
-                    ask_size=row["ask_size"],
-                    last_trade_price=row["last_trade_price"],
-                    last_trade_size=row["last_trade_size"],
+        return [
+            Tick(
+                timestamp=row["timestamp"],
+                symbol=row["symbol"],
+                bid=row["bid"],
+                ask=row["ask"],
+                mid=row["mid"],
+                bid_size=row["bid_size"],
+                ask_size=row["ask_size"],
+                last_trade_price=row["last_trade_price"],
+                last_trade_size=row["last_trade_size"],
+            )
+            for row in rows
+        ]
+
+    def _check_storage_health(self, *, force: bool = False):
+        """Warn about retention, database quota, and filesystem free space."""
+        now = time.monotonic()
+        if not force and now - self._last_storage_health_check < (
+            _STORAGE_HEALTH_INTERVAL_SECONDS
+        ):
+            return
+        self._last_storage_health_check = now
+
+        try:
+            db_size = self.db_path.stat().st_size
+            with self._database() as conn:
+                expired = conn.execute(
+                    "SELECT COUNT(*) FROM ticks WHERE timestamp < ?",
+                    (
+                        (datetime.now(UTC) - timedelta(days=self.retention_days))
+                        .timestamp(),
+                    ),
+                ).fetchone()[0]
+            if expired:
+                logger.warning(
+                    "%d ticks are older than the %d-day retention setting; "
+                    "retention is manual and no rows were deleted",
+                    expired,
+                    self.retention_days,
                 )
-                for row in rows
-            ]
-        except Exception as e:
-            logger.error(f"Failed to fetch ticks: {e}")
-            return []
+            if self.max_db_bytes and db_size >= self.max_db_bytes * 0.8:
+                if not self._db_limit_warning_emitted:
+                    logger.warning(
+                        "SQLite tick database is at %d/%d bytes (at least 80%% "
+                        "of configured limit); new writes may fail when full",
+                        db_size,
+                        self.max_db_bytes,
+                    )
+                    self._db_limit_warning_emitted = True
+            else:
+                self._db_limit_warning_emitted = False
+        except OSError:
+            logger.exception("Could not inspect tick storage at %s", self.buffer_path)
+        except sqlite3.Error:
+            logger.exception("Could not inspect SQLite tick storage at %s", self.db_path)
+
+        if self.warn_free_bytes:
+            try:
+                free_bytes = shutil.disk_usage(self.buffer_path).free
+                if free_bytes < self.warn_free_bytes:
+                    logger.warning(
+                        "Tick storage filesystem has only %d free bytes "
+                        "(warning threshold: %d bytes)",
+                        free_bytes,
+                        self.warn_free_bytes,
+                    )
+            except OSError:
+                logger.exception(
+                    "Could not inspect filesystem space for %s", self.buffer_path
+                )
 
     def get_metrics(self) -> dict[str, Any]:
         """Get connection & throughput metrics"""

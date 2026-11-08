@@ -1,11 +1,12 @@
 import asyncio
 import json
 import sqlite3
-from unittest.mock import AsyncMock, patch
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.kraken_websocket_v2 import KrakenWebSocketV2, Tick
+from src.kraken_websocket_v2 import KrakenWebSocketV2, Tick, TickStorageError
 
 QUOTE = {
     "symbol": "ALGO/USD", "bid": 0.10025, "bid_qty": 740.0,
@@ -27,6 +28,7 @@ def client():
         KrakenWebSocketV2, "_init_db"
     ):
         client = KrakenWebSocketV2(["ALGO/USD", "BTC/USD"], buffer_path="unused")
+    client.warn_free_bytes = 0
     client._store_tick = AsyncMock()
     client.tick_callback = AsyncMock()
     return client
@@ -203,3 +205,102 @@ def test_database_round_trip_and_retention(client):
             assert keeper.execute("SELECT COUNT(*) FROM ticks").fetchone()[0] == 0
     finally:
         keeper.close()
+
+
+def test_storage_failure_is_reported_and_tick_is_not_sent(client, caplog):
+    connection = MagicMock()
+    connection.execute.side_effect = sqlite3.OperationalError("database is full")
+    client.db_path = Path("ticks.db")
+    client._store_tick = KrakenWebSocketV2._store_tick.__get__(client)
+    client.tick_callback = AsyncMock()
+    send(client, "ticker", [QUOTE])
+
+    with patch(
+        "src.kraken_websocket_v2.sqlite3.connect", return_value=connection
+    ), pytest.raises(TickStorageError, match="database is full"):
+        send(client, "trade", [TRADE])
+
+    connection.close.assert_called_once()
+    client.tick_callback.assert_not_awaited()
+    assert client.ticks_received == 0
+    assert "ticks.db" in caplog.text
+
+
+def test_read_failure_is_not_reported_as_empty_result(client):
+    connection = MagicMock()
+    connection.execute.side_effect = sqlite3.OperationalError("I/O error")
+    client.db_path = Path("ticks.db")
+
+    with patch(
+        "src.kraken_websocket_v2.sqlite3.connect", return_value=connection
+    ), pytest.raises(TickStorageError, match="I/O error"):
+        client.get_recent_ticks("ALGO/USD")
+
+    connection.close.assert_called_once()
+
+
+def test_database_page_limit_is_applied_and_retention_only_warns(
+    client, tmp_path, caplog
+):
+    client.db_path = tmp_path / "kraken_ticks.db"
+    client.buffer_path = tmp_path
+    client.max_db_bytes = 64 * 1024
+    client.warn_free_bytes = 0
+    client._init_db()
+
+    with client._database() as connection:
+        page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+        page_limit = connection.execute("PRAGMA max_page_count").fetchone()[0]
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO ticks (
+                    timestamp, symbol, bid, ask, mid, bid_size, ask_size,
+                    last_trade_price, last_trade_size
+                ) VALUES (0, 'ALGO/USD', 1, 2, 1.5, 1, 1, 1.5, 1)
+                """
+            )
+    assert page_limit * page_size <= client.max_db_bytes
+
+    client._check_storage_health(force=True)
+    assert "retention is manual" in caplog.text
+    with client._database() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM ticks").fetchone()[0] == 1
+
+
+def test_database_quota_fails_writes_without_deleting_existing_ticks(
+    client, tmp_path
+):
+    client.db_path = tmp_path / "kraken_ticks.db"
+    client.buffer_path = tmp_path
+    client.max_db_bytes = 0
+    client.warn_free_bytes = 0
+    client._init_db()
+    with client._database() as connection:
+        page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+        page_count = connection.execute("PRAGMA page_count").fetchone()[0]
+    client.max_db_bytes = page_size * page_count
+
+    client._store_tick = KrakenWebSocketV2._store_tick.__get__(client)
+    persisted = 0
+    with pytest.raises(TickStorageError, match="full"):
+        for _ in range(500):
+            asyncio.run(client._store_tick(Tick.from_kraken_message(QUOTE, TRADE)))
+            persisted += 1
+
+    with client._database() as connection:
+        count = connection.execute("SELECT COUNT(*) FROM ticks").fetchone()[0]
+    assert count == persisted
+    assert persisted > 0
+
+
+def test_disconnect_releases_websocket_reference_even_if_close_fails(client):
+    ws = AsyncMock()
+    ws.close.side_effect = RuntimeError("close failed")
+    client.ws, client.connected = ws, True
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        asyncio.run(client.disconnect())
+
+    assert client.ws is None
+    assert not client.connected

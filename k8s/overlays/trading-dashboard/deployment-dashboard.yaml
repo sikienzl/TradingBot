@@ -27,6 +27,9 @@ spec:
           envFrom:
             - secretRef:
                 name: trading-dashboard-credentials
+          env:
+            - name: DASHBOARD_DB_SCHEMA
+              value: trading_analytics
           securityContext:
             readOnlyRootFilesystem: true
             runAsNonRoot: true
