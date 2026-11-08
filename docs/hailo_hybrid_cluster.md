@@ -187,6 +187,33 @@ matched the existing ONNX model exactly. The synthetic HEF
 was created only inside a disposable container and is **not suitable for
 deployment**. DFC also warned about unexpected matmul input shapes.
 
+### Isolated hardware smoke test (2026-11-08)
+
+A separate opset 14 export of the same checkpoint was compiled with DFC
+3.34.0 for Hailo-8 using 64 synthetic, per-feature normalized windows. The
+resulting two-context HEF was tested on `rasp-clu-02` with HailoRT and firmware
+4.23.0. It ran directly through `HailoHEFRunner` on `/dev/hailo0`, without
+CPU fallback. The test did not change the running CPU shadow worker or the
+dry-run simulation.
+
+On ten independent synthetic windows, the original ONNX model and the test
+export gave identical CPU outputs. Comparing the test export's CPU outputs
+with the HEF suggests `fc3` corresponds to `anomaly_score` and `fc4` to
+`confidence`. Maximum absolute differences were 0.004551 and 0.028984
+respectively, on the raw 0–1 output scale. Both the worker's `(1, 60, 9)`
+input and a `(1, 1, 60, 9)` input were accepted and gave identical HEF outputs
+on these windows. These observations do not establish output mapping for
+other HEFs, representative accuracy, or a performance advantage.
+
+The test ONNX SHA-256 was
+`2e6e621ca90781ffd98c89159b53fcc43211d7856bb62aaaac73dceecd80b616`;
+the test HEF SHA-256 was
+`23b63a71c3ddf66f3ec5f666993700b8db126e5c6e1e80de51cfadc2b21a1d85`.
+Neither artifact is a production model. Before any shadow rollout, validate
+the output mapping and preprocessing for the actual HEF and compare it with
+ONNX on representative, held-out real data. Trading decisions remain
+disconnected from the shadow chain.
+
 The existing ONNX file is not replaced automatically. On a host with this
 project's training dependencies installed, re-export the existing checkpoint
 to a new path:
