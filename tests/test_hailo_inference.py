@@ -24,6 +24,7 @@ def test_infer_uses_direct_hailo_runner_when_available() -> None:
     model.hef_path = Path("model/hailo_prefilter/timeseries_transformer.hef")
     model.seq_length = 3
     model.n_features = 9
+    model.preprocessing_version = "legacy"
     model.last_inference_seconds = 0.0
     model.last_provider = "unknown"
     model.hailo_runner = _FakeHailoRunner()

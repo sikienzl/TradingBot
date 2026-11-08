@@ -1,6 +1,27 @@
-
+import pytest
 
 from src.trading_bot import BotConfig, CryptoTradingBot
+from src.utils.german_tax_calculator import GermanTaxCalculator
+
+
+@pytest.fixture(autouse=True)
+def isolate_bot_initialization(monkeypatch):
+    monkeypatch.setenv("SIMULATE_DATA", "true")
+    monkeypatch.setenv("USE_ML_MODEL", "false")
+    monkeypatch.setenv("USE_TABULAR_MODEL", "false")
+    monkeypatch.setattr("src.trading_bot.PostgresAnalyticsWriter", lambda config: None)
+    monkeypatch.setattr(CryptoTradingBot, "_initialize_exchange", lambda self: None)
+    monkeypatch.setattr(CryptoTradingBot, "_init_trade_journal", lambda self: None)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_bot_initializes_tax_calculator(monkeypatch, enabled):
+    monkeypatch.setenv("GERMAN_TAX_ENABLED", str(enabled).lower())
+    bot = CryptoTradingBot(BotConfig())
+    if enabled:
+        assert isinstance(bot.tax_calculator, GermanTaxCalculator)
+    else:
+        assert bot.tax_calculator is None
 
 
 def test_daily_loss_guard_blocks_new_entries():

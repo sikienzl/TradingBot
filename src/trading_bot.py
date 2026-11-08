@@ -19,6 +19,11 @@ import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
+if __package__:
+    from .utils.german_tax_calculator import create_tax_calculator
+else:
+    from utils.german_tax_calculator import create_tax_calculator
+
 logger = logging.getLogger(__name__)
 
 

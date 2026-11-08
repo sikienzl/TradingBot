@@ -111,7 +111,7 @@ def test_calculate_acquisition_cost():
         tx_id="buy_1",
         type="buy",
         coin="BTC",
-        amount=1.0,
+        amount=0.5,
         price=50000.0,
         timestamp=datetime(2022, 1, 1),
         exchange="Kraken",
@@ -124,7 +124,7 @@ def test_calculate_acquisition_cost():
         coin="BTC",
         amount=0.5,
         price=55000.0,
-        timestamp=datetime(2022, 1, 1),
+        timestamp=datetime(2022, 1, 2),
         exchange="Kraken",
         fee=0.0
     )

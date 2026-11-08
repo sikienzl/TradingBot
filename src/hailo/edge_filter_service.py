@@ -15,6 +15,7 @@ import time
 from datetime import datetime
 
 from src.hailo.inference import AnomalyDetector, TimeSeriesTransformerONNX
+from src.hailo.preprocessing import PREPROCESSING_VERSION
 from src.hybrid.decision_gate import AnomalyAlert
 from src.hybrid.grpc_bridge import (
     EdgeFilterRpcServer,
@@ -121,6 +122,10 @@ class HailoEdgeFilterService:
         try:
             alert_dict = None
             if self.inference_enabled and self.detector is not None:
+                if self.model.preprocessing_version == PREPROCESSING_VERSION:
+                    if tick_dict.get("symbol") not in (None, "", symbol):
+                        raise ValueError("Tick symbol does not match market snapshot pair")
+                    tick_dict = {**tick_dict, "symbol": symbol}
                 # Run inference & check for anomalies
                 alert_dict = self.detector.update(tick_dict)
 

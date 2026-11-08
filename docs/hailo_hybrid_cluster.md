@@ -40,6 +40,79 @@ model/hailo_prefilter/model_config.json
 model/hailo_prefilter/hailo_compile_instructions.json
 ```
 
+## New models: shared tick preprocessing and calibration
+
+The existing model and worker continue to use `legacy` preprocessing by
+default. Its training and inference preprocessing differ, and the historical
+training statistics were not saved. Do not switch an existing checkpoint to
+`tick-window-v1`: train a new model with that version and validate it before
+use. The new version uses the same window preprocessing for training,
+calibration and worker inference: nine features in order `bid`, `ask`, `mid`,
+`bid_size`, `ask_size`, `last_trade_price`, `last_trade_size`,
+`bid_size / max(ask_size, 1e-6)`, and `spread` (provided or `ask - bid`);
+each window is independently z-score normalized to float32. Ticks are grouped
+by symbol; the worker rejects invalid or backward-moving timestamps rather
+than mixing symbols or padding incomplete windows.
+
+The new training CSV must contain real recorded ticks with columns
+`timestamp` (finite Unix seconds), `symbol`, the first seven features above,
+and `is_anomaly` (0 or 1 for the last tick of each window). Optional `spread`
+must be finite. Values must be complete, and bid/ask sizes nonnegative. Label
+the data using a documented, independently validated method: the training
+path does not generate labels for this version. OHLCV candles alone do not
+contain the required order-book quantities. The existing root
+`training_data.csv` is OHLCV and is not suitable for this workflow.
+
+Train into a **new, separate** directory on a host with the project's training
+dependencies:
+
+```sh
+python -m src.models.train_timeseries_transformer \
+  --train-data /path/to/labeled_ticks.csv \
+  --output-dir /path/to/new_model \
+  --preprocessing-version tick-window-v1 \
+  --seq-length 60
+```
+
+Rows are stably ordered by timestamp before the 80/20 chronological split,
+with equal timestamps kept on the same side. Each symbol must have at least
+`seq_length` ticks in both splits. Windows do not cross the split, but labels
+must also be checked for future-data leakage independently. The output
+directory must not already contain model artifacts; the configuration records
+the preprocessing version. The training code does not directly train the
+confidence head, so its output is not yet a validated confidence estimate.
+
+Create calibration windows from representative recorded data, ideally a
+training/calibration period separate from the final evaluation period:
+
+```sh
+python -m scripts.hailo_prepare_calibration \
+  --ticks /path/to/recorded_ticks.csv \
+  --model-config /path/to/new_model/model_config.json \
+  --symbol BTC/USD --symbol ETH/USD \
+  --output /path/to/new_model/calibration.npy \
+  --max-windows-per-symbol 1024 --stride 1
+```
+
+`--ticks` also accepts the Kraken tick SQLite database (`ticks` table); it is
+read without modification. CSV requires the same tick columns as training,
+but does not require labels. All requested symbols must have enough ticks.
+For each symbol, eligible chronological windows are sampled evenly over the
+available recording; `stride` controls the spacing of eligible window ends and
+the limit applies per symbol. Selection is deterministic for the same ordered
+records, including equal-timestamp ordering. The output is float32 with shape
+`(number_of_windows, 1, seq_length, 9)`. A companion
+`calibration.npy.json` records the preprocessing version, shape, per-symbol
+counts, selection parameters and SHA-256 of the `.npy` file. Neither output is
+overwritten. Review the recording's coverage, ordering and quality before
+using it; determinism alone does not make it representative.
+
+The worker reads `model_config.json` beside the ONNX file, or from
+`HAILO8_MODEL_CONFIG_PATH`. The model, matching configuration and eventual
+HEF must be deployed together; an absent configuration defaults to legacy.
+Do not replace the live model until the new ONNX and compiled HEF have been
+independently validated. This workflow does not yet package or deploy them.
+
 ## Compile Workflow
 
 The worker node contains the Hailo runtime, but not the full model compiler toolchain. Compile the HEF in the compiler image below or on another host that has the compatible Hailo SDK / Model Zoo tooling installed.
@@ -170,8 +243,8 @@ to zero and warned that accuracy may be suboptimal.
 The test HEF reports input `NHWC(1x60x9)` and outputs named `fc3` and `fc4`,
 not the ONNX tensor names. The current worker's HEF path must be checked and,
 if needed, adapted for this shape and for the mapping of those outputs to
-anomaly score and confidence before deploying the HEF. Training and inference
-preprocessing also need to be reconciled and validated on representative data.
+anomaly score and confidence before deploying the HEF. Even for a new v1
+model, preprocessing and accuracy must be validated on representative data.
 The source wheel and DEB are excluded from Git and from the repository's
 default Docker build context. The separate named build context contains only
 the two required files and exposes them read-only to their installation steps;
@@ -194,24 +267,11 @@ Inspect it with `docker buildx du`; when space is needed, `docker buildx prune`
 removes cache for the selected builder after confirmation. Avoid `--no-cache`
 as a disk-cleanup option: it forces rebuilds but does not remove existing cache.
 
-High-level flow:
-
-1. Train or export the transformer model to ONNX.
-2. Read `model/hailo_prefilter/hailo_compile_instructions.json`.
-3. Compile `timeseries_transformer.onnx` into `timeseries_transformer.hef` on the compiler host.
-4. Copy the resulting HEF into `model/hailo_prefilter/` in this repo.
-5. Re-run `bash scripts/rollout_hybrid_cluster.sh`.
-
-Representative commands on the SDK host:
-
-```sh
-python3 -m src.train_timeseries_transformer --training-data training_data.csv --output-model-dir model/hailo_prefilter
-
-# Then compile with the Hailo SDK / Model Zoo tooling on the compile host.
-# Use the generated ONNX, model_config.json and representative market windows.
-```
-
-This repo intentionally does not hardcode a single `hailomz compile` invocation because the exact calibration dataset, parser options and target architecture belong to the SDK host setup.
+High-level flow: collect and label real ticks, train a new v1 model, create
+representative calibration windows, compile with the wrapper above, compare
+the ONNX and HEF on held-out data, and test the actual device before rollout.
+The installed HailoRT version on the target must also be compatible with the
+compiler and HEF.
 
 ## Rollout
 

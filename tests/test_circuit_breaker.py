@@ -21,7 +21,7 @@ def _make_bot():
         bot.config.max_daily_loss_pct = 0
         bot.config.max_buys_per_hour = 0
         bot.config.loss_streak_pause_threshold = 0
-        bot.config.scorecard_verdict_path = "/nonexistent/path.json"
+        bot.config.scorecard_verdict_paths = ["/nonexistent/path.json"]
         bot._last_successful_price_at = None
         bot.buy_pause_until_utc = None
         bot.buy_timestamps_utc = []
@@ -82,7 +82,7 @@ class TestCircuitBreaker:
             tmp = f.name
 
         try:
-            bot.config.scorecard_verdict_path = tmp
+            bot.config.scorecard_verdict_paths = [tmp]
             ok, reason = bot._can_open_new_positions(100.0)
             assert not ok
             assert "NO-GO" in reason or "Scorecard" in reason

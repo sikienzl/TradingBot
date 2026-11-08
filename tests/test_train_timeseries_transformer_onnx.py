@@ -3,7 +3,6 @@ import pytest
 
 torch = pytest.importorskip("torch")
 pytest.importorskip("pandas")
-pytest.importorskip("einops")
 
 from src.models import train_timeseries_transformer as training
 

@@ -1,3 +1,4 @@
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,6 +7,23 @@ from unittest.mock import Mock
 import pytest
 
 from scripts import hailo_export_onnx
+
+
+def test_export_imports_without_einops() -> None:
+    code = """
+import importlib.abc
+import sys
+
+class BlockEinops(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "einops" or fullname.startswith("einops."):
+            raise ModuleNotFoundError("einops intentionally unavailable", name=fullname)
+
+sys.meta_path.insert(0, BlockEinops())
+from scripts.hailo_export_onnx import TimeSeriesTransformer, TimeSeriesTransformerConfig
+TimeSeriesTransformer(TimeSeriesTransformerConfig())
+"""
+    subprocess.run([sys.executable, "-c", code], check=True, capture_output=True, text=True)
 
 
 @pytest.fixture

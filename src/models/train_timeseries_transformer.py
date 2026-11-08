@@ -21,15 +21,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
-try:
-    import einops
-    import torch
-    from torch import nn, optim
-    from torch.utils.data import DataLoader, Dataset
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
+import torch
+from torch import nn, optim
+from torch.utils.data import DataLoader, Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +42,7 @@ class TimeSeriesTransformerConfig:
     batch_size: int = 32
     epochs: int = 50
     patience: int = 5
+    preprocessing_version: str = "legacy"
 
 
 class TimeSeriesDataset(Dataset):
@@ -59,15 +54,17 @@ class TimeSeriesDataset(Dataset):
         seq_length: int = 60,
         feature_cols: list[str] | None = None,
         label_col: str = "is_anomaly",
+        preprocessing_version: str = "legacy",
     ):
         """
         Initialize dataset.
 
         Args:
             ticks_df: DataFrame with tick data
-            seq_length: Must be pre-split; each row = one sequence
+            seq_length: Number of rows per sliding window
             feature_cols: Columns to use as features
             label_col: Column with anomaly labels (0/1)
+            preprocessing_version: "legacy" or "tick-window-v1"
         """
         self.seq_length = seq_length
         self.feature_cols = feature_cols or [
@@ -75,9 +72,78 @@ class TimeSeriesDataset(Dataset):
             "last_trade_price", "last_trade_size", "bid_ask_ratio", "spread"
         ]
         self.label_col = label_col
-        prepared = self._prepare_sequences(ticks_df.copy())
+        self.preprocessing_version = preprocessing_version
+        if preprocessing_version == "legacy":
+            prepared = self._prepare_sequences(ticks_df.copy())
+        elif preprocessing_version == "tick-window-v1":
+            if feature_cols is not None or label_col != "is_anomaly":
+                raise ValueError("tick-window-v1 requires the standard features and is_anomaly label")
+            prepared = self._prepare_tick_sequences(ticks_df.copy())
+        else:
+            raise ValueError(f"Unknown preprocessing version: {preprocessing_version}")
         self.sequences = prepared["sequences"]
         self.labels = prepared["labels"]
+
+    def _prepare_tick_sequences(self, ticks_df: pd.DataFrame) -> dict[str, list]:
+        from src.hailo.preprocessing import PREPROCESSING_VERSION, TICK_FIELDS, prepare_tick_window
+
+        if PREPROCESSING_VERSION != self.preprocessing_version:
+            raise ValueError("Shared preprocessing version does not match the requested version")
+        if not isinstance(self.seq_length, int) or isinstance(self.seq_length, bool) or self.seq_length <= 0:
+            raise ValueError("seq_length must be a positive integer")
+
+        tick_fields = TICK_FIELDS
+        required = {"timestamp", "symbol", "is_anomaly", *tick_fields}
+        missing = sorted(required.difference(ticks_df.columns))
+        if missing:
+            raise ValueError(f"tick-window-v1 requires columns: {missing}")
+        if not ticks_df.columns.is_unique:
+            raise ValueError("tick-window-v1 requires unique column names")
+        if not ticks_df["symbol"].map(lambda value: isinstance(value, str) and bool(value.strip())).all():
+            raise ValueError("symbol must be a non-empty string")
+
+        timestamps = pd.to_numeric(ticks_df["timestamp"], errors="coerce")
+        if not np.isfinite(timestamps.to_numpy(dtype=np.float64)).all():
+            raise ValueError("timestamp must contain finite Unix timestamps in seconds")
+        numeric_fields = [*tick_fields, "is_anomaly"]
+        if "spread" in ticks_df.columns:
+            numeric_fields.append("spread")
+        for field in numeric_fields:
+            values = pd.to_numeric(ticks_df[field], errors="coerce")
+            if not np.isfinite(values.to_numpy(dtype=np.float64)).all():
+                raise ValueError(f"{field} must contain finite numeric values")
+            ticks_df[field] = values
+        if not ticks_df["is_anomaly"].isin([0, 1]).all():
+            raise ValueError("is_anomaly must contain only 0 or 1")
+        if (ticks_df[["bid_size", "ask_size"]] < 0).any().any():
+            raise ValueError("bid_size and ask_size must not be negative")
+
+        ticks_df = ticks_df.reset_index(drop=True)
+        timestamps = timestamps.reset_index(drop=True)
+        sequences: list[np.ndarray] = []
+        labels: list[float] = []
+        for _, group in ticks_df.groupby("symbol", sort=False):
+            order = timestamps.loc[group.index].sort_values(kind="stable").index
+            group = group.loc[order]
+            records = group.to_dict("records")
+            for end in range(self.seq_length, len(records) + 1):
+                window = records[end - self.seq_length:end]
+                result = prepare_tick_window(window, self.seq_length)
+                if (
+                    not isinstance(result, np.ndarray)
+                    or result.shape != (1, self.seq_length, 9)
+                    or result.dtype != np.float32
+                    or not np.isfinite(result).all()
+                ):
+                    raise ValueError("Shared tick preprocessing returned an invalid array")
+                sequences.append(result[0])
+                labels.append(float(window[-1]["is_anomaly"]))
+
+        if not sequences:
+            raise ValueError(
+                f"No sequences could be built from the input data for seq_length={self.seq_length}"
+            )
+        return {"sequences": sequences, "labels": labels}
 
     def _prepare_sequences(self, ticks_df: pd.DataFrame) -> dict[str, list[np.ndarray]]:
         feature_cols = list(self.feature_cols)
@@ -488,28 +554,63 @@ def train_transformer(
     """
     Full training pipeline: load data → train → export to ONNX
 
+    Legacy CSV rows are split 80/20 in input order. For tick-window-v1, rows
+    are sorted chronologically before splitting to prevent future leakage.
+
     Args:
         training_data_path: Path to CSV with tick sequences
         output_model_dir: Directory to save model
         config: Training config (uses defaults if None)
     """
-    if not TORCH_AVAILABLE:
-        raise ImportError("PyTorch required for training")
-
     config = config or TimeSeriesTransformerConfig()
+    if config.preprocessing_version not in {"legacy", "tick-window-v1"}:
+        raise ValueError(f"Unknown preprocessing version: {config.preprocessing_version}")
+    if config.preprocessing_version == "tick-window-v1" and config.n_features != 9:
+        raise ValueError("tick-window-v1 requires n_features=9")
+    if config.preprocessing_version == "tick-window-v1":
+        artifacts = (
+            "timeseries_transformer_state.pt", "model_config.json", "training_history.json",
+            "timeseries_transformer.onnx", "hailo_compile_instructions.json",
+        )
+        if any((Path(output_model_dir) / name).exists() for name in artifacts):
+            raise FileExistsError("tick-window-v1 requires an output directory without existing model artifacts")
     Path(output_model_dir).mkdir(parents=True, exist_ok=True)
 
     # Load data
     logger.info(f"Loading training data from {training_data_path}")
     df = pd.read_csv(training_data_path)
+    if config.preprocessing_version == "tick-window-v1":
+        if "timestamp" not in df.columns:
+            raise ValueError("tick-window-v1 requires a timestamp column")
+        timestamps = pd.to_numeric(df["timestamp"], errors="coerce")
+        if not np.isfinite(timestamps.to_numpy(dtype=np.float64)).all():
+            raise ValueError("timestamp must contain finite Unix timestamps in seconds")
+        order = np.argsort(timestamps.to_numpy(), kind="stable")
+        df = df.iloc[order].reset_index(drop=True)
+        timestamps = timestamps.iloc[order].reset_index(drop=True)
 
     # Split train/val
     n_train = int(0.8 * len(df))
+    if config.preprocessing_version == "tick-window-v1" and 0 < n_train < len(df):
+        n_train = int(np.searchsorted(timestamps.to_numpy(), timestamps.iloc[n_train], side="left"))
     train_df = df[:n_train].reset_index(drop=True)
     val_df = df[n_train:].reset_index(drop=True)
 
-    train_dataset = TimeSeriesDataset(train_df, seq_length=config.seq_length)
-    val_dataset = TimeSeriesDataset(val_df, seq_length=config.seq_length)
+    if config.preprocessing_version == "tick-window-v1" and "symbol" in df.columns:
+        counts = [part.groupby("symbol", dropna=False).size() for part in (train_df, val_df)]
+        if set(counts[0].index) != set(counts[1].index) or any(
+            (count < config.seq_length).any() for count in counts
+        ):
+            raise ValueError("Each symbol needs at least seq_length ticks in both chronological splits")
+
+    train_dataset = TimeSeriesDataset(
+        train_df, seq_length=config.seq_length,
+        preprocessing_version=config.preprocessing_version,
+    )
+    val_dataset = TimeSeriesDataset(
+        val_df, seq_length=config.seq_length,
+        preprocessing_version=config.preprocessing_version,
+    )
 
     train_loader = DataLoader(
         train_dataset, batch_size=config.batch_size, shuffle=True)
@@ -553,7 +654,7 @@ def train_transformer(
     return model, history
 
 
-if __name__ == "__main__":
+def main():
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -577,6 +678,12 @@ if __name__ == "__main__":
         type=int,
         default=int(os.getenv("TIMESERIES_SEQ_LENGTH", "60")),
         help="Sequence length for transformer input",
+    )
+    parser.add_argument(
+        "--preprocessing-version",
+        choices=("legacy", "tick-window-v1"),
+        default="legacy",
+        help="Preprocessing version (tick-window-v1 requires complete labeled ticks)",
     )
     parser.add_argument(
         "--hidden-dim",
@@ -632,6 +739,7 @@ if __name__ == "__main__":
         epochs=max(1, args.epochs),
         learning_rate=max(1e-7, args.learning_rate),
         patience=max(1, args.patience),
+        preprocessing_version=args.preprocessing_version,
     )
 
     try:
@@ -643,3 +751,7 @@ if __name__ == "__main__":
     except Exception as exc:
         logger.error("Training failed: %s", exc)
         raise
+
+
+if __name__ == "__main__":
+    main()

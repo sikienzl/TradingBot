@@ -15,6 +15,8 @@ from typing import Any
 
 import numpy as np
 
+from src.hailo.preprocessing import PREPROCESSING_VERSION, prepare_tick_window
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -188,6 +190,9 @@ class TimeSeriesTransformerONNX:
         )
         self.model_config = self._load_model_config()
         self.seq_length = int(self.model_config.get("seq_length", seq_length))
+        self.preprocessing_version = self.model_config.get("preprocessing_version", "legacy")
+        if self.preprocessing_version not in ("legacy", PREPROCESSING_VERSION):
+            raise ValueError(f"Unsupported preprocessing version: {self.preprocessing_version}")
         self.device = device
         self.session = None
         self.hailo_runner: HailoHEFRunner | None = None
@@ -195,6 +200,8 @@ class TimeSeriesTransformerONNX:
         self.last_inference_seconds = 0.0
         self.last_provider = "unknown"
         self.n_features = int(self.model_config.get("n_features", 9))
+        if self.preprocessing_version == PREPROCESSING_VERSION and self.n_features != 9:
+            raise ValueError(f"{PREPROCESSING_VERSION} requires exactly 9 features")
         self.hailo_runtime_available = HAILO_AVAILABLE
         self.hailo_runtime_source = HAILO_IMPORT_SOURCE
         self.available_providers = []
@@ -313,6 +320,8 @@ class TimeSeriesTransformerONNX:
 
         Features: [bid, ask, mid, bid_size, ask_size, last_trade, volume, bid_volume_ratio, ask_volume_ratio]
         """
+        if self.preprocessing_version == PREPROCESSING_VERSION:
+            return prepare_tick_window(ticks, self.seq_length)
         if len(ticks) < self.seq_length:
             # Pad with first tick
             ticks = [ticks[0]] * (self.seq_length - len(ticks)) + ticks
@@ -391,12 +400,15 @@ class TimeSeriesTransformerONNX:
         except Exception as e:
             logger.error(f"Inference failed: {e}")
             self.last_inference_seconds = 0.0
+            if self.preprocessing_version == PREPROCESSING_VERSION:
+                raise
             return 0.0, 0.0
 
     def get_runtime_stats(self) -> dict[str, Any]:
         return {
             "seq_length": self.seq_length,
             "n_features": self.n_features,
+            "preprocessing_version": self.preprocessing_version,
             "provider": self.last_provider,
             "last_inference_seconds": self.last_inference_seconds,
             "model_path": str(self.model_path),
@@ -453,7 +465,14 @@ class AnomalyDetector:
         self.model = model
         self.threshold = threshold
         self.window_size = window_size
+        if (
+            getattr(model, "preprocessing_version", "legacy") == PREPROCESSING_VERSION
+            and window_size < model.seq_length
+        ):
+            raise ValueError("window_size must be at least the model sequence length")
         self.tick_buffer = []  # Sliding window of ticks
+        self.tick_buffers: dict[str, list[dict[str, float]]] = {}
+        self.last_timestamps: dict[str, float] = {}
         self.alerts = []
 
         logger.info(
@@ -471,6 +490,20 @@ class AnomalyDetector:
         Returns:
             Alert dict if anomaly detected, None otherwise
         """
+        if getattr(self.model, "preprocessing_version", "legacy") == PREPROCESSING_VERSION:
+            symbol = tick.get("symbol")
+            if not isinstance(symbol, str) or not symbol:
+                raise ValueError(f"{PREPROCESSING_VERSION} requires a tick symbol")
+            timestamp = float(tick["timestamp"])
+            if not np.isfinite(timestamp):
+                raise ValueError("Tick timestamp must be finite")
+            if symbol in self.last_timestamps and timestamp < self.last_timestamps[symbol]:
+                raise ValueError(f"Tick timestamp went backwards for {symbol}")
+            candidate = [*self.tick_buffers.get(symbol, []), tick]
+            prepare_tick_window(candidate, min(self.model.seq_length, len(candidate)))
+            self.last_timestamps[symbol] = timestamp
+            self.tick_buffer = self.tick_buffers.setdefault(symbol, [])
+
         # Add to buffer
         self.tick_buffer.append(tick)
 
