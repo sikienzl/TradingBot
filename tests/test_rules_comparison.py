@@ -89,3 +89,35 @@ def test_start_without_existing_state_fails_closed(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["comparison", "--data-dir", str(tmp_path)])
     with pytest.raises(RuntimeError, match="initialize explicitly"):
         main()
+
+
+@pytest.mark.parametrize("allow", [False, True])
+def test_defensive_fallback_requires_explicit_flag(tmp_path, monkeypatch, allow):
+    import scripts.rules_comparison as comparison
+
+    monkeypatch.setattr("src.trading_bot.load_dotenv", lambda **kwargs: False)
+    monkeypatch.setattr(comparison, "configure_logging", lambda path: None)
+    monkeypatch.setattr(sys, "argv", ["comparison", "--data-dir", str(tmp_path),
+                                     "--initialize", "--initial-cash", "19.52"])
+    main()
+    captured = []
+
+    class FakeBot:
+        def __init__(self, config):
+            self.exchange = object()
+            captured.append(config)
+
+        def run(self):
+            pass
+
+    monkeypatch.setattr(comparison, "RulesComparisonBot", FakeBot)
+    argv = ["comparison", "--data-dir", str(tmp_path)]
+    if allow:
+        argv.append("--allow-defensive-fallback")
+    monkeypatch.setattr(sys, "argv", argv)
+    main()
+    config = captured[0]
+    assert config.defensive_entry_mode_enabled is not allow
+    assert config.dry_run and not config.force_fill_slots
+    assert config.uptrend_entry_gate_enabled and config.fallback_max_rsi == 68
+    assert config.trade_amount == 5

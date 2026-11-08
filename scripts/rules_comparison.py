@@ -45,6 +45,10 @@ def main() -> None:
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--initialize", action="store_true")
     parser.add_argument("--initial-cash", type=float)
+    parser.add_argument(
+        "--allow-defensive-fallback", action="store_true",
+        help="Permit fallback entries in defensive markets for this isolated dry run",
+    )
     args = parser.parse_args()
     directory = args.data_dir.resolve(strict=True)
     if not directory.is_dir():
@@ -80,7 +84,10 @@ def main() -> None:
             "USE_TABULAR_MODEL": "false", "AI_COPILOT_ENABLED": "false",
             "AI_COPILOT_BENCHMARK_ENABLED": "false", "AUTORESEARCH_ACTIVE": "false",
             "HAILO_REMOTE_ENABLED": "false", "KRAKEN_API_KEY": "", "KRAKEN_API_SECRET": "",
-            "DEFENSIVE_ENTRY_MODE_ENABLED": "true", "UPTREND_ENTRY_GATE_ENABLED": "true",
+            "DEFENSIVE_ENTRY_MODE_ENABLED": (
+                "false" if args.allow_defensive_fallback else "true"
+            ),
+            "UPTREND_ENTRY_GATE_ENABLED": "true",
             "ENABLE_FALLBACK_ENTRY": "true", "FORCE_FILL_SLOTS": "false",
         })
         configure_logging(str(directory / "bot.log"))
@@ -88,7 +95,8 @@ def main() -> None:
         if (
             not config.dry_run or config.simulate_data or config.api_key or config.api_secret
             or config.use_ml_model or config.use_tabular_model or config.analytics_db_enabled
-            or not config.defensive_entry_mode_enabled or not config.uptrend_entry_gate_enabled
+            or config.defensive_entry_mode_enabled == args.allow_defensive_fallback
+            or not config.uptrend_entry_gate_enabled
             or not config.enable_fallback_entry or config.force_fill_slots
             or os.getenv("PORTFOLIO_STATE_PATH") != str(state)
             or config.performance_log_file != str(directory / "trades.csv")
@@ -104,7 +112,8 @@ def main() -> None:
             raise RuntimeError("Public market data unavailable; refusing startup")
         logger.warning(
             "Isolated rules comparison: synthetic capital, no private keys, "
-            "no ML probabilities, defensive and RSI gates active"
+            "no ML probabilities, RSI gates active, defensive fallback %s",
+            "allowed" if args.allow_defensive_fallback else "blocked",
         )
         bot.run()
 

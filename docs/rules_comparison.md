@@ -4,10 +4,12 @@ The comparison run uses public Kraken market data, no API keys, and a separate
 virtual portfolio. The original dry run continues unchanged. The comparison
 strategy only replaces the missing ML probabilities in the uptrend fallback
 with an explicit exception for rule-based signals without a tabular model. The
-RSI filter, defensive market mode, additional risk rules, and live-order block
-remain active. In defensive market mode, the fallback remains blocked, so a
-buy is not guaranteed. This exception is not a production-validated strategy
-and must not be considered a trading recommendation.
+RSI filters, additional risk rules, and the live-order block remain active.
+By default, fallback remains blocked in defensive market mode. The explicit
+`--allow-defensive-fallback` option removes that block for this isolated
+comparison only; it is a riskier experiment and does not guarantee a buy.
+Force-fill remains disabled. This exception is not a production-validated
+strategy and must not be considered a trading recommendation.
 
 The comparison starts with 19.52 EUR in virtual capital and limits each
 simulated purchase to a maximum of 5 EUR. Fees, slippage, and execution do not
@@ -18,7 +20,8 @@ ID.
 
 On Node 1, the portfolio, journal, and log are stored separately under
 `/mnt/nvme_data/trading_rules_comparison_52247d45/`; the container is named
-`trading-rules-comparison-52247d45`. To view logs:
+`trading-rules-comparison-52247d45`. The currently deployed comparison uses
+`--allow-defensive-fallback`; the original dry run remains unchanged. To view logs:
 
 ```sh
 rtk proxy ssh -o BatchMode=yes -o StrictHostKeyChecking=yes raspi-cm5-node-1.kienzle 'docker logs --tail 100 trading-rules-comparison-52247d45'
