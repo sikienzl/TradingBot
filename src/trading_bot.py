@@ -853,7 +853,7 @@ class BotConfig:
         # Weekly Go/No-Go scorecard verdict file(s) written by run_weekly_scorecard.sh
         # If any verdict is NO-GO, new BUYs are blocked until the next scorecard run.
         scorecard_paths_raw = os.getenv('SCORECARD_VERDICT_PATH', './results/scorecards/latest_status.json')
-        self.scorecard_verdict_paths = [p.strip() for p in scorecard_paths_raw.split(',') if p.strip()]plit(',') if p.strip()]
+        self.scorecard_verdict_paths = [p.strip() for p in scorecard_paths_raw.split(',') if p.strip()]
         # Circuit breaker: max age of price data before new BUYs are paused (0 = disabled)
         self.price_staleness_max_seconds = int(
             os.getenv('PRICE_STALENESS_MAX_SECONDS', 300))
