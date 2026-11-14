@@ -1336,12 +1336,17 @@ class CryptoTradingBot:
     def __init__(self, config: BotConfig):
         self.config = config
         if config.simulation_initial_balance_from_kraken and (
-            not config.dry_run or not config.simulate_data
-            or config.exchange_name != 'kraken' or config.base_currency != 'EUR'
+            not config.dry_run or config.exchange_name != 'kraken'
+            or config.base_currency != 'EUR'
         ):
             raise ValueError(
-                "Kraken simulation initialization requires DRY_RUN, SIMULATE_DATA, "
-                "Kraken and EUR"
+                "Kraken simulation initialization requires DRY_RUN, Kraken and EUR"
+            )
+        if (config.simulation_initial_balance_from_kraken and not config.simulate_data
+                and (config.api_key or config.api_secret)):
+            raise ValueError(
+                "Public-market paper trading requires a previously initialized portfolio "
+                "and no Kraken API credentials"
             )
         self.run_id = os.getenv('TRADING_RUN_ID', '').strip() or uuid.uuid4().hex
         self.config_hash = _config_fingerprint(config)
@@ -2805,11 +2810,15 @@ class CryptoTradingBot:
                 f"Exchange {self.config.exchange_name} successfully initialised.")
             return exchange
         except (ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.AuthenticationError) as e:
+            if self.config.simulation_initial_balance_from_kraken:
+                raise RuntimeError("Cannot initialize public Kraken exchange") from e
             logger.error(
                 f"Exchange initialisation failed: {e}. Enabling simulation mode.")
             self.config.simulate_data = True
             return None
         except (ccxt.BaseError, AttributeError, TypeError, ValueError) as e:
+            if self.config.simulation_initial_balance_from_kraken:
+                raise RuntimeError("Cannot initialize public Kraken exchange") from e
             logger.error(
                 f"Unexpected error during exchange initialisation: {e}. Enabling simulation mode.")
             self.config.simulate_data = True
@@ -2883,6 +2892,10 @@ class CryptoTradingBot:
                     "Kraken balance was not fetched again."
                 )
             else:
+                if not self.config.simulate_data:
+                    raise RuntimeError(
+                        "Initialize the paper portfolio separately before using public market data"
+                    )
                 if not self.config.api_key or not self.config.api_secret:
                     raise RuntimeError("Kraken read-only API credentials are required for initial balance")
                 exchange = ccxt.kraken({
@@ -4890,6 +4903,11 @@ class CryptoTradingBot:
             else:
                 logger.warning(
                     "SIMULATION MODE IS ACTIVE! No real exchange data will be fetched or trades executed.")
+        elif self.config.simulation_initial_balance_from_kraken:
+            logger.warning(
+                "PUBLIC-MARKET PAPER MODE: Kraken market data, simulated trades and "
+                "an isolated previously initialized portfolio; no Kraken credentials."
+            )
 
         try:
             while True:
@@ -5555,7 +5573,8 @@ if __name__ == "__main__":
 
     try:
         config = BotConfig()
-        if not config.simulate_data and (not config.api_key or not config.api_secret):
+        if (not config.simulate_data and not config.simulation_initial_balance_from_kraken
+                and (not config.api_key or not config.api_secret)):
             logger.critical(
                 "❌ API keys not found in .env file and simulation mode is DISABLED!")
             logger.info("Please create a .env file with:")

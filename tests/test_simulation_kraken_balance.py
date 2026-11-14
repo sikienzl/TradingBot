@@ -1,5 +1,6 @@
 import json
 import logging
+import sys
 
 import ccxt
 import pytest
@@ -131,7 +132,6 @@ def test_persistence_failure_preserves_previous_file(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("name,value", [
     ("DRY_RUN", "false"),
-    ("SIMULATE_DATA", "false"),
     ("BASE_CURRENCY", "USD"),
     ("EXCHANGE_NAME", "other"),
 ])
@@ -140,3 +140,88 @@ def test_initialization_option_requires_safe_mode(monkeypatch, tmp_path, name, v
     monkeypatch.setenv(name, value)
     with pytest.raises(ValueError, match="requires DRY_RUN"):
         CryptoTradingBot(BotConfig())
+
+
+def test_public_paper_restores_state_and_uses_unauthenticated_exchange(monkeypatch, tmp_path):
+    initial = make_bot(monkeypatch, tmp_path)
+    initial.portfolio.cash = 19.25
+    initial.portfolio.save_state()
+    options = []
+
+    class Exchange:
+        def load_markets(self):
+            return {"BTC/EUR": {"quote": "EUR", "active": True, "base": "BTC"}}
+
+        def fetch_balance(self):
+            pytest.fail("public paper mode must not access private balances")
+
+    monkeypatch.setattr(ccxt, "kraken", lambda config: options.append(config) or Exchange())
+    monkeypatch.setenv("SIMULATE_DATA", "false")
+    monkeypatch.setenv("KRAKEN_API_KEY", "")
+    monkeypatch.setenv("KRAKEN_API_SECRET", "")
+    bot = CryptoTradingBot(BotConfig())
+    bot.portfolio.state_file = str(tmp_path / "portfolio.json")
+    bot._update_portfolio_balance()
+    assert bot.portfolio.cash == 19.25
+    assert bot.all_symbols == ["BTC/EUR"]
+    assert options[0]["apiKey"] == options[0]["secret"] == ""
+
+
+def test_public_paper_requires_initialized_portfolio(monkeypatch, tmp_path):
+    make_bot(monkeypatch, tmp_path)
+    monkeypatch.setenv("SIMULATE_DATA", "false")
+    monkeypatch.setenv("KRAKEN_API_KEY", "")
+    monkeypatch.setenv("KRAKEN_API_SECRET", "")
+    monkeypatch.setattr(CryptoTradingBot, "_load_market_info", lambda self: None)
+    bot = CryptoTradingBot(BotConfig())
+    bot.portfolio.state_file = str(tmp_path / "missing.json")
+    with pytest.raises(RuntimeError, match="Initialize the paper portfolio separately"):
+        bot._update_portfolio_balance()
+    assert not (tmp_path / "missing.json").exists()
+
+
+def test_public_paper_rejects_credentials(monkeypatch, tmp_path):
+    make_bot(monkeypatch, tmp_path)
+    monkeypatch.setenv("SIMULATE_DATA", "false")
+    with pytest.raises(ValueError, match="no Kraken API credentials"):
+        CryptoTradingBot(BotConfig())
+
+
+def test_public_paper_exchange_error_does_not_enable_simulation(monkeypatch, tmp_path):
+    make_bot(monkeypatch, tmp_path)
+    monkeypatch.setenv("SIMULATE_DATA", "false")
+    monkeypatch.setenv("KRAKEN_API_KEY", "")
+    monkeypatch.setenv("KRAKEN_API_SECRET", "")
+
+    def fail(config):
+        raise ccxt.NetworkError("offline")
+
+    monkeypatch.setattr(ccxt, "kraken", fail)
+    config = BotConfig()
+    with pytest.raises(RuntimeError, match="Cannot initialize public Kraken exchange"):
+        CryptoTradingBot(config)
+    assert config.simulate_data is False
+
+
+def test_initialization_command_uses_only_free_eur_and_refuses_existing_state(monkeypatch, tmp_path):
+    from src.init_kraken_paper import main
+
+    credentials = tmp_path / "credentials.env"
+    credentials.write_text("KRAKEN_API_KEY=key\nKRAKEN_API_SECRET=secret\nDRY_RUN=false\n")
+    calls = []
+
+    class Exchange:
+        def fetch_balance(self):
+            calls.append(1)
+            return {"free": {"EUR": 25, "BTC": 10}}
+
+    monkeypatch.setattr(ccxt, "kraken", lambda config: Exchange())
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["init", "--credentials-file", str(credentials)])
+    main()
+    state = json.loads((tmp_path / ".portfolio_state.json").read_text())
+    assert state["cash"] == 25
+    assert state["holdings"] == {}
+    with pytest.raises(SystemExit, match="already exists"):
+        main()
+    assert calls == [1]
