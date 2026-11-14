@@ -307,6 +307,81 @@ simulated, with the specified fees and slippage on each side. The current
 account balance is not refreshed after initialization. This experiment neither
 places orders nor establishes real profitability.
 
+#### Daily paper observation (read-only)
+
+The report uses only the isolated paper journal and bot logs; it does not
+connect to Kraken, change the portfolio, or submit orders. Python 3.12+ is
+required; Docker CLI access is needed only for `--container`. For a manual
+report, from the checkout:
+
+```sh
+rtk proxy python3 scripts/public_paper_daily_report.py \
+  --journal "$HOME/trading-hailo-public-paper/data/trade_journal.csv" \
+  --container trading-hailo-public-paper \
+  --config "$HOME/trading-hailo-public-paper/paper.env" \
+  --date 2026-06-06 --log-timezone UTC
+```
+
+Omit `--date` for the previous UTC calendar day. Use `--log /path/to/bot.log`
+instead of `--container`, or omit both if logs are unavailable. Docker's log
+driver must support `docker logs` and retain the full day. The bot's log
+timestamps have no timezone: set `--log-timezone` to the actual IANA timezone
+of the bot process (normally UTC inside the container), not the report host.
+The date window is start-inclusive/end-exclusive UTC. Log rotation, missing
+or malformed timestamps and a stopped bot can make the observation incomplete;
+zero observed events does not prove zero activity.
+
+The JSON includes buys, sell events (including partial exits), realized net
+PnL, average holding duration and sample count, fees and slippage for **fills
+in the window**, and selected blocked-entry and Hailo prediction/gate/error
+log events. Net PnL already includes modeled costs; do not subtract them again.
+Costs for an entry before the window are not included in the day's fill-cost
+sum, although their effect is in the closed trade's net PnL. Missing or
+legacy/mixed-cost PnL is `null`, not zero. Unrealized PnL, spread beyond the
+configured slippage model, actual exchange execution and unlogged blocks are
+not measured. Counts are log events, not a complete or deduplicated count of
+all rejected candidates; risk guardrails count iterations. Hailo decisions
+are model outputs, not necessarily executed trades. Journal data is assumed to
+be the isolated paper run and in its configured base currency; protect it.
+
+For a descriptive side-by-side, add `--compare-journal /path/to/other.csv`,
+optionally `--compare-log` or `--compare-container`, `--compare-config`, and
+`--compare-feed "synthetic simulation"` (or a precise feed description).
+The result is always **non-comparable**, even for two public Kraken bots:
+independent real-time polling, timing, missing data, market selection,
+execution, initial balances and configuration can differ. The report exposes
+operator-supplied feed descriptions, journal run/config hashes, and differences
+in an allowlist of non-secret environment settings. Env files are snapshots,
+not proof of effective defaults, runtime overrides or configuration history;
+unset values are explicitly unknown. It never outputs credentials or arbitrary
+environment keys. A genuine controlled comparison requires replaying the
+same recorded input and controlling all relevant settings; this tool does not
+provide that experiment.
+
+To schedule the previous UTC day at 00:10 UTC, install the **user** units
+`deploy/public-paper-daily-report.{service,timer}` into
+`~/.config/systemd/user/`, edit the service's `ExecStart` to this checkout's
+absolute script path, then run `systemctl --user daemon-reload` and
+`systemctl --user enable --now public-paper-daily-report.timer`. This is an
+optional operator action, not performed by the repository. Enable user
+lingering if reports must run while logged out. The script writes private
+`reports/report-YYYY-MM-DD.json` and `reports/latest.json` under the paper
+directory. A persistent timer catches up once after downtime, but does not
+backfill each missed day; run `--date` manually for gaps. Missing journals,
+config files or bot log files cause the service to fail
+instead of fabricating a report. Verify with `systemctl --user status
+public-paper-daily-report.timer` and `journalctl --user -u
+public-paper-daily-report.service`. The report user needs read access to the
+paper data. The scheduled report reads the persistent bot log, so replacing
+the container does not discard the earlier observations.
+
+Optional private `~/trading-hailo-public-paper/report.env` settings for the
+wrapper: `PUBLIC_PAPER_DIR`, `PUBLIC_PAPER_REPORT_DIR`,
+`PUBLIC_PAPER_LOG`, `PUBLIC_PAPER_LOG_TIMEZONE`, `PYTHON_BIN`, and
+`PUBLIC_PAPER_COMPARE_JOURNAL`, `PUBLIC_PAPER_COMPARE_CONTAINER`,
+`PUBLIC_PAPER_COMPARE_CONFIG`, `PUBLIC_PAPER_COMPARE_FEED`. Both logs must use
+the same timezone for the wrapper. Keep reports and configuration outside Git.
+
 ### Prepare and compile the model
 
 On a development machine with training dependencies, collect public Kraken

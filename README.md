@@ -149,6 +149,37 @@ python3 -m src.trading_bot
 - Set `SIMULATION_REGIME=uptrend|downtrend|sideways|crash|recovery|neutral|mixed` to shape the offline market regime.
 - Trades are recorded to `trade_journal.csv`.
 
+#### Public Kraken paper-trade recovery
+
+For isolated public Kraken paper mode (`DRY_RUN=true`, `SIMULATE_DATA=false`,
+`SIMULATION_INITIAL_BALANCE_FROM_KRAKEN=true`), a previously initialized
+portfolio, no Kraken credentials, and `PERFORMANCE_LOG_ENABLED=true` are
+required. See `.env.paper_kraken.example` for the configuration.
+
+Run **only one writer** for a portfolio and journal, including during recovery.
+There is no interprocess lock: another bot or process must not modify either
+file. Before a paper trade is committed, the bot durably writes an intent next
+to the portfolio as `.portfolio_state.json.trade-transaction.json`. The intent
+contains the resulting portfolio, the exact journal row, and a hash of the
+preceding journal. The bot then writes and syncs the journal, atomically saves
+and syncs the portfolio, and removes the intent. On restart, a pending intent
+is replayed before trading; a complete or partial row is handled without
+duplicating the trade.
+
+If persistence or replay fails, stop trading and restart with the **same**
+portfolio and journal paths. A missing, altered, or incompatible journal, or a
+damaged intent, causes recovery to fail closed. Keep all files intact for
+investigation; do not delete the intent or edit the journal to force a restart.
+If recovery cannot complete, reconcile the portfolio and journal from trusted
+backups before resuming.
+
+This protocol assumes filesystem support for durable file and directory
+`fsync` and atomic replacement. It cannot repair inconsistencies predating the
+protocol, and it does not transactionally persist analytics-database writes or
+in-memory risk and performance counters. It hashes the entire journal for
+each paper trade, so cost grows with journal size. Other trading modes do not
+use this transaction protocol.
+
 Simulation helper scripts:
 ```sh
 bash scripts/start_sim_bot.sh
