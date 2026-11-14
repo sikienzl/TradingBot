@@ -105,11 +105,76 @@ python3 -m src.train_hailo_model --data-path training_data.csv \
 ```
 
 The exporter writes `trading_mlp.onnx` and `metadata.json`. It does not create
-a HEF. Compile the ONNX file using a DFC release compatible with the Hailo-8
-runtime on `.75`, and place the resulting `trading_mlp.hef` alongside its
-metadata on `.75`. Verify the exact tensor names, shape, normalization
-contract, and output logits before starting the service. No live trading or
-profitability should be inferred from export-time validation metrics.
+a HEF. The compiler does not need to be installed on `.75`: compile on an
+x86-64 SDK host, then place the resulting `trading_mlp.hef` and its matching
+metadata on `.75`.
+
+The local development host has a `trading-hailo-compiler:3.34.0` Docker image
+with DFC 3.34.0 and HailoRT CLI 4.24.0. Its
+`/opt/hailo/hailo_compile_onnx.py` wrapper runs parsing, calibration and HEF
+compilation. The image is not distributed in this repository. A synthetic
+dataset was used to train and export the actual 22-input, 32/16-hidden-unit,
+3-output MLP, and the resulting ONNX was successfully compiled for Hailo-8
+using this image. This is a compiler smoke test, not a model trained on real
+market data or an on-device test.
+
+#### Rebuild the compiler image
+
+On an x86-64 Docker BuildKit host, obtain the following SDK files directly
+from Hailo, subject to your license, and place them in a local `hailo-sdk/`
+directory:
+
+- `hailo_dataflow_compiler-3.34.0-py3-none-linux_x86_64.whl`
+- `hailort_4.24.0_amd64.deb`
+
+The directory is git-ignored; SDK packages, locally saved image archives,
+calibration data, HAR files and HEFs must not be committed. Do not publish
+the image without verifying the Hailo license and auditing all image layers
+for private information. The build uses a separate SDK context, not a copy of
+the SDK in the repository. The built image still contains installed Hailo
+software.
+
+```sh
+rtk proxy env DOCKER_BUILDKIT=1 docker build --platform linux/amd64 \
+  --build-context hailo_sdk="$(pwd)/hailo-sdk" \
+  --build-arg HAILO_UID="$(id -u)" --build-arg HAILO_GID="$(id -g)" \
+  -f docker/hailo-compiler.Dockerfile \
+  -t trading-hailo-compiler:3.34.0 .
+```
+
+The default user and group IDs are 1000; set the build arguments to the
+unprivileged host user who will write the output directory. The Dockerfile
+pins the SDK filenames but fetches Ubuntu packages and Python dependencies
+during build, so rebuilding later may produce different transitive versions.
+No exchange credentials or personal data are needed for the build.
+
+The wrapper requires a representative preprocessed NumPy calibration array in
+NHWC layout. For this MLP, each sample has shape `(1, 1, 22)` and must use the
+same feature order and normalization as `metadata.json`; the array must have
+shape `(samples, 1, 1, 22)`. The current exporter does **not** create that
+calibration array, so prepare and validate it from representative training
+data before compilation. Do not use the synthetic smoke-test calibration for a
+deployable model.
+
+With the ONNX file and `calibration.npy` in the output directory, run on the
+compiler host:
+
+```sh
+rtk proxy docker run --rm --network none \
+  --mount type=bind,src="$(pwd)/model/hailo_trading_model",dst=/work \
+  --workdir /work --entrypoint python trading-hailo-compiler:3.34.0 \
+  /opt/hailo/hailo_compile_onnx.py \
+  /work/trading_mlp.onnx /work/calibration.npy /work/trading_mlp.hef
+```
+
+The wrapper refuses to overwrite an existing HEF. The smoke test with 64
+synthetic calibration samples and no GPU used DFC's reduced optimization level;
+DFC warned that this is not recommended for production. Validate the actual
+compiled model against ONNX and on `.75` with its HailoRT 4.23.0 before
+deployment; compatibility and numerical agreement have not yet been verified.
+Verify the tensor shapes, normalization contract, and output logits as well.
+No live trading or profitability should be inferred from export-time validation
+metrics.
 
 ### Install the service on `.75`
 

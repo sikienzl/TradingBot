@@ -1,0 +1,5 @@
+**
+!docker/
+!docker/hailo-compiler.Dockerfile
+!scripts/
+!scripts/hailo_compile_onnx.py

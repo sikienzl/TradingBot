@@ -7,6 +7,8 @@ prepared; this file intentionally remains under **Unreleased** until then.
 
 ### Added
 
+- Add a rebuildable Hailo DFC compiler Dockerfile and compilation wrapper;
+  SDK packages are supplied separately and are not distributed.
 - Prepare an optional remote Hailo-8 inference backend, fixed feature/metadata
   contract, MLP-to-ONNX exporter, authenticated service, and systemd template;
   CatBoost remains the default.

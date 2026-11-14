@@ -30,6 +30,12 @@ old_data/
 model/hailo_trading_model/
 *.hef
 *.onnx
+*.har
+*.npy
+*.npz
+/hailo-sdk/
+/hailo-compiler*.tar
+/hailo-compiler*.tar.gz
 
 # Results & checkpoints
 results/

@@ -100,6 +100,7 @@ include = [
     "src/",
     "scripts/",
     "deploy/",
+    "docker/",
     "tests/",
     "README.md",
     "SERVER_README.md",
@@ -111,6 +112,7 @@ include = [
     "requirements-hailo-server.txt",
     ".env.example",
     ".env.live.example",
+    ".dockerignore",
     ".env.simulation.example",
     ".env.simulation.example",
 ]
