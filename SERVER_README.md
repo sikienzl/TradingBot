@@ -55,7 +55,7 @@ Operational note for current Pi/server profile:
 Dry run test:
 
 ```sh
-.venv/bin/python trading_bot.py
+.venv/bin/python -m src.trading_bot
 ```
 
 If live mode is configured in .env, monitor logs carefully and keep trade size small.
@@ -164,6 +164,34 @@ sudo systemctl start trading-bot
 sudo journalctl -u trading-bot -f
 ```
 
+### Release upgrade checks
+
+The trade journal is retained during installation. On first startup, the bot
+extends an older CSV schema atomically; pre-upgrade rows are labeled `legacy`.
+Back up `.env`, `trade_journal.csv`, and any portfolio state before upgrading.
+
+New trade events include a process `run_id`, a non-secret configuration hash,
+and observed `mfe_pct` / `mae_pct` excursion values. For PostgreSQL analytics,
+the bot adds these columns to an existing `trade_events` table; the configured
+database role therefore needs permission to alter that table.
+
+After an upgrade, keep `DRY_RUN=true` and verify:
+
+1. Startup logs include `run_id` and `config_hash`.
+2. Guard logs show the latest close age and any strict BUY candidates withheld.
+3. New journal rows align under the `run_id`, `config_hash`, `mfe_pct`, and
+   `mae_pct` CSV headers.
+4. Journal reports separate runs/configurations and show exit reasons and
+   observed excursions:
+
+   ```sh
+   /opt/trading_2/.venv/bin/python -m src.analyze_trade_journal \
+     --file /opt/trading_2/trade_journal.csv
+   ```
+
+The stale-journal diagnostic does not disable or bypass the recent-PnL guard.
+These metrics support review; they do not establish profitability.
+
 ### Useful systemd Commands
 
 ```bash
@@ -203,6 +231,10 @@ http://<raspi-ip>:9100/metrics  ← Raw metrics
 ```
 
 ### Creating a New Release (from dev machine)
+
+Before tagging, update the `Unreleased` section in `CHANGELOG.md`, run the
+complete test suite, and inspect the staged archive contents. The release
+builder packages the `src/` modules used by the systemd service.
 
 ```bash
 # Build, tag, and push a new Pi release:

@@ -97,11 +97,15 @@ include = [
     "deploy/",
     "tests/",
     "README.md",
+    "SERVER_README.md",
+    "CHANGELOG.md",
+    "docs/",
     "LICENSE",
     "requirements.txt",
     "requirements-pi.txt",
     ".env.example",
     ".env.live.example",
+    ".env.simulation.example",
     ".env.simulation.example",
 ]
 exclude = [

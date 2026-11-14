@@ -14,6 +14,8 @@
   A modular pipeline for crypto trading: data collection, feature engineering, CatBoost/LLM ensemble prediction, and live/simulated trading via Kraken. Built for research, simulation, and optional live trading.
 </p>
 
+See [CHANGELOG.md](./CHANGELOG.md) for unreleased changes and release notes.
+
 ## Setup
 
 **Requirements:** Python 3.12+ and a virtual environment.
@@ -58,9 +60,9 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-python3 get_data.py
-python3 data_preperation.py
-python3 trading_bot.py --backtest
+python3 -m src.get_data
+python3 -m src.data_preperation
+python3 -m src.trading_bot --backtest
 ```
 
 ## CI / Quality Gates
@@ -113,8 +115,8 @@ Swagger UI is available at `http://127.0.0.1:8000/docs`.
 
 ### 1. Data collection
 ```sh
-python3 get_data.py
-python3 data_preperation.py
+python3 -m src.get_data
+python3 -m src.data_preperation
 ```
 Outputs `full_crypto_data.csv` and `training_data.csv`.
 
@@ -122,25 +124,25 @@ Outputs `full_crypto_data.csv` and `training_data.csv`.
 
 Train the CatBoost model:
 ```sh
-python3 train_catboost_model.py
+python3 -m src.train_catboost_model
 ```
 Outputs a ready-to-use model in `model/catboost_trading_model/`.
 
 Fine-tune the LLM (requires a GPU with ≥ 16 GB VRAM):
 ```sh
-python3 train_trading_model.py
+python3 -m src.train_trading_model
 ```
 Outputs a LoRA adapter in `model/fine_tuned_trading_model/`.
 
 Train CatBoost using historical, timestamp-aligned AutoResearch features (optional):
 ```sh
-python3 train_catboost_model.py
+python3 -m src.train_catboost_model
 ```
 If the training CSV contains all six `research_*` feature columns, they are used as supplied. The latest research JSON is for inference and is deliberately not copied across historical rows, which would leak future information into training.
 
 ### 3. Dry-run / live trading
 ```sh
-python3 trading_bot.py
+python3 -m src.trading_bot
 ```
 - Set `DRY_RUN=true` (default) to simulate trades without spending real funds.
 - Set `SIMULATE_DATA=true` to run fully offline without an exchange connection.
@@ -172,15 +174,37 @@ The first wrapper runs the comparison on the Raspberry Pi with the bot's service
 
 ### 4. Backtesting
 ```sh
-python3 trading_bot.py --backtest
+python3 -m src.trading_bot --backtest
 ```
-Prints a summary report (total return, max drawdown, number of trades).
+The example backtester evaluates each signal on the next bar, processes bars in
+timestamp order, marks holdings using the latest price for each coin, and
+estimates exchange fees and slippage (defaults: 0.2% and 0.1% per side).
+Override the assumptions with `--backtest-fee-rate` and
+`--backtest-slippage`. These results are only as representative as the input
+data and strategy; they are not a live-performance forecast.
+
+Trade-journal confidence-threshold analysis selects a candidate on the first
+70% of chronological trades and reports its result on the final 30% holdout.
+The report also warns when journal events are older than 24 hours, since stale
+trade metrics should not be mistaken for current bot activity.
+
+Each process gets a generated `run_id` (override with `TRADING_RUN_ID`) and a
+SHA-256 fingerprint of non-secret bot settings. These are stored on CSV and
+Postgres trade events to keep runs/configurations separate; credentials and
+URLs are excluded from the fingerprint. Existing CSV journals are extended
+atomically and historical rows are marked `legacy`. Closed trades also record
+observed `mfe_pct` (maximum favorable excursion) and `mae_pct` (maximum adverse
+excursion) from prices seen by the bot; these are sampled observations, not
+intrabar extremes.
 
 ### 5. Prediction (standalone)
 ```sh
-python3 predict.py          # LLM + rule-based ensemble
-python3 predict_catboost.py # CatBoost only
+python3 -m src.predict # LLM + rule-based ensemble
 ```
+CatBoost inference is available through `CatBoostTradingPredictor` in
+`src.predict_catboost` and is integrated into the bot when
+`USE_TABULAR_MODEL=true`; the module does not currently provide a standalone
+command-line entry point.
 
 ## Configuration
 
@@ -200,6 +224,8 @@ All parameters are set via `.env` (see `.env.example` for the full list). Key va
 | `DYNAMIC_LOSSMAKER_WINDOW` | `80` | Number of most recent journal rows inspected for temporary lossmaker exclusions |
 | `DYNAMIC_LOSSMAKER_MIN_SELLS` | `3` | Minimum recent sells required before a symbol can be temporarily suppressed |
 | `DYNAMIC_LOSSMAKER_MIN_PNL_LOSS` | `0.003` | Minimum negative summed realized PnL before the temporary suppression applies |
+| `RECENT_PNL_GUARD_STALE_HOURS` | `24` | Age after which guard logs flag the latest close as stale; this is diagnostic and does not disable the guard |
+| `TRADING_RUN_ID` | generated | Optional run identifier for grouping journal and analytics events |
 | `COIN_MAX_HOLD_SECONDS` | `LINK:420,SUI:420,ONDO:420` | Coin-specific hold-time overrides for weak follow-through symbols |
 | `TRADE_AMOUNT` | `10` | EUR per trade |
 | `PORTFOLIO_TRADE_AMOUNT_MULTIPLIERS` | `50:1.10,100:1.25,200:1.50,300:1.75,500:2.20,1000:3.00` | Scales the base `TRADE_AMOUNT` upward once the portfolio reaches each milestone |
@@ -233,7 +259,7 @@ When `SIMULATE_DATA=true`, the bot can emulate different market states while sta
 Quick examples:
 
 ```sh
-SIMULATE_DATA=true SIMULATION_REGIME=crash python3 trading_bot.py --backtest
+SIMULATE_DATA=true SIMULATION_REGIME=crash python3 -m src.trading_bot --backtest
 SIMULATE_DATA=true SIMULATION_REGIME=uptrend python3 scripts/compare_simulation_regimes.py --coins BTC,ETH,SOL
 PI_HOST=local bash scripts/run_compare_simulation_standard_profiles_on_pi.sh
 ```
@@ -510,7 +536,7 @@ cat results/scorecards/latest_status.prom
 
 Or run the scorecard manually with custom thresholds:
 ```sh
-python3 go_no_go_scorecard.py --file trade_journal.csv \
+python3 -m src.go_no_go_scorecard --file trade_journal.csv \
   --lookback-days 7 --starting-capital 20 \
   --min-closed-trades 200 --min-win-rate 45 \
   --min-profit-factor 1.2 --max-drawdown-pct 10

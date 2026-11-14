@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import importlib
 import json
 import logging
@@ -6,10 +7,13 @@ import math
 import os
 import re
 import shutil
+import stat
+import tempfile
 import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -23,6 +27,30 @@ logger = logging.getLogger(__name__)
 
 
 _SAFE_IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+_TRADE_JOURNAL_FIELDS = [
+    'timestamp', 'iteration', 'coin', 'action', 'price', 'amount_coin',
+    'amount_base', 'pnl_base', 'pnl_pct', 'hold_seconds',
+    'signal_source', 'signal_confidence', 'recommendation', 'reason', 'dry_run',
+    'run_id', 'config_hash', 'mfe_pct', 'mae_pct',
+]
+
+
+def _config_fingerprint(config: Any) -> str:
+    sensitive_name_parts = (
+        "key", "secret", "password", "token", "url", "user",
+    )
+    safe_config = {
+        name: value
+        for name, value in vars(config).items()
+        if not any(part in name.lower() for part in sensitive_name_parts)
+    }
+    serialized = json.dumps(
+        safe_config,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=lambda value: sorted(value) if isinstance(value, set) else str(value),
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _compute_dynamic_lossmaker_entry_pairs(
@@ -187,6 +215,8 @@ def _compute_recent_pnl_guard_state(
     min_trades: int,
     min_realized_pnl: float,
     max_profit_factor: float,
+    stale_after_hours: float = 24.0,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Returns whether recent realized performance is weak enough to tighten entries."""
     result: dict[str, Any] = {
@@ -195,6 +225,9 @@ def _compute_recent_pnl_guard_state(
         "recent_realized_pnl": 0.0,
         "recent_profit_factor": 999.0,
         "reason": "insufficient_data",
+        "latest_closed_trade_at": None,
+        "journal_age_hours": None,
+        "journal_stale": False,
     }
 
     if df.empty or "action" not in df.columns or "pnl_base" not in df.columns:
@@ -218,6 +251,20 @@ def _compute_recent_pnl_guard_state(
     recent_profit_factor = (
         (gross_profit / gross_loss) if gross_loss > 0 else 999.0
     )
+    if "timestamp" in sells.columns:
+        timestamps = pd.to_datetime(
+            sells["timestamp"], utc=True, errors="coerce").dropna()
+        if not timestamps.empty:
+            latest = timestamps.max()
+            reference = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now)
+            if reference.tzinfo is None:
+                reference = reference.tz_localize("UTC")
+            else:
+                reference = reference.tz_convert("UTC")
+            age_hours = (reference - latest).total_seconds() / 3600.0
+            result["latest_closed_trade_at"] = latest.isoformat()
+            result["journal_age_hours"] = age_hours
+            result["journal_stale"] = age_hours > stale_after_hours
 
     result["recent_trades"] = recent_trades
     result["recent_realized_pnl"] = recent_realized_pnl
@@ -431,6 +478,7 @@ class Portfolio:
             'amount_base': amount_base,  # Invested amount in base currency
             'timestamp': datetime.now(),
             'peak_price': buy_price,
+            'trough_price': buy_price,
             'partial_tp_taken': False,
             'partial_tp_timestamp': None,
             'signal_source': signal_source,
@@ -578,6 +626,8 @@ class BotConfig:
             os.getenv('RECENT_PNL_GUARD_MIN_REALIZED_PNL', str(0.0)))
         self.recent_pnl_guard_max_profit_factor = float(
             os.getenv('RECENT_PNL_GUARD_MAX_PROFIT_FACTOR', str(1.0)))
+        self.recent_pnl_guard_stale_hours = float(
+            os.getenv('RECENT_PNL_GUARD_STALE_HOURS', str(24.0)))
         # Amount in base currency per trade
         self.trade_amount = float(os.getenv('TRADE_AMOUNT', str(20)))
         self.portfolio_trade_amount_multipliers = _env_threshold_float_pairs(
@@ -1028,9 +1078,27 @@ class PostgresAnalyticsWriter:
                     reason TEXT,
                     dry_run BOOLEAN NOT NULL,
                     base_currency TEXT NOT NULL,
+                    run_id TEXT NOT NULL DEFAULT 'legacy',
+                    config_hash TEXT NOT NULL DEFAULT 'legacy',
+                    mfe_pct DOUBLE PRECISION,
+                    mae_pct DOUBLE PRECISION,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
                 '''
+            )
+            cur.execute(
+                f'ALTER TABLE {trades_table} ADD COLUMN IF NOT EXISTS '
+                "run_id TEXT NOT NULL DEFAULT 'legacy'"
+            )
+            cur.execute(
+                f'ALTER TABLE {trades_table} ADD COLUMN IF NOT EXISTS '
+                "config_hash TEXT NOT NULL DEFAULT 'legacy'"
+            )
+            cur.execute(
+                f'ALTER TABLE {trades_table} ADD COLUMN IF NOT EXISTS mfe_pct DOUBLE PRECISION'
+            )
+            cur.execute(
+                f'ALTER TABLE {trades_table} ADD COLUMN IF NOT EXISTS mae_pct DOUBLE PRECISION'
             )
             cur.execute(
                 f'''
@@ -1082,12 +1150,12 @@ class PostgresAnalyticsWriter:
                         event_ts, iteration, coin, action, price, amount_coin,
                         amount_base, pnl_base, pnl_pct, hold_seconds,
                         signal_source, signal_confidence, recommendation, reason,
-                        dry_run, base_currency
+                        dry_run, base_currency, run_id, config_hash, mfe_pct, mae_pct
                     ) VALUES (
                         %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s,
                         %s, %s, %s, %s,
-                        %s, %s
+                        %s, %s, %s, %s, %s, %s
                     )
                     ''',
                     (
@@ -1109,6 +1177,12 @@ class PostgresAnalyticsWriter:
                         row.get('reason', ''),
                         bool(row.get('dry_run', False)),
                         base_currency,
+                        row.get('run_id', 'legacy'),
+                        row.get('config_hash', 'legacy'),
+                        None if row.get('mfe_pct', '') in ('', None)
+                        else float(row.get('mfe_pct')),
+                        None if row.get('mae_pct', '') in ('', None)
+                        else float(row.get('mae_pct')),
                     ),
                 )
         except self._psycopg.Error as exc:
@@ -1187,6 +1261,9 @@ class CryptoTradingBot:
 
     def __init__(self, config: BotConfig):
         self.config = config
+        self.run_id = os.getenv('TRADING_RUN_ID', '').strip() or uuid.uuid4().hex
+        self.config_hash = _config_fingerprint(config)
+        self._journal_fields = list(_TRADE_JOURNAL_FIELDS)
         self.portfolio = Portfolio(config.base_currency)
         self.analytics_writer = PostgresAnalyticsWriter(config)
         self.iteration = 0
@@ -1205,6 +1282,13 @@ class CryptoTradingBot:
         self.last_sell_timestamps_utc: dict[str, datetime] = {}
         self.consecutive_losses: int = 0
         self.buy_pause_until_utc: datetime | None = None
+        logger.info(
+            "Trading run started: run_id=%s config_hash=%s dry_run=%s simulated_data=%s",
+            self.run_id,
+            self.config_hash,
+            config.dry_run,
+            config.simulate_data,
+        )
         self.exchange = self._initialize_exchange()
         self._simulation_cache_iteration: int | None = None
         self._simulation_ohlcv_cache: dict[tuple[int,
@@ -1271,38 +1355,78 @@ class CryptoTradingBot:
             self._maybe_auto_tune_tabular_confidence()
 
     def _init_trade_journal(self):
-        """Creates the journal file with header if it does not yet exist."""
-        if os.path.exists(self.config.performance_log_file):
+        """Creates or safely extends the CSV journal schema."""
+        path = self.config.performance_log_file
+        if not os.path.exists(path):
+            with open(path, 'w', newline='', encoding='utf-8') as journal:
+                csv.writer(journal).writerow(_TRADE_JOURNAL_FIELDS)
+            self._journal_fields = list(_TRADE_JOURNAL_FIELDS)
             return
-        with open(self.config.performance_log_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                'timestamp', 'iteration', 'coin', 'action', 'price', 'amount_coin',
-                'amount_base', 'pnl_base', 'pnl_pct', 'hold_seconds',
-                'signal_source', 'signal_confidence', 'recommendation', 'reason', 'dry_run'
-            ])
+
+        with open(path, newline='', encoding='utf-8-sig') as journal:
+            existing_fields = next(csv.reader(journal), [])
+        self._journal_fields = list(dict.fromkeys(
+            existing_fields + _TRADE_JOURNAL_FIELDS))
+        if existing_fields == self._journal_fields:
+            return
+
+        file_mode = stat.S_IMODE(os.stat(path).st_mode)
+        directory = os.path.dirname(os.path.abspath(path))
+        descriptor, temporary_path = tempfile.mkstemp(
+            prefix='.trade-journal-', suffix='.csv', dir=directory)
+        try:
+            with os.fdopen(
+                descriptor, 'w', newline='', encoding='utf-8'
+            ) as destination:
+                with open(path, newline='', encoding='utf-8-sig') as source:
+                    reader = csv.DictReader(source)
+                    writer = csv.DictWriter(
+                        destination, fieldnames=self._journal_fields,
+                        extrasaction='ignore')
+                    writer.writeheader()
+                    for row in reader:
+                        row.setdefault('run_id', 'legacy')
+                        row.setdefault('config_hash', 'legacy')
+                        row.setdefault('mfe_pct', '')
+                        row.setdefault('mae_pct', '')
+                        writer.writerow(row)
+            os.chmod(temporary_path, file_mode)
+            os.replace(temporary_path, path)
+        finally:
+            if os.path.exists(temporary_path):
+                os.unlink(temporary_path)
 
     def _append_trade_journal(self, row: dict):
+        row = {
+            **row,
+            'run_id': row.get('run_id', self.run_id),
+            'config_hash': row.get('config_hash', self.config_hash),
+        }
         if self.config.performance_log_enabled:
             with open(self.config.performance_log_file, 'a', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    row.get('timestamp', datetime.now().isoformat()),
-                    row.get('iteration', self.iteration),
-                    row.get('coin', ''),
-                    row.get('action', ''),
-                    row.get('price', 0.0),
-                    row.get('amount_coin', 0.0),
-                    row.get('amount_base', 0.0),
-                    row.get('pnl_base', 0.0),
-                    row.get('pnl_pct', 0.0),
-                    row.get('hold_seconds', 0.0),
-                    row.get('signal_source', ''),
-                    row.get('signal_confidence', ''),
-                    row.get('recommendation', ''),
-                    row.get('reason', ''),
-                    row.get('dry_run', self.config.dry_run),
-                ])
+                writer = csv.DictWriter(
+                    f, fieldnames=self._journal_fields,
+                    extrasaction='ignore')
+                writer.writerow({
+                    **row,
+                    'timestamp': row.get('timestamp', datetime.now(UTC).isoformat()),
+                    'iteration': row.get('iteration', self.iteration),
+                    'coin': row.get('coin', ''),
+                    'action': row.get('action', ''),
+                    'price': row.get('price', 0.0),
+                    'amount_coin': row.get('amount_coin', 0.0),
+                    'amount_base': row.get('amount_base', 0.0),
+                    'pnl_base': row.get('pnl_base', 0.0),
+                    'pnl_pct': row.get('pnl_pct', 0.0),
+                    'hold_seconds': row.get('hold_seconds', 0.0),
+                    'signal_source': row.get('signal_source', ''),
+                    'signal_confidence': row.get('signal_confidence', ''),
+                    'recommendation': row.get('recommendation', ''),
+                    'reason': row.get('reason', ''),
+                    'dry_run': row.get('dry_run', self.config.dry_run),
+                    'mfe_pct': row.get('mfe_pct', ''),
+                    'mae_pct': row.get('mae_pct', ''),
+                })
         self.analytics_writer.write_trade(row, self.config.base_currency)
 
     def _write_analytics_snapshot(
@@ -1572,6 +1696,7 @@ class CryptoTradingBot:
             min_trades=self.config.recent_pnl_guard_min_trades,
             min_realized_pnl=self.config.recent_pnl_guard_min_realized_pnl,
             max_profit_factor=self.config.recent_pnl_guard_max_profit_factor,
+            stale_after_hours=self.config.recent_pnl_guard_stale_hours,
         )
 
     def _read_auto_tune_state(self) -> dict:
@@ -2301,6 +2426,19 @@ class CryptoTradingBot:
             interval_minutes=self.config.ai_copilot_benchmark_interval_minutes,
             allow_apply=False,
         )
+
+    @staticmethod
+    def _trade_excursion_metrics(entry_trade: dict) -> tuple[float, float]:
+        buy_price = float(entry_trade.get('buy_price', 0.0))
+        if buy_price <= 0:
+            return 0.0, 0.0
+        peak_price = max(
+            buy_price, float(entry_trade.get('peak_price', buy_price)))
+        trough_price = min(
+            buy_price, float(entry_trade.get('trough_price', buy_price)))
+        mfe_pct = (peak_price - buy_price) / buy_price * 100.0
+        mae_pct = (trough_price - buy_price) / buy_price * 100.0
+        return mfe_pct, mae_pct
 
     def _record_close_performance(self, entry_trade: dict, sell_price: float, sell_amount: float):
         buy_price = float(entry_trade.get('buy_price', 0.0))
@@ -4035,6 +4173,7 @@ class CryptoTradingBot:
                 )
                 pnl_base, pnl_pct, hold_seconds = self._record_close_performance(
                     entry_trade, price, sell_amount)
+                mfe_pct, mae_pct = self._trade_excursion_metrics(entry_trade)
                 self._append_trade_journal({
                     'coin': coin,
                     'action': 'sell',
@@ -4044,6 +4183,8 @@ class CryptoTradingBot:
                     'pnl_base': pnl_base,
                     'pnl_pct': pnl_pct,
                     'hold_seconds': hold_seconds,
+                    'mfe_pct': mfe_pct,
+                    'mae_pct': mae_pct,
                     'signal_source': entry_trade.get('signal_source', 'rules'),
                     'signal_confidence': entry_trade.get('signal_confidence', ''),
                     'recommendation': entry_trade.get('recommendation', ''),
@@ -4141,6 +4282,7 @@ class CryptoTradingBot:
                 )
                 pnl_base, pnl_pct, hold_seconds = self._record_close_performance(
                     entry_trade, average, sold_amount_coin)
+                mfe_pct, mae_pct = self._trade_excursion_metrics(entry_trade)
                 self._append_trade_journal({
                     'coin': coin,
                     'action': 'sell',
@@ -4150,6 +4292,8 @@ class CryptoTradingBot:
                     'pnl_base': pnl_base,
                     'pnl_pct': pnl_pct,
                     'hold_seconds': hold_seconds,
+                    'mfe_pct': mfe_pct,
+                    'mae_pct': mae_pct,
                     'signal_source': entry_trade.get('signal_source', 'rules'),
                     'signal_confidence': entry_trade.get('signal_confidence', ''),
                     'recommendation': entry_trade.get('recommendation', ''),
@@ -4183,6 +4327,7 @@ class CryptoTradingBot:
     def _manage_open_trades(self, current_market_data: dict[str, dict], market_analysis: dict | None = None):
         """Monitors open trades for stop-loss, take-profit, time and signal exits."""
         trades_to_remove = []
+        excursions_updated = False
         for coin, trade_info in list(self.portfolio.open_trades.items()):
             buy_price = trade_info['buy_price']
             amount_coin = trade_info['amount_coin']
@@ -4194,6 +4339,23 @@ class CryptoTradingBot:
                     f"Current market data for {coin} not available, cannot monitor trade.")
                 continue
             current_price = current_price_data['price']
+            peak_price = max(
+                float(trade_info.get('peak_price', buy_price)),
+                buy_price,
+                current_price,
+            )
+            trough_price = min(
+                float(trade_info.get('trough_price', buy_price)),
+                buy_price,
+                current_price,
+            )
+            if (
+                peak_price != float(trade_info.get('peak_price', buy_price))
+                or trough_price != float(trade_info.get('trough_price', buy_price))
+            ):
+                excursions_updated = True
+            trade_info['peak_price'] = peak_price
+            trade_info['trough_price'] = trough_price
             pnl_pct = (current_price - buy_price) / buy_price * 100
             hold_seconds = (datetime.now() -
                             trade_info['timestamp']).total_seconds()
@@ -4386,6 +4548,8 @@ class CryptoTradingBot:
                     )
         for coin in trades_to_remove:
             self.portfolio.remove_trade(coin)
+        if excursions_updated and self.config.dry_run:
+            self.portfolio.save_state()
 
     def run(self):
         """Main loop of the bot."""
@@ -4454,8 +4618,11 @@ class CryptoTradingBot:
                 recent_pnl_guard_active = bool(
                     recent_pnl_guard.get('active', False))
                 if recent_pnl_guard_active:
+                    journal_age = recent_pnl_guard.get('journal_age_hours')
                     logger.warning(
-                        "Recent PnL guard active: trades=%d, pnl=%.6f %s, pf=%.4f, reason=%s",
+                        "Recent PnL guard active: trades=%d, pnl=%.6f %s, "
+                        "pf=%.4f, reason=%s, journal_age_hours=%s, "
+                        "journal_stale=%s, latest_closed_trade=%s",
                         int(recent_pnl_guard.get('recent_trades', 0)),
                         float(recent_pnl_guard.get(
                             'recent_realized_pnl', 0.0)),
@@ -4463,6 +4630,9 @@ class CryptoTradingBot:
                         float(recent_pnl_guard.get(
                             'recent_profit_factor', 999.0)),
                         str(recent_pnl_guard.get('reason', 'n/a')),
+                        f"{float(journal_age):.1f}" if journal_age is not None else "unknown",
+                        bool(recent_pnl_guard.get('journal_stale', False)),
+                        recent_pnl_guard.get('latest_closed_trade_at') or "unknown",
                     )
 
                 def _entry_pair_allowed(
@@ -4485,16 +4655,32 @@ class CryptoTradingBot:
                 entry_market_mode = self._entry_market_mode(market_analysis)
 
                 # Only suggest coins not yet held.
-                strict_buy_candidates = [
+                strict_buy_candidates_before_guard = [
                     coin for coin, data in market_analysis.items()
                     if coin not in occupied_positions
                     and data.get('recommendation') in ['STRONG BUY', 'BUY']
                     and data.get('score', 0) >= self.config.min_entry_score
-                    and (
-                        not recent_pnl_guard_active
-                        or str(data.get('signal_source', 'rules')).strip().lower() == 'catboost'
-                    )
                     and _entry_pair_allowed(coin, data)
+                ]
+                if recent_pnl_guard_active:
+                    blocked_by_recent_guard = [
+                        coin for coin in strict_buy_candidates_before_guard
+                        if str(market_analysis[coin].get(
+                            'signal_source', 'rules')).strip().lower() != 'catboost'
+                    ]
+                    log_blocked_candidates = (
+                        logger.warning if blocked_by_recent_guard else logger.info
+                    )
+                    log_blocked_candidates(
+                        "Recent PnL guard withheld %d strict BUY candidates: %s",
+                        len(blocked_by_recent_guard),
+                        ', '.join(blocked_by_recent_guard[:10]) or "none",
+                    )
+                strict_buy_candidates = [
+                    coin for coin in strict_buy_candidates_before_guard
+                    if not recent_pnl_guard_active
+                    or str(market_analysis[coin].get(
+                        'signal_source', 'rules')).strip().lower() == 'catboost'
                 ]
                 top_buy_recommendations = strict_buy_candidates[:min(
                     self.config.top_n_for_analysis, available_trade_slots)]
@@ -4893,41 +5079,93 @@ class CryptoTradingBot:
 class Backtester:
     """Backtesting module for the trading strategy on historical data."""
 
-    def __init__(self, data_file="training_data.csv", initial_cash=10000, base_currency="EUR"):
+    def __init__(
+        self,
+        data_file="training_data.csv",
+        initial_cash=10000,
+        base_currency="EUR",
+        fee_per_trade=0.002,
+        slippage=0.001,
+    ):
+        if initial_cash <= 0:
+            raise ValueError("initial_cash must be greater than zero")
+        if not 0 <= fee_per_trade < 1:
+            raise ValueError("fee_per_trade must be in the range [0, 1)")
+        if not 0 <= slippage < 1:
+            raise ValueError("slippage must be in the range [0, 1)")
         self.data_file = data_file
         self.initial_cash = initial_cash
         self.base_currency = base_currency
+        self.fee_per_trade = fee_per_trade
+        self.slippage = slippage
         self.trades = []
         self.equity_curve = []
 
     def run(self, strategy_func, **kwargs):
         df = pd.read_csv(self.data_file)
-        df = df.sort_values(["coin", "timestamp"]).reset_index(drop=True)
+        required = {"coin", "timestamp", "close"}
+        missing = required.difference(df.columns)
+        if missing:
+            raise ValueError(
+                f"Backtest data is missing required columns: {', '.join(sorted(missing))}"
+            )
+        df["timestamp"] = pd.to_datetime(
+            df["timestamp"], utc=True, errors="coerce")
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        if df["timestamp"].isna().any() or df["close"].isna().any():
+            raise ValueError("Backtest data contains invalid timestamps or close prices")
+        if (df["close"] <= 0).any():
+            raise ValueError("Backtest close prices must be greater than zero")
+        if df["coin"].isna().any() or df["coin"].astype(str).str.strip().eq("").any():
+            raise ValueError("Backtest coin symbols must not be empty")
+        df["coin"] = df["coin"].astype(str)
+        if df.duplicated(["timestamp", "coin"]).any():
+            raise ValueError("Backtest data contains duplicate coin/timestamp rows")
+        df = df.sort_values(
+            ["timestamp", "coin"], kind="stable").reset_index(drop=True)
+
         cash = self.initial_cash
-        holdings = {}
-        self.equity_curve = []
+        holdings: dict[str, float] = {}
+        latest_prices: dict[str, float] = {}
+        previous_rows: dict[str, pd.Series] = {}
+        self.equity_curve = [self.initial_cash]
         self.trades = []
 
-        for _, row in df.iterrows():
-            coin = row["coin"]
-            price = row["close"]
-            signal = strategy_func(row, **kwargs)
+        for timestamp, timestamp_rows in df.groupby("timestamp", sort=True):
+            rows = list(timestamp_rows.iterrows())
+            for _, row in rows:
+                latest_prices[row["coin"]] = float(row["close"])
 
-            if signal == "kaufen" and cash > 0:
-                amount = cash / price
-                holdings[coin] = holdings.get(coin, 0) + amount
-                self.trades.append(
-                    (row["timestamp"], coin, "buy", price, amount))
-                cash = 0
-            elif signal == "verkaufen" and holdings.get(coin, 0) > 0:
-                amount = holdings[coin]
-                cash += amount * price
-                self.trades.append(
-                    (row["timestamp"], coin, "sell", price, amount))
-                holdings[coin] = 0
+            for _, row in rows:
+                coin = row["coin"]
+                previous = previous_rows.get(coin)
+                if previous is not None:
+                    signal = strategy_func(previous, **kwargs)
+                    close = float(row["close"])
+                    if signal == "kaufen" and cash > 0:
+                        fill_price = close * (1 + self.slippage)
+                        amount = cash / \
+                            (fill_price * (1 + self.fee_per_trade))
+                        holdings[coin] = holdings.get(coin, 0.0) + amount
+                        self.trades.append(
+                            (timestamp, coin, "buy", fill_price, amount))
+                        cash = 0.0
+                    elif signal == "verkaufen" and holdings.get(coin, 0) > 0:
+                        amount = holdings[coin]
+                        fill_price = close * (1 - self.slippage)
+                        cash += amount * fill_price * \
+                            (1 - self.fee_per_trade)
+                        self.trades.append(
+                            (timestamp, coin, "sell", fill_price, amount))
+                        holdings[coin] = 0.0
+                previous_rows[coin] = row
 
-            equity = cash + sum(holdings.get(c, 0) *
-                                row["close"] for c in holdings)
+            liquidation_factor = (1 - self.slippage) * \
+                (1 - self.fee_per_trade)
+            equity = cash + sum(
+                amount * latest_prices[coin] * liquidation_factor
+                for coin, amount in holdings.items()
+            )
             self.equity_curve.append(equity)
 
         self._report()
@@ -4946,7 +5184,11 @@ class Backtester:
             f"  End capital:   {self.equity_curve[-1]:.2f} {self.base_currency}")
         print(f"  Total return: {total_return:.2f}%")
         print(f"  Max drawdown:  {max_drawdown:.2f}%")
-        print(f"  Trades:        {len(self.trades)}")
+        print(
+            f"  Trade events:  {len(self.trades)} "
+            f"(estimated transaction cost per side: "
+            f"{(self.fee_per_trade + self.slippage) * 100:.3f}%)"
+        )
 
     def _max_drawdown(self, curve):
         curve = np.array(curve)
@@ -4973,12 +5215,28 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--backtest", action="store_true",
                         help="Start backtest on training data")
+    parser.add_argument(
+        "--backtest-fee-rate",
+        type=float,
+        default=0.002,
+        help="Estimated exchange fee per side as a decimal (default: 0.002)",
+    )
+    parser.add_argument(
+        "--backtest-slippage",
+        type=float,
+        default=0.001,
+        help="Estimated slippage per side as a decimal (default: 0.001)",
+    )
     args, _ = parser.parse_known_args()
 
     if args.backtest:
         print("\nStarting backtest on training data...",)
         backtester = Backtester(
-            data_file="training_data.csv", initial_cash=10000)
+            data_file="training_data.csv",
+            initial_cash=10000,
+            fee_per_trade=args.backtest_fee_rate,
+            slippage=args.backtest_slippage,
+        )
         backtester.run(simple_strategy)
 
     try:

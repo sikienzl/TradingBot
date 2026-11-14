@@ -18,8 +18,21 @@ create table if not exists trading_analytics.trade_events (
     reason text,
     dry_run boolean not null,
     base_currency text not null,
+    run_id text not null default 'legacy',
+    config_hash text not null default 'legacy',
+    mfe_pct double precision,
+    mae_pct double precision,
     created_at timestamptz not null default now()
 );
+
+alter table trading_analytics.trade_events
+    add column if not exists run_id text not null default 'legacy';
+alter table trading_analytics.trade_events
+    add column if not exists config_hash text not null default 'legacy';
+alter table trading_analytics.trade_events
+    add column if not exists mfe_pct double precision;
+alter table trading_analytics.trade_events
+    add column if not exists mae_pct double precision;
 
 create index if not exists trade_events_event_ts_idx
     on trading_analytics.trade_events (event_ts desc);

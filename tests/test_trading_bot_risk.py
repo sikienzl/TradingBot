@@ -1762,3 +1762,25 @@ def test_partial_take_profit_remainder_exits_on_weak_signal(monkeypatch):
     assert "BTC" not in bot.portfolio.open_trades
     assert bot.portfolio.holdings.get("BTC", 0.0) == 0.0
     assert bot.portfolio.cash == 50.5
+
+
+def test_open_trade_extremes_are_updated_and_persisted(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.trailing_stop_enabled = False
+    bot.config.break_even_enabled = False
+    bot.config.partial_take_profit_enabled = False
+    bot.portfolio.cash = 0.0
+    bot.portfolio.holdings["BTC"] = 1.0
+    bot.portfolio.add_trade("BTC", 100.0, 1.0, 100.0)
+    bot.portfolio.open_trades["BTC"]["peak_price"] = 102.0
+    bot.portfolio.open_trades["BTC"]["trough_price"] = 98.0
+    monkeypatch.setattr(bot, "_get_atr_for_coin", lambda coin, period=14: 5.0)
+    saved = []
+    bot.portfolio.save_state = lambda filepath=None: saved.append(True)
+
+    bot._manage_open_trades({"BTC": {"price": 105.0}})
+
+    trade = bot.portfolio.open_trades["BTC"]
+    assert trade["peak_price"] == 105.0
+    assert trade["trough_price"] == 98.0
+    assert saved == [True]
