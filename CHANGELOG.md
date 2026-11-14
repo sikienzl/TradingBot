@@ -29,6 +29,7 @@ prepared; this file intentionally remains under **Unreleased** until then.
 
 ### Changed
 
+- Redact the Hailo service token from startup configuration logs.
 - Extend existing CSV journals atomically with the new columns and mark
   historical rows as `legacy`.
 - Add the new trade-event columns to PostgreSQL schemas, with additive

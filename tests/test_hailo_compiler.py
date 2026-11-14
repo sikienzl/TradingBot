@@ -62,3 +62,27 @@ def test_compiler_refuses_to_overwrite_hef(tmp_path, monkeypatch):
     with pytest.raises(FileExistsError):
         hailo_compile_onnx.main()
     assert output.read_bytes() == b"existing"
+
+
+def test_compiler_passes_optional_model_script(tmp_path, monkeypatch):
+    model = tmp_path / "model.onnx"
+    model.write_bytes(b"test")
+    calibration = tmp_path / "calibration.npy"
+    np.save(calibration, np.zeros((2, 1, 1, 22), dtype=np.float32))
+    script = tmp_path / "calibration.alls"
+    script.write_text("model_optimization_config(calibration, calibset_size=2)\n")
+    output = tmp_path / "model.hef"
+    _arguments(monkeypatch, model, calibration, output)
+    sys.argv += ["--model-script", str(script)]
+    calls = []
+
+    def run(command):
+        calls.append(command)
+        if command[:2] == ["hailo", "compiler"]:
+            Path(command[command.index("--output-dir") + 1], "hailo_model.hef").write_bytes(b"hef")
+
+    monkeypatch.setattr(hailo_compile_onnx, "run", run)
+    assert hailo_compile_onnx.main() == 0
+    optimize = next(c for c in calls if c[:2] == ["hailo", "optimize"])
+    assert optimize[optimize.index("--model-script") + 1] == str(script.resolve())
+    assert all("--model-script" not in c for c in calls if c is not optimize)

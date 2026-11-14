@@ -252,3 +252,25 @@ def test_hailo_failure_suppresses_bot_entries(monkeypatch):
     assert result["recommendation"] == "HOLD"
     assert result["score"] == 0
     assert result["signal_source"] == "hailo_unavailable"
+
+
+def test_bot_startup_does_not_log_hailo_token(monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setenv("SIMULATE_DATA", "true")
+    monkeypatch.setenv("DRY_RUN", "true")
+    monkeypatch.setenv("USE_TABULAR_MODEL", "false")
+    monkeypatch.setenv("USE_ML_MODEL", "false")
+    monkeypatch.setenv("PERFORMANCE_LOG_ENABLED", "false")
+    monkeypatch.setenv("HAILO_API_TOKEN", "test-token-must-not-appear-in-logs")
+    bot = CryptoTradingBot(BotConfig())
+
+    def stop():
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(bot, "_update_portfolio_balance", stop)
+    with caplog.at_level(logging.INFO):
+        bot.run()
+
+    assert "test-token-must-not-appear-in-logs" not in caplog.text
+    assert "[REDACTED]" in caplog.text

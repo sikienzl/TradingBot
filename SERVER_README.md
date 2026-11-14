@@ -89,20 +89,155 @@ Reports are written to:
 The trading bot stays on `192.168.62.74`; the Hailo-8 service is intended to
 run separately on `192.168.62.75`. This setup does not move exchange
 credentials to the accelerator host. CatBoost remains the default backend.
-Do not enable Hailo until a trading-specific HEF has been compiled and
-validated: the Hailo runtime host currently has HailoRT but not the DFC
-compiler, and the available image-model HEFs are incompatible.
+The current deployment is an isolated **simulation-only shadow bot**, not a
+replacement for the existing bot containers. The Hailo runtime host has
+HailoRT but not the DFC compiler, and image-model HEFs are incompatible.
+
+### Current cluster shadow deployment
+
+The current shadow deployment differs from the optional system-wide service
+described below:
+
+- The commands below use `rtk` where they are executed. The current Raspberry
+  Pis do not have `rtk` installed; from a host with RTK, invoke the equivalent
+  command on the appropriate Pi through `rtk proxy ssh <host> ...` instead.
+- `.75`: `~siegfried/trading-hailo-dryrun` holds the inference code, virtual
+  environment, private `service.env`, and the matching `model/hailo_model.hef`
+  and `model/metadata.json`. The enabled user unit
+  `trading-hailo-dryrun.service` listens only on `127.0.0.1:18001`.
+- `.74`: `trading-hailo-tunnel.service` forwards its localhost port 18001
+  through SSH to `.75`; `trading-hailo-shadow-dryrun` uses host networking and
+  writes its own state and journal under `~siegfried/trading-hailo-shadow/data`.
+  It runs with `DRY_RUN=true`, `SIMULATE_DATA=true` and `SIMULATION_REGIME=mixed`.
+  Its simulated starting capital is currently 1,000 EUR, not the real account
+  balance. It does not use exchange credentials.
+- Both nodes need systemd user lingering. The separate cluster Ansible
+  repository configures this; otherwise an administrator can enable it for
+  the service user with `sudo loginctl enable-linger siegfried`.
+
+The model was trained on public Kraken hourly data for ten markets and is for
+simulation research only. In an ONNX-versus-Hailo test of 1,320 validation
+rows, top-class agreement was 97.95%; the DFC warned that CPU-only
+optimization was reduced. This is not a profitability test or live-trading
+approval. Neither the HEF nor training/calibration data, private key or bearer
+token are stored in Git. For exact recovery, securely back up the matching HEF,
+metadata and input data outside Git; training again on newer market data will
+produce a different model.
+
+#### Restore the user service on `.75`
+
+The following assumes a repository checkout on the host. Do not overwrite an
+existing deployment without backing it up. Place the validated matching HEF
+and metadata in `~/trading-hailo-dryrun/model/` first. The HailoRT host Python
+bindings must match the installed native runtime.
+
+```sh
+rtk proxy mkdir -p ~/trading-hailo-dryrun/src ~/.config/systemd/user
+rtk proxy cp src/__init__.py src/api_models.py src/hailo_contract.py \
+  src/hailo_runtime.py src/hailo_service.py ~/trading-hailo-dryrun/src/
+rtk proxy python3 -m venv --system-site-packages ~/trading-hailo-dryrun/.venv
+rtk proxy ~/trading-hailo-dryrun/.venv/bin/pip install -r requirements-hailo-server.txt
+rtk proxy cp deploy/trading-hailo-dryrun.service ~/.config/systemd/user/
+```
+
+Create `~/trading-hailo-dryrun/service.env` with mode `0600`, containing
+`HAILO_HEF_PATH` and `HAILO_METADATA_PATH` as absolute paths to those artifacts,
+and `HAILO_API_TOKEN` as a long random secret. The exact same token must be
+stored in the shadow env file on `.74` over a trusted encrypted channel; do not
+put it in Git, command arguments, or logs. Then:
+
+```sh
+rtk proxy systemctl --user daemon-reload
+rtk proxy systemctl --user enable --now trading-hailo-dryrun.service
+rtk proxy curl --fail --silent --show-error http://127.0.0.1:18001/health
+```
+
+#### Restore the restricted tunnel on `.74`
+
+Create `~/trading-hailo-shadow` with mode `0700`. Generate a dedicated
+`tunnel_ed25519` SSH key there; do not overwrite an existing key. Obtain and
+verify `.75`'s ED25519 host-key fingerprint through a trusted channel, then
+store its public host key in `~/trading-hailo-shadow/known_hosts`. On `.75`,
+add only the tunnel public key to the service user's `~/.ssh/authorized_keys`
+with this restriction prefix:
+
+```text
+restrict,port-forwarding,permitopen="127.0.0.1:18001",command="/bin/false" ssh-ed25519 <public-key>
+```
+
+The private key must never leave `.74`. The unit is configured for the current
+user `siegfried` and host `.75`; adjust those values for another cluster.
+
+```sh
+rtk proxy cp deploy/trading-hailo-tunnel.service ~/.config/systemd/user/
+rtk proxy systemctl --user daemon-reload
+rtk proxy systemctl --user enable --now trading-hailo-tunnel.service
+rtk proxy curl --fail --silent --show-error http://127.0.0.1:18001/health
+```
+
+#### Restore the isolated shadow container on `.74`
+
+The repository's `docker/hailo-shadow.Dockerfile` is a standalone rebuild path
+for the same application and configuration. It does not require the
+pre-existing `trading-simulation:analytics-52247d45` base image used for the
+currently running container. A rebuild may resolve different base-image or
+transitive dependency versions and is not bit-for-bit identical.
+
+```sh
+rtk proxy docker build -f docker/hailo-shadow.Dockerfile -t trading-hailo-shadow:dryrun .
+rtk proxy mkdir -p ~/trading-hailo-shadow/data
+rtk proxy cp deploy/hailo-shadow.env.example ~/trading-hailo-shadow/shadow.env
+rtk proxy chmod 600 ~/trading-hailo-shadow/shadow.env
+```
+
+Set the same bearer token in the private `shadow.env`; do not commit it. The
+data directory must be writable by container UID 1000. Start only when the
+service and tunnel health checks pass, and do not replace an existing container
+without reviewing its state:
+
+```sh
+rtk proxy docker run -d --name trading-hailo-shadow-dryrun \
+  --restart unless-stopped --network host \
+  --env-file ~/trading-hailo-shadow/shadow.env \
+  -e DRY_RUN=true -e SIMULATE_DATA=true \
+  --mount type=bind,src="$HOME/trading-hailo-shadow/data",dst=/data \
+  trading-hailo-shadow:dryrun
+rtk proxy docker logs --tail 100 trading-hailo-shadow-dryrun
+```
+
+The explicit flags keep this example in simulation. Docker administrators can
+inspect container environment variables, including the token; restrict access
+to the Docker daemon. On startup, confirm both dry-run and simulation mode,
+Hailo predictions, and the absence of prediction errors. The service and
+tunnel are user units; `systemctl --user status` checks each. To stop only the
+shadow bot, use `rtk proxy docker stop trading-hailo-shadow-dryrun`. Do not
+enable live trading on the strength of the simulation.
 
 ### Prepare and compile the model
 
-On a development machine with training dependencies and historical
-`training_data.csv`:
+On a development machine with training dependencies, collect public Kraken
+candles and derive features through the same analysis path as the bot. This
+uses public market-data endpoints only, makes no trades and excludes the
+still-forming candle:
 
 ```sh
-pip install '.[hailo-export]'
-python3 -m src.train_hailo_model --data-path training_data.csv \
-  --output-dir ./model/hailo_trading_model
+rtk proxy pip install '.[hailo-export]'
+rtk proxy python3 scripts/collect_hailo_training.py data/kraken_hailo_training.csv
+rtk proxy python3 -m src.train_hailo_model --data-path data/kraken_hailo_training.csv \
+  --output-dir model/hailo_trading_model
+rtk proxy python3 scripts/prepare_hailo_calibration.py \
+  data/kraken_hailo_training.csv model/hailo_trading_model
 ```
+
+The collector defaults to ten markets and at most 720 hourly candles per
+market; use `--coins` and `--limit` to adjust the request. Kraken supplies
+recent data, so a later collection cannot recreate the original dataset.
+Preserve the exact input CSV, model and metadata together outside Git.
+Calibration uses only the purged training split, not the validation split.
+The calibration step verifies the input CSV hash and split parameters against
+the export metadata and refuses to replace existing outputs without
+`--overwrite`. Models exported before provenance metadata was added must be
+retrained to use this calibration tool.
 
 The exporter writes `trading_mlp.onnx` and `metadata.json`. It does not create
 a HEF. The compiler does not need to be installed on `.75`: compile on an
@@ -148,13 +283,13 @@ pins the SDK filenames but fetches Ubuntu packages and Python dependencies
 during build, so rebuilding later may produce different transitive versions.
 No exchange credentials or personal data are needed for the build.
 
-The wrapper requires a representative preprocessed NumPy calibration array in
-NHWC layout. For this MLP, each sample has shape `(1, 1, 22)` and must use the
-same feature order and normalization as `metadata.json`; the array must have
-shape `(samples, 1, 1, 22)`. The current exporter does **not** create that
-calibration array, so prepare and validate it from representative training
-data before compilation. Do not use the synthetic smoke-test calibration for a
-deployable model.
+The calibration preparation step writes a normalized NHWC `calibration.npy`
+with shape `(samples, 1, 1, 22)` and a `calibration.alls` DFC script.
+Use the same input CSV as for the model export. The default sample count is
+up to 1,024; the script sets the DFC calibration count to the actual number
+of samples. Without `--model-script`, DFC's default may use only 64 samples,
+even when the array contains more. Do not use the synthetic smoke-test
+calibration for a deployable model.
 
 With the ONNX file and `calibration.npy` in the output directory, run on the
 compiler host:
@@ -164,15 +299,17 @@ rtk proxy docker run --rm --network none \
   --mount type=bind,src="$(pwd)/model/hailo_trading_model",dst=/work \
   --workdir /work --entrypoint python trading-hailo-compiler:3.34.0 \
   /opt/hailo/hailo_compile_onnx.py \
-  /work/trading_mlp.onnx /work/calibration.npy /work/trading_mlp.hef
+  /work/trading_mlp.onnx /work/calibration.npy /work/trading_mlp.hef \
+  --model-script /work/calibration.alls
 ```
 
 The wrapper refuses to overwrite an existing HEF. The smoke test with 64
 synthetic calibration samples and no GPU used DFC's reduced optimization level;
-DFC warned that this is not recommended for production. Validate the actual
-compiled model against ONNX and on `.75` with its HailoRT 4.23.0 before
-deployment; compatibility and numerical agreement have not yet been verified.
-Verify the tensor shapes, normalization contract, and output logits as well.
+DFC warned that this is not recommended for production. The particular model
+in the current shadow deployment was also checked on `.75` with HailoRT 4.23.0
+against its ONNX output, as described above. For every newly compiled model,
+repeat the hardware and numerical validation, including tensor shapes,
+normalization contract, and output logits, before deployment.
 No live trading or profitability should be inferred from export-time validation
 metrics.
 
@@ -228,8 +365,8 @@ HAILO_TIMEOUT_SECONDS=3
 Keep the existing risk guards enabled and first run in simulation/dry-run.
 Remote inference errors fail closed for entries on the affected coin and are
 logged; they do not switch to rules-only buying. Confidence threshold
-auto-tuning remains CatBoost-only. The Hailo service and bot are not deployed
-or enabled by this repository change.
+auto-tuning remains CatBoost-only. The current cluster deployment is the
+separate shadow configuration described above, not this system-wide setup.
 
 ## 4b. Weekly Auto-Tuning Cycle
 

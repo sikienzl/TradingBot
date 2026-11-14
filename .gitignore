@@ -33,9 +33,11 @@ model/hailo_trading_model/
 *.har
 *.npy
 *.npz
+calibration.alls
 /hailo-sdk/
 /hailo-compiler*.tar
 /hailo-compiler*.tar.gz
+/hailo-shadow.env
 
 # Results & checkpoints
 results/

@@ -4587,6 +4587,9 @@ class CryptoTradingBot:
             safe_config.get('api_secret', ''))
         safe_config['ai_copilot_api_key'] = _mask_secret(
             safe_config.get('ai_copilot_api_key', ''))
+        safe_config['hailo_api_token'] = (
+            '[REDACTED]' if safe_config.get('hailo_api_token') else ''
+        )
         logger.info(f"Configuration: {safe_config}")
         if self.config.dry_run:
             logger.warning(

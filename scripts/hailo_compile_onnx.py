@@ -17,6 +17,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("onnx", type=Path, help="Input ONNX model")
     parser.add_argument("calibration", type=Path, help="Preprocessed NHWC .npy calibration set")
     parser.add_argument("hef", type=Path, help="Output HEF path; must not already exist")
+    parser.add_argument(
+        "--model-script", type=Path, default=None,
+        help="Optional DFC .alls model script passed to 'hailo optimize'",
+    )
     parser.add_argument("--arch", choices=("hailo8", "hailo8r", "hailo8l"), default="hailo8")
     return parser.parse_args()
 
@@ -31,6 +35,9 @@ def main() -> int:
     model = args.onnx.resolve(strict=True)
     calibration = args.calibration.resolve(strict=True)
     output = args.hef.absolute()
+    model_script = args.model_script.resolve(strict=True) if args.model_script else None
+    if model_script is not None and not model_script.is_file():
+        raise ValueError("Model script must be a file")
     if not model.is_file() or not calibration.is_file():
         raise ValueError("ONNX model and calibration set must be files")
     if output.exists():
@@ -59,10 +66,13 @@ def main() -> int:
             "hailo", "parser", "onnx", str(model), "--net-name", "hailo_model",
             "--hw-arch", args.arch, "--har-path", str(parsed),
         ])
-        run([
+        optimize = [
             "hailo", "optimize", str(parsed), "--hw-arch", args.arch,
             "--calib-set-path", str(calibration), "--output-har-path", str(optimized),
-        ])
+        ]
+        if model_script is not None:
+            optimize += ["--model-script", str(model_script)]
+        run(optimize)
         run([
             "hailo", "compiler", str(optimized), "--hw-arch", args.arch,
             "--output-dir", str(work),

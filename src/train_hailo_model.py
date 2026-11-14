@@ -2,6 +2,7 @@
 
 import argparse
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -17,6 +18,16 @@ from src.hailo_contract import (
     HAILO_LABEL_MAP,
     HAILO_OUTPUT_NAME,
 )
+
+TRAIN_FRACTION = 0.8
+
+
+def file_sha256(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def prepare_hailo_data(data_path: str) -> tuple[np.ndarray, ...]:
@@ -50,7 +61,7 @@ def prepare_hailo_data(data_path: str) -> tuple[np.ndarray, ...]:
         raise ValueError("At least 200 chronologically labelled rows are required")
 
     timestamps = df["timestamp"].drop_duplicates().sort_values().to_list()
-    split_index = int(len(timestamps) * 0.8)
+    split_index = int(len(timestamps) * TRAIN_FRACTION)
     if split_index <= 0 or split_index >= len(timestamps):
         raise ValueError("Insufficient unique timestamps for a chronological split")
     validation_start = timestamps[split_index]
@@ -111,6 +122,8 @@ def train_and_export(
         raise RuntimeError(
             "ONNX is required for Hailo model export; install the hailo-export extra"
         )
+
+    from src.train_catboost_model import LABEL_HORIZON
 
     x_train, y_train, x_validation, y_validation, class_weights = prepare_hailo_data(
         data_path
@@ -220,6 +233,13 @@ def train_and_export(
         "output_kind": "logits",
         "confidence_threshold": confidence_threshold,
         "margin_threshold": 0.03,
+        "data_provenance": {
+            "training_data_sha256": file_sha256(data_path),
+            "label_horizon": LABEL_HORIZON,
+            "train_fraction": TRAIN_FRACTION,
+            "train_rows": len(y_train),
+            "validation_rows": len(y_validation),
+        },
         "validation": {
             "rows": len(y_validation),
             "accuracy": float(accuracy_score(y_validation, validation_probabilities.argmax(axis=1))),

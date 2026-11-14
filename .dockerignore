@@ -1,5 +1,9 @@
 **
 !docker/
 !docker/hailo-compiler.Dockerfile
+!docker/hailo-shadow.Dockerfile
 !scripts/
 !scripts/hailo_compile_onnx.py
+!src/
+!src/*.py
+!requirements-hailo-shadow.txt
