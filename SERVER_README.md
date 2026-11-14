@@ -231,9 +231,10 @@ enable live trading on the strength of the simulation.
 For a new simulation, set `SIMULATION_INITIAL_BALANCE_FROM_KRAKEN=true` in
 the private shadow environment and supply `KRAKEN_API_KEY` and
 `KRAKEN_API_SECRET` there. Prefer a dedicated Kraken API key with permission
-to query funds only, without trading or withdrawal permissions. The option
-requires Kraken, EUR, `DRY_RUN=true` and `SIMULATE_DATA=true`; otherwise the
-bot refuses to start. Docker administrators can inspect these credentials.
+to query funds only, without trading or withdrawal permissions. Initial
+balance retrieval requires Kraken, EUR, `DRY_RUN=true` and
+`SIMULATE_DATA=true`. Docker administrators can inspect credentials passed
+through the container environment.
 
 When `/data/.portfolio_state.json` is absent, the bot fetches the available
 EUR balance once, excludes crypto holdings, and persists the resulting
@@ -259,6 +260,52 @@ The restart message identifies a bot restart, not specifically a host reboot
 or power outage. The simulation iteration is saved along with the portfolio;
 performance counters are not restored, and the trade journal is a separate
 file.
+
+#### Separate paper run with public Kraken market data
+
+Use a **new** private data directory, never the existing shadow directory.
+The following one-shot container reads the credentials file only during
+initialization, fetches the free EUR balance, and refuses to overwrite an
+existing portfolio. Prefer a funds-query-only API key; the complete credentials
+file is accessible to this temporary container. Its contents are not required
+by the long-running bot.
+
+```sh
+rtk proxy mkdir -m 700 ~/trading-hailo-public-paper
+rtk proxy mkdir -m 700 ~/trading-hailo-public-paper/data
+rtk proxy docker build -f docker/hailo-shadow.Dockerfile -t trading-hailo-public-paper:local .
+rtk proxy docker run --rm --network host \
+  --mount type=bind,src="$HOME/trading-hailo-public-paper/data",dst=/data \
+  --mount type=bind,src=/opt/trading_2/.env,dst=/run/kraken.env,readonly \
+  trading-hailo-public-paper:local \
+  python3 -m src.init_kraken_paper --credentials-file /run/kraken.env
+```
+
+Copy the Hailo token from the existing private shadow configuration into a
+new private environment file, omitting all Kraken credentials. Do not copy
+the old portfolio or journal. Then start a separate container:
+
+```sh
+rtk proxy docker run -d --name trading-hailo-public-paper \
+  --restart unless-stopped --network host \
+  --env-file "$HOME/trading-hailo-public-paper/paper.env" \
+  -e DRY_RUN=true -e SIMULATE_DATA=false \
+  -e SIMULATION_INITIAL_BALANCE_FROM_KRAKEN=true \
+  -e DRY_RUN_COSTS_ENABLED=true -e DRY_RUN_FEE_RATE=0.002 \
+  -e DRY_RUN_SLIPPAGE_RATE=0.001 \
+  --mount type=bind,src="$HOME/trading-hailo-public-paper/data",dst=/data \
+  trading-hailo-public-paper:local
+```
+
+The paper environment needs the Hailo settings from
+`deploy/hailo-shadow.env.example`, its own `/data/trade_journal.csv`, and no
+Kraken credentials. In this mode the bot rejects Kraken credentials, restores
+only the separate initialized portfolio and uses unauthenticated public
+market endpoints. Exchange initialization failures do not enable synthetic
+market data; unavailable market data skips the iteration. Orders are
+simulated, with the specified fees and slippage on each side. The current
+account balance is not refreshed after initialization. This experiment neither
+places orders nor establishes real profitability.
 
 ### Prepare and compile the model
 
