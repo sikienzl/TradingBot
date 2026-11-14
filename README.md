@@ -41,13 +41,13 @@ cp .env.live.example .env   # conservative live profile
 cp .env.small_account.example .env   # conservative small-account profile
 ```
 
-Optional AutoResearch overlay for servers:
+Optional market-signal bridge overlay for servers:
 ```sh
 cp .env.live.example .env
 cat .env.autoresearch.example >> .env
 ```
 
-Optional AutoResearch overlay for real command execution (strict mode):
+Optional market-signal producer overlay for external command execution (strict mode):
 ```sh
 cp .env.live.example .env
 cat .env.autoresearch.active.example >> .env
@@ -260,6 +260,48 @@ the example HTTP endpoint does not encrypt traffic. The Hailo option is
 preparation only and is not a profitability claim or live-trading
 recommendation.
 
+### Offline Hailo research experiments
+
+`scripts/run_hailo_experiment.py` provides a first, agent-independent
+experiment interface inspired by autoresearch. It does not run an AI agent:
+the caller supplies a JSON proposal with exactly these bounded parameters:
+
+```json
+{"epochs": 100, "patience": 15, "learning_rate": 0.001}
+```
+
+`epochs` must be an integer from 1 to 300, `patience` from 1 to 50 and no
+larger than `epochs`, and `learning_rate` from 0.00001 to 0.01. The model
+architecture, features, labeling and evaluation are fixed. On a development
+host with the `hailo-export` dependencies installed, use a chronological CSV
+from `scripts/collect_hailo_training.py` and a new output directory:
+
+```sh
+python3 scripts/run_hailo_experiment.py \
+  --data data/kraken_hailo_training.csv \
+  --proposal proposal.json \
+  --output-dir results/hailo-experiment-001
+```
+
+The output directory's parent must already exist; an existing output directory
+is never overwritten. The runner trains both the fixed default baseline and
+the proposed candidate on the same development data. It evaluates each ONNX
+model's raw class predictions with three-class macro-F1 on a later holdout
+which is excluded from training, early stopping, normalization and
+calibration. `result.json` records metrics, parameters and data hashes; each
+model directory contains its ONNX, metadata and calibration files. Protect
+these potentially sensitive datasets and artifacts outside Git. All raw Hailo
+input features must be present and finite; the return and volatility features
+are derived from close prices by the training pipeline.
+
+This is **offline research only**: no agent loop, HEF compilation, hardware
+comparison, automatic shadow deployment or live promotion is implemented.
+Repeating experiments on the same holdout can overfit it; use a fresh,
+untouched time period for final assessment. Input features must be computed
+causally. Macro-F1 does not measure trading profitability or risk. Before any
+separate shadow test, compile and validate the model as described in the
+server guide; never replace the existing shadow service or its state.
+
 ## Configuration
 
 All parameters are set via `.env` (see `.env.example` for the full list). Key variables:
@@ -398,7 +440,15 @@ FALLBACK_MAX_RSI_BY_COIN=TRX:72
 
 ## AutoResearch -> AI model features
 
-The CatBoost model can consume a normalized AutoResearch signal vector at training and inference time.
+The existing "AutoResearch" bridge is a generic market-signal JSON adapter for
+CatBoost; it is **not** an integration with
+[karpathy/autoresearch](https://github.com/karpathy/autoresearch). That project
+experiments with language-model training and does not produce this JSON. The
+bridge does not train or improve the bot. Its research features are not part
+of the fixed Hailo trading-model contract.
+
+The CatBoost model can consume a normalized research signal vector at training
+and inference time, provided a separate compatible signal producer is configured.
 
 Expected JSON file (example path: `data/research_signal_latest.json`):
 
@@ -686,7 +736,7 @@ AUTORESEARCH_WRITE_NEUTRAL_FALLBACK=true \
 bash scripts/run_weekly_scorecard.sh
 ```
 
-Server example with real AutoResearch command (strict):
+Server example with an external research-signal command (strict):
 
 ```sh
 cp .env.live.example .env
@@ -702,7 +752,8 @@ AUTORESEARCH_REQUIRED=true \
 bash scripts/run_weekly_scorecard.sh
 ```
 
-`AUTORESEARCH_CMD` templates:
+`AUTORESEARCH_CMD` templates for an independently implemented JSON producer
+(not commands provided by karpathy/autoresearch):
 
 ```sh
 # Python repo (entry script)
