@@ -92,6 +92,17 @@ credentials to the accelerator host. CatBoost remains the default backend.
 The current deployment is an isolated **simulation-only shadow bot**, not a
 replacement for the existing bot containers. The Hailo runtime host has
 HailoRT but not the DFC compiler, and image-model HEFs are incompatible.
+Karpathy's `autoresearch` is an LLM-training experiment, not the market-signal
+bridge described in the main README, and does not train this trading model.
+The available Hailo-8 DFC package used below targets x86-64; the Raspberry Pi
+uses the compiled HEF for inference, not model training or compilation.
+
+A second, independent candidate shadow service must not assume it can open
+the same Hailo device concurrently with the existing service. HailoRT device
+sharing or a separate device must be configured and validated first. Do not
+replace the existing service, its model, or its simulation state to test a
+research candidate. Model classification metrics are not a profitability or
+live-trading guarantee.
 
 ### Current cluster shadow deployment
 
