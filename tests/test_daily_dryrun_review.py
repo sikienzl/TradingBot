@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +51,7 @@ def test_build_html_contains_primary_and_benchmark_sections() -> None:
             "closed_trades": 2,
             "wins": 1,
             "losses": 1,
+            "break_even": 0,
             "win_rate_pct": 50.0,
             "realized_pnl": 0.123456,
             "avg_pnl_per_trade": 0.061728,
@@ -98,3 +100,15 @@ def test_build_html_contains_primary_and_benchmark_sections() -> None:
     assert "gpt-5.4" in html_report
     assert "gpt-5-mini" in html_report
     assert "reentry_cooldown_seconds" in html_report
+
+
+def test_review_counts_break_even_separately():
+    rows = [
+        {"action": "sell", "timestamp": "2026-06-06T11:00:00Z", "pnl_base": value}
+        for value in ("1", "-1", "0")
+    ]
+    report = daily_dryrun_review._review_trades(
+        rows, datetime(2026, 6, 6, tzinfo=UTC),
+    )
+    assert (report["wins"], report["losses"], report["break_even"]) == (1, 1, 1)
+    assert report["win_rate_pct"] == 33.3333

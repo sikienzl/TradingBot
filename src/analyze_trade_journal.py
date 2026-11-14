@@ -67,6 +67,7 @@ def report_daily(sells: pd.DataFrame, base_currency: str) -> None:
         sells=("action", "count"),
         wins=("pnl_base", lambda x: int((x > 0).sum())),
         losses=("pnl_base", lambda x: int((x < 0).sum())),
+        break_even=("pnl_base", lambda x: int((x == 0).sum())),
         pnl=("pnl_base", "sum"),
         avg_pnl=("pnl_base", "mean"),
         avg_hold_s=("hold_seconds", "mean"),
@@ -95,12 +96,14 @@ def _print_trade_slice_summary(label: str, trades: pd.DataFrame, base_currency: 
 
     pnl = float(trades["pnl_base"].sum())
     win_rate = float((trades["pnl_base"] > 0).mean() * 100.0)
+    break_even = int((trades["pnl_base"] == 0).sum())
     avg_pnl = float(trades["pnl_base"].mean())
     avg_hold = float(trades["hold_seconds"].mean()
                      ) if "hold_seconds" in trades.columns else 0.0
     print(
         f"{label:16s} trades={len(trades):4d} pnl={pnl:+.6f} {base_currency} "
-        f"win_rate={win_rate:6.2f}% avg_pnl={avg_pnl:+.6f} avg_hold={avg_hold:7.2f}s"
+        f"win_rate={win_rate:6.2f}% break_even={break_even} "
+        f"avg_pnl={avg_pnl:+.6f} avg_hold={avg_hold:7.2f}s"
     )
 
 
@@ -176,6 +179,7 @@ def report_hold_time_bands(sells: pd.DataFrame, base_currency: str) -> None:
         trades=("pnl_base", "size"),
         pnl=("pnl_base", "sum"),
         win_rate=("pnl_base", lambda x: float((x > 0).mean() * 100.0)),
+        break_even=("pnl_base", lambda x: int((x == 0).sum())),
         avg_pnl=("pnl_base", "mean"),
     ).reset_index()
     print(grouped.to_string(index=False, float_format=lambda v: f"{v:.6f}"))
@@ -202,6 +206,7 @@ def report_confidence_bands(sells: pd.DataFrame, base_currency: str) -> None:
         trades=("pnl_base", "size"),
         pnl=("pnl_base", "sum"),
         win_rate=("pnl_base", lambda x: float((x > 0).mean() * 100.0)),
+        break_even=("pnl_base", lambda x: int((x == 0).sum())),
         avg_pnl=("pnl_base", "mean"),
     ).reset_index()
     print(grouped.to_string(index=False, float_format=lambda v: f"{v:.6f}"))
@@ -299,9 +304,11 @@ def optimize_confidence_threshold(
         holdout_avg = float(selected_holdout["pnl_base"].mean())
         holdout_win_rate = float(
             (selected_holdout["pnl_base"] > 0).mean() * 100.0)
+        holdout_break_even = int((selected_holdout["pnl_base"] == 0).sum())
         print(
             f"Chronological holdout (last 30%): trades={len(selected_holdout)} | "
-            f"win_rate={holdout_win_rate:.2f}% | pnl={holdout_pnl:.6f} "
+            f"win_rate={holdout_win_rate:.2f}% | "
+            f"break_even={holdout_break_even} | pnl={holdout_pnl:.6f} "
             f"{base_currency} | avg_pnl={holdout_avg:.6f} {base_currency}"
         )
 
@@ -330,6 +337,7 @@ def summarize(df: pd.DataFrame, base_currency: str) -> None:
     closed = len(sells)
     wins = (sells["pnl_base"] > 0).sum()
     losses = (sells["pnl_base"] < 0).sum()
+    break_even = (sells["pnl_base"] == 0).sum()
     win_rate = (wins / closed * 100.0) if closed > 0 else 0.0
 
     total_realized = float(sells["pnl_base"].sum()) if closed > 0 else 0.0
@@ -351,7 +359,7 @@ def summarize(df: pd.DataFrame, base_currency: str) -> None:
     print(f"Rows total:          {len(df)}")
     print(f"Buys:                {len(buys)}")
     print(f"Sells (closed):      {closed}")
-    print(f"Wins / Losses:       {wins} / {losses}")
+    print(f"Wins / Losses / BE:   {wins} / {losses} / {break_even}")
     print(f"Win rate:            {win_rate:.2f}%")
     print(f"Realized PnL:        {total_realized:.6f} {base_currency}")
     print(f"Avg PnL per sell:    {avg_pnl:.6f} {base_currency}")

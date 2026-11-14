@@ -83,6 +83,7 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
     total_trades = 0
     winning_trades = 0
     losing_trades = 0
+    break_even_trades = 0
     gross_profit = 0.0
     gross_loss = 0.0
     per_trade_returns = []
@@ -90,6 +91,7 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
     coin_pnl = {}
     coin_closed = {}
     coin_wins = {}
+    coin_break_even = {}
     coin_buy_volume = {}
     coin_buy_count = {}
 
@@ -142,6 +144,7 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
 
             coin_pnl[coin] = coin_pnl.get(coin, 0.0) + pnl
             coin_closed[coin] = coin_closed.get(coin, 0) + 1
+            coin_break_even.setdefault(coin, 0)
 
             if pnl > 0:
                 winning_trades += 1
@@ -150,6 +153,9 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
             elif pnl < 0:
                 losing_trades += 1
                 gross_loss += pnl
+            else:
+                break_even_trades += 1
+                coin_break_even[coin] = coin_break_even.get(coin, 0) + 1
 
             per_trade_returns.append(extract_return_pct(trade))
 
@@ -194,6 +200,7 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
         'total_trades': total_trades,
         'winning_trades': winning_trades,
         'losing_trades': losing_trades,
+        'break_even_trades': break_even_trades,
         'win_rate': win_rate,
         'avg_pnl_per_trade': avg_pnl,
         'profit_factor': profit_factor,
@@ -203,6 +210,7 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
         'coin_pnl': coin_pnl,
         'coin_closed': coin_closed,
         'coin_win_rate': coin_win_rate,
+        'coin_break_even': coin_break_even,
         'coin_buy_volume': coin_buy_volume,
         'coin_buy_count': coin_buy_count,
     }
@@ -616,6 +624,11 @@ def format_prometheus_metrics(metrics):
     output.append('# TYPE trading_losing_trades gauge')
     output.append(f'trading_losing_trades {metrics["losing_trades"]}')
 
+    output.append(
+        '# HELP trading_break_even_trades Number of break-even trades (last 24h)')
+    output.append('# TYPE trading_break_even_trades gauge')
+    output.append(f'trading_break_even_trades {metrics["break_even_trades"]}')
+
     output.append('# HELP trading_win_rate Win rate percentage (last 24h)')
     output.append('# TYPE trading_win_rate gauge')
     output.append(f'trading_win_rate {metrics["win_rate"]}')
@@ -846,6 +859,13 @@ def format_prometheus_metrics(metrics):
     output.append('# TYPE trading_coin_win_rate gauge')
     for coin, rate in sorted(metrics['coin_win_rate'].items()):
         output.append(f'trading_coin_win_rate{{coin="{coin}"}} {rate}')
+
+    output.append(
+        '# HELP trading_coin_break_even_trades Break-even trades per coin (last 24h)')
+    output.append('# TYPE trading_coin_break_even_trades gauge')
+    for coin, count in sorted(metrics['coin_break_even'].items()):
+        output.append(
+            f'trading_coin_break_even_trades{{coin="{coin}"}} {count}')
 
     output.append(
         '# HELP trading_coin_buy_volume_eur Buy volume per coin in EUR (last 24h)')

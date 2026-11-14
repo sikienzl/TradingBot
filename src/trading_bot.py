@@ -37,6 +37,8 @@ _TRADE_JOURNAL_FIELDS = [
     'amount_base', 'pnl_base', 'pnl_pct', 'hold_seconds',
     'signal_source', 'signal_confidence', 'recommendation', 'reason', 'dry_run',
     'run_id', 'config_hash', 'mfe_pct', 'mae_pct',
+    'execution_cost_mode', 'entry_cost_mode', 'reference_price', 'fee_base',
+    'slippage_base', 'gross_pnl_base', 'net_pnl_base',
 ]
 
 
@@ -684,6 +686,21 @@ class BotConfig:
         # Seconds between iterations
         self.check_interval = int(os.getenv('CHECK_INTERVAL', str(100)))
         self.dry_run = _env_bool('DRY_RUN', True)
+        self.dry_run_costs_enabled = _env_bool('DRY_RUN_COSTS_ENABLED', False)
+        self.dry_run_fee_rate = 0.002
+        self.dry_run_slippage_rate = 0.001
+        if self.dry_run and self.dry_run_costs_enabled:
+            for name, attr, default in (
+                ('DRY_RUN_FEE_RATE', 'dry_run_fee_rate', '0.002'),
+                ('DRY_RUN_SLIPPAGE_RATE', 'dry_run_slippage_rate', '0.001'),
+            ):
+                try:
+                    value = float(os.getenv(name, default))
+                except ValueError as exc:
+                    raise ValueError(f"{name} must be finite and in [0, 1)") from exc
+                if not math.isfinite(value) or not 0 <= value < 1:
+                    raise ValueError(f"{name} must be finite and in [0, 1)")
+                setattr(self, attr, value)
         self.simulate_data = _env_bool('SIMULATE_DATA', False)
         self.simulation_initial_balance_from_kraken = _env_bool(
             'SIMULATION_INITIAL_BALANCE_FROM_KRAKEN', False)
@@ -1338,6 +1355,7 @@ class CryptoTradingBot:
             'sells': 0,
             'wins': 0,
             'losses': 0,
+            'break_even': 0,
             'realized_pnl_base': 0.0,
             'closed_trades': 0,
             'by_source': defaultdict(lambda: {'buys': 0, 'sells': 0, 'pnl': 0.0}),
@@ -1355,6 +1373,13 @@ class CryptoTradingBot:
             config.dry_run,
             config.simulate_data,
         )
+        if config.dry_run:
+            logger.info(
+                "DRY-RUN execution cost mode=%s fee_rate=%.6f slippage_rate=%.6f",
+                'net_costs' if config.dry_run_costs_enabled else 'gross_legacy',
+                config.dry_run_fee_rate if config.dry_run_costs_enabled else 0.0,
+                config.dry_run_slippage_rate if config.dry_run_costs_enabled else 0.0,
+            )
         self.exchange = self._initialize_exchange()
         self._simulation_cache_iteration: int | None = None
         self._simulation_ohlcv_cache: dict[tuple[int,
@@ -1470,6 +1495,7 @@ class CryptoTradingBot:
                         row.setdefault('config_hash', 'legacy')
                         row.setdefault('mfe_pct', '')
                         row.setdefault('mae_pct', '')
+                        row.setdefault('execution_cost_mode', 'legacy_unknown')
                         writer.writerow(row)
             os.chmod(temporary_path, file_mode)
             os.replace(temporary_path, path)
@@ -1482,6 +1508,9 @@ class CryptoTradingBot:
             **row,
             'run_id': row.get('run_id', self.run_id),
             'config_hash': row.get('config_hash', self.config_hash),
+            'execution_cost_mode': row.get(
+                'execution_cost_mode', 'gross_legacy' if row.get(
+                    'dry_run', self.config.dry_run) else 'live_exchange'),
         }
         if self.config.performance_log_enabled:
             with open(self.config.performance_log_file, 'a', newline='', encoding='utf-8') as f:
@@ -1780,6 +1809,32 @@ class CryptoTradingBot:
             stale_after_hours=self.config.recent_pnl_guard_stale_hours,
         )
 
+    def _log_recent_pnl_guard_status(self, state: dict[str, Any]) -> None:
+        active = bool(state.get('active', False))
+        journal_age = state.get('journal_age_hours')
+        freshness = (
+            'unknown' if journal_age is None
+            else 'stale' if state.get('journal_stale', False)
+            else 'fresh'
+        )
+        log = logger.warning if active else logger.info
+        log(
+            "Recent PnL guard %s: trades=%d, pnl=%.6f %s, pf=%.4f, "
+            "reason=%s, journal_age_hours=%s, journal_stale=%s, journal_freshness=%s, "
+            "stale_after_hours=%.1f, latest_closed_trade=%s",
+            'active' if active else 'inactive',
+            int(state.get('recent_trades', 0)),
+            float(state.get('recent_realized_pnl', 0.0)),
+            self.config.base_currency,
+            float(state.get('recent_profit_factor', 999.0)),
+            str(state.get('reason', 'n/a')),
+            f"{float(journal_age):.1f}" if journal_age is not None else "unknown",
+            bool(state.get('journal_stale', False)),
+            freshness,
+            self.config.recent_pnl_guard_stale_hours,
+            state.get('latest_closed_trade_at') or "unknown",
+        )
+
     def _read_auto_tune_state(self) -> dict:
         path = self.config.auto_tune_state_file
         if not path or not os.path.exists(path):
@@ -2008,6 +2063,7 @@ class CryptoTradingBot:
             'window_rows': 0,
             'recent_buy_count': 0,
             'recent_sell_count': 0,
+            'recent_break_even_count': 0,
             'recent_win_rate_pct': 0.0,
             'recent_avg_pnl_base': 0.0,
             'recent_avg_hold_seconds': 0.0,
@@ -2043,6 +2099,9 @@ class CryptoTradingBot:
                         if not sells.empty:
                             pnl = pd.to_numeric(
                                 sells.get('pnl_base'), errors='coerce').fillna(0.0)
+                            recent_trade_summary['recent_break_even_count'] = int(
+                                (pnl == 0).sum()
+                            )
                             recent_trade_summary['recent_win_rate_pct'] = round(
                                 float((pnl > 0).mean() * 100.0), 2
                             )
@@ -2084,6 +2143,7 @@ class CryptoTradingBot:
                                         'sell_count': len(group),
                                         'pnl_sum': round(float(coin_pnl.sum()), 6),
                                         'avg_pnl': round(float(coin_pnl.mean()), 6),
+                                        'break_even_count': int((coin_pnl == 0).sum()),
                                         'win_rate_pct': round(float((coin_pnl > 0).mean() * 100.0), 2),
                                         'max_hold_exit_ratio': round(
                                             float(
@@ -2124,6 +2184,7 @@ class CryptoTradingBot:
                     'window_rows': 0,
                     'recent_buy_count': 0,
                     'recent_sell_count': 0,
+                    'recent_break_even_count': 0,
                     'recent_win_rate_pct': 0.0,
                     'recent_avg_pnl_base': 0.0,
                     'recent_avg_hold_seconds': 0.0,
@@ -2159,7 +2220,12 @@ class CryptoTradingBot:
                 'sells': int(self.performance['sells']),
                 'wins': int(self.performance['wins']),
                 'losses': int(self.performance['losses']),
+                'break_even': int(self.performance['break_even']),
                 'closed_trades': int(self.performance['closed_trades']),
+                'win_rate_pct': (
+                    self.performance['wins'] / self.performance['closed_trades'] * 100.0
+                    if self.performance['closed_trades'] > 0 else 0.0
+                ),
                 'realized_pnl_base': float(self.performance['realized_pnl_base']),
                 'consecutive_losses': int(self.consecutive_losses),
                 'by_source': by_source,
@@ -2521,7 +2587,23 @@ class CryptoTradingBot:
         mae_pct = (trough_price - buy_price) / buy_price * 100.0
         return mfe_pct, mae_pct
 
-    def _record_close_performance(self, entry_trade: dict, sell_price: float, sell_amount: float):
+    @staticmethod
+    def _entry_cost_basis(entry_trade: dict, buy_price: float, buy_amount_coin: float) -> float:
+        raw_basis = entry_trade.get('amount_base')
+        if raw_basis is None and entry_trade.get('execution_cost_mode') != 'net_costs':
+            logger.warning("Legacy DRY-RUN position has no cost basis; reconstructing from entry price")
+            raw_basis = buy_price * buy_amount_coin
+        try:
+            basis = float(raw_basis)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid entry cost basis") from exc
+        if not math.isfinite(basis) or basis <= 0:
+            raise ValueError("Invalid entry cost basis")
+        return basis
+
+    def _record_close_performance(self, entry_trade: dict, sell_price: float, sell_amount: float,
+                                  *, net_proceeds: float | None = None,
+                                  entry_basis: float | None = None):
         buy_price = float(entry_trade.get('buy_price', 0.0))
         buy_amount_coin = float(entry_trade.get('amount_coin', 0.0))
         if buy_amount_coin <= 0:
@@ -2529,16 +2611,24 @@ class CryptoTradingBot:
         pnl_base = (sell_price - buy_price) * sell_amount
         pnl_pct = ((sell_price - buy_price) / buy_price) * \
             100 if buy_price > 0 else 0.0
+        if net_proceeds is not None:
+            total_basis = entry_basis if entry_basis is not None else self._entry_cost_basis(
+                entry_trade, buy_price, buy_amount_coin)
+            basis = total_basis * min(sell_amount / buy_amount_coin, 1.0)
+            pnl_base = net_proceeds - basis
+            pnl_pct = pnl_base / basis * 100 if basis > 0 else 0.0
         hold_seconds = (
             datetime.now() - entry_trade.get('timestamp', datetime.now())).total_seconds()
 
         self.performance['sells'] += 1
         self.performance['closed_trades'] += 1
         self.performance['realized_pnl_base'] += pnl_base
-        if pnl_base >= 0:
+        if pnl_base > 0:
             self.performance['wins'] += 1
-        else:
+        elif pnl_base < 0:
             self.performance['losses'] += 1
+        else:
+            self.performance['break_even'] += 1
 
         source = entry_trade.get('signal_source', 'rules')
         self.performance['by_source'][source]['sells'] += 1
@@ -2681,7 +2771,9 @@ class CryptoTradingBot:
             self.performance['realized_pnl_base'] / closed) if closed > 0 else 0.0
         logger.info(
             f"📊 Performance: Buys={self.performance['buys']} | Sells={self.performance['sells']} | "
-            f"Closed={closed} | WinRate={win_rate:.1f}% | "
+            f"Closed={closed} | Wins={self.performance['wins']} | "
+            f"Losses={self.performance['losses']} | "
+            f"BreakEven={self.performance['break_even']} | WinRate={win_rate:.1f}% | "
             f"RealizedPnL={self.performance['realized_pnl_base']:.2f} {self.config.base_currency} | "
             f"AvgPnL/Trade={avg_pnl:.4f} {self.config.base_currency}")
 
@@ -4224,10 +4316,48 @@ class CryptoTradingBot:
         Uses market orders for simplicity; limit orders would be preferable in a real bot.
         """
         if self.config.dry_run:
+            costs_enabled = self.config.dry_run_costs_enabled
+            tracked_entry = self.portfolio.open_trades.get(coin, {})
+            net_tracked = (
+                action == 'sell' and isinstance(tracked_entry, dict)
+                and tracked_entry.get('execution_cost_mode') == 'net_costs'
+            )
+            if (costs_enabled or net_tracked) and (
+                action not in ('buy', 'sell')
+                or not math.isfinite(price) or price <= 0
+                or not math.isfinite(amount_in_base_currency)
+                or amount_in_base_currency <= 0
+            ):
+                logger.warning("Invalid DRY-RUN trade request for %s", coin)
+                return False
             amount_coin = amount_in_base_currency / price
+            if costs_enabled and action == 'buy':
+                fill_price = price * (1.0 + self.config.dry_run_slippage_rate)
+                amount_coin = amount_in_base_currency / (
+                    fill_price * (1.0 + self.config.dry_run_fee_rate))
+            else:
+                fill_price = price * (
+                    1.0 - self.config.dry_run_slippage_rate
+                    if costs_enabled else 1.0)
+            if costs_enabled and (
+                not math.isfinite(fill_price) or fill_price <= 0
+                or not math.isfinite(amount_coin) or amount_coin <= 0
+            ):
+                logger.warning("DRY-RUN trade calculation invalid for %s", coin)
+                return False
             logger.info(
-                f"💰 DRY-RUN: Would {action.upper()} {amount_coin:.4f} {coin} at {price:.4f} {self.config.base_currency} (total: {amount_in_base_currency:.2f} {self.config.base_currency})")
+                "💰 DRY-RUN: %s %.8f %s reference=%.8f fill=%.8f %s "
+                "requested_base=%.8f cost_mode=%s",
+                action.upper(), amount_coin, coin, price, fill_price,
+                self.config.base_currency, amount_in_base_currency,
+                'net_costs' if costs_enabled else 'gross_legacy')
             if action == "buy":
+                if costs_enabled and (
+                    coin in self.portfolio.open_trades
+                    or self.portfolio.holdings.get(coin, 0.0) > 1e-12
+                ):
+                    logger.warning("DRY-RUN buy skipped for existing %s position", coin)
+                    return False
                 if self.portfolio.cash < amount_in_base_currency:
                     logger.warning(
                         f"Insufficient cash for DRY-RUN buy of {coin}: {self.portfolio.cash:.2f} < {amount_in_base_currency:.2f} {self.config.base_currency}")
@@ -4237,20 +4367,23 @@ class CryptoTradingBot:
                     coin, 0.0) + amount_coin
                 self.portfolio.add_trade(
                     coin,
-                    price,
+                    fill_price,
                     amount_coin,
                     amount_in_base_currency,
                     signal_source=signal_source,
                     signal_confidence=signal_confidence,
                     recommendation=recommendation,
                 )
+                if costs_enabled:
+                    self.portfolio.open_trades[coin]['execution_cost_mode'] = 'net_costs'
+                    self.portfolio.open_trades[coin]['entry_reference_price'] = price
                 self.performance['buys'] += 1
                 self.performance['by_source'][signal_source]['buys'] += 1
                 self._register_buy_timestamp()
                 self._append_trade_journal({
                     'coin': coin,
                     'action': 'buy',
-                    'price': price,
+                    'price': fill_price,
                     'amount_coin': amount_coin,
                     'amount_base': amount_in_base_currency,
                     'signal_source': signal_source,
@@ -4258,6 +4391,10 @@ class CryptoTradingBot:
                     'recommendation': recommendation,
                     'reason': reason,
                     'dry_run': True,
+                    'execution_cost_mode': 'net_costs' if costs_enabled else 'gross_legacy',
+                    'reference_price': price,
+                    'fee_base': amount_coin * fill_price * self.config.dry_run_fee_rate if costs_enabled else 0.0,
+                    'slippage_base': amount_coin * (fill_price - price) if costs_enabled else 0.0,
                 })
                 # Persist portfolio state after successful dry-run buy
                 if self.config.dry_run:
@@ -4265,18 +4402,42 @@ class CryptoTradingBot:
             elif action == "sell":
                 held = self.portfolio.holdings.get(coin, 0.0)
                 sell_amount = min(amount_coin, held)
+                entry_trade = tracked_entry
+                if costs_enabled and (not isinstance(entry_trade, dict) or not entry_trade):
+                    logger.warning("DRY-RUN sell skipped for %s: no tracked entry cost basis", coin)
+                    return False
+                entry_cost_mode = entry_trade.get('execution_cost_mode', 'gross_legacy')
+                entry_basis = None
+                if costs_enabled or net_tracked:
+                    try:
+                        entry_quantity = float(entry_trade.get('amount_coin'))
+                        entry_price = float(entry_trade.get('buy_price'))
+                        if (not math.isfinite(entry_quantity) or entry_quantity <= 0
+                                or not math.isfinite(entry_price) or entry_price <= 0
+                                or not math.isfinite(held) or held <= 0):
+                            raise ValueError("Invalid entry price, quantity or holdings")
+                        entry_basis = self._entry_cost_basis(entry_trade, entry_price, entry_quantity)
+                    except (TypeError, ValueError, OverflowError) as exc:
+                        logger.warning("DRY-RUN sell skipped for %s: invalid entry cost basis or position: %s", coin, exc)
+                        return False
+                    sell_amount = min(sell_amount, entry_quantity)
                 if sell_amount <= 0:
                     logger.warning(
                         f"DRY-RUN sell skipped, no holdings for {coin}.")
                     return False
-                self.portfolio.cash += sell_amount * price
+                gross_proceeds = sell_amount * fill_price
+                fee_base = gross_proceeds * self.config.dry_run_fee_rate if costs_enabled else 0.0
+                proceeds = gross_proceeds - fee_base
+                if (costs_enabled or net_tracked) and (not math.isfinite(proceeds) or proceeds <= 0):
+                    logger.warning("DRY-RUN proceeds invalid for %s", coin)
+                    return False
+                self.portfolio.cash += proceeds
                 remaining = held - sell_amount
                 if remaining > 1e-12:
                     self.portfolio.holdings[coin] = remaining
                 elif coin in self.portfolio.holdings:
                     del self.portfolio.holdings[coin]
 
-                entry_trade = self.portfolio.open_trades.get(coin, {})
                 original_amount_coin = float(
                     entry_trade.get('amount_coin', sell_amount))
                 remaining_open_amount = max(
@@ -4285,15 +4446,33 @@ class CryptoTradingBot:
                     remaining_open_amount / original_amount_coin
                     if original_amount_coin > 0 else 0.0
                 )
-                pnl_base, pnl_pct, hold_seconds = self._record_close_performance(
-                    entry_trade, price, sell_amount)
+                if costs_enabled or entry_cost_mode == 'net_costs':
+                    pnl_base, pnl_pct, hold_seconds = self._record_close_performance(
+                        entry_trade, fill_price, sell_amount, net_proceeds=proceeds,
+                        entry_basis=entry_basis)
+                else:
+                    pnl_base, pnl_pct, hold_seconds = self._record_close_performance(
+                        entry_trade, fill_price, sell_amount)
+                gross_pnl_base = ''
+                net_pnl_base = ''
+                if entry_cost_mode == 'net_costs':
+                    try:
+                        entry_reference = float(entry_trade.get('entry_reference_price'))
+                    except (TypeError, ValueError):
+                        entry_reference = 0.0
+                    if (math.isfinite(entry_reference) and entry_reference > 0
+                            and math.isfinite(price) and price > 0):
+                        gross_pnl = sell_amount * (price - entry_reference)
+                        if math.isfinite(gross_pnl) and math.isfinite(pnl_base):
+                            gross_pnl_base = gross_pnl
+                            net_pnl_base = pnl_base
                 mfe_pct, mae_pct = self._trade_excursion_metrics(entry_trade)
                 self._append_trade_journal({
                     'coin': coin,
                     'action': 'sell',
-                    'price': price,
+                    'price': fill_price,
                     'amount_coin': sell_amount,
-                    'amount_base': sell_amount * price,
+                    'amount_base': proceeds,
                     'pnl_base': pnl_base,
                     'pnl_pct': pnl_pct,
                     'hold_seconds': hold_seconds,
@@ -4304,12 +4483,22 @@ class CryptoTradingBot:
                     'recommendation': entry_trade.get('recommendation', ''),
                     'reason': reason,
                     'dry_run': True,
+                    'execution_cost_mode': 'net_costs' if costs_enabled else 'gross_legacy',
+                    'entry_cost_mode': entry_cost_mode,
+                    'reference_price': price,
+                    'fee_base': fee_base,
+                    'slippage_base': sell_amount * (price - fill_price) if costs_enabled else 0.0,
+                    'gross_pnl_base': gross_pnl_base,
+                    'net_pnl_base': net_pnl_base,
                 })
                 self._register_sell_timestamp(coin)
                 if remaining_open_amount > 1e-12 and coin in self.portfolio.open_trades:
+                    if costs_enabled or entry_cost_mode == 'net_costs':
+                        remaining_basis = entry_basis * remaining_ratio
+                    else:
+                        remaining_basis = float(entry_trade.get('amount_base', 0.0)) * remaining_ratio
                     self.portfolio.open_trades[coin]['amount_coin'] = remaining_open_amount
-                    self.portfolio.open_trades[coin]['amount_base'] = float(
-                        entry_trade.get('amount_base', 0.0)) * remaining_ratio
+                    self.portfolio.open_trades[coin]['amount_base'] = remaining_basis
                 else:
                     self.portfolio.remove_trade(coin)
                 # Persist portfolio state after successful dry-run sell
@@ -4476,7 +4665,18 @@ class CryptoTradingBot:
             max_hold_seconds = self.config.coin_max_hold_seconds.get(
                 coin, self.config.max_hold_seconds)
             # Fetch ATR for dynamic stops
+            atr_started = time.monotonic()
             atr = self._get_atr_for_coin(coin, period=14)
+            atr_seconds = time.monotonic() - atr_started
+            observed_hold_seconds = (datetime.now() - trade_info['timestamp']).total_seconds()
+            if max_hold_seconds > 0 and observed_hold_seconds >= max_hold_seconds:
+                logger.warning(
+                    "Position hold limit reached: coin=%s observed_hold_seconds=%.1f "
+                    "limit_seconds=%d overdue_seconds=%.1f atr_fetch_seconds=%.1f; "
+                    "exit is checked during the trading loop, not at an exact deadline",
+                    coin, observed_hold_seconds, max_hold_seconds,
+                    observed_hold_seconds - max_hold_seconds, atr_seconds,
+                )
             if np.isnan(atr) or atr == 0:
                 atr = buy_price * 0.02  # Fallback: 2% of price
             stop_loss_level = self._effective_stop_loss_level(
@@ -4694,6 +4894,7 @@ class CryptoTradingBot:
         try:
             while True:
                 self.iteration += 1
+                iteration_started = time.monotonic()
                 logger.info(
                     f"\n🕒 Iteration {self.iteration} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
@@ -4741,23 +4942,7 @@ class CryptoTradingBot:
                 recent_pnl_guard = self._recent_pnl_guard_state()
                 recent_pnl_guard_active = bool(
                     recent_pnl_guard.get('active', False))
-                if recent_pnl_guard_active:
-                    journal_age = recent_pnl_guard.get('journal_age_hours')
-                    logger.warning(
-                        "Recent PnL guard active: trades=%d, pnl=%.6f %s, "
-                        "pf=%.4f, reason=%s, journal_age_hours=%s, "
-                        "journal_stale=%s, latest_closed_trade=%s",
-                        int(recent_pnl_guard.get('recent_trades', 0)),
-                        float(recent_pnl_guard.get(
-                            'recent_realized_pnl', 0.0)),
-                        self.config.base_currency,
-                        float(recent_pnl_guard.get(
-                            'recent_profit_factor', 999.0)),
-                        str(recent_pnl_guard.get('reason', 'n/a')),
-                        f"{float(journal_age):.1f}" if journal_age is not None else "unknown",
-                        bool(recent_pnl_guard.get('journal_stale', False)),
-                        recent_pnl_guard.get('latest_closed_trade_at') or "unknown",
-                    )
+                self._log_recent_pnl_guard_status(recent_pnl_guard)
 
                 def _entry_pair_allowed(
                     coin: str,
@@ -5158,7 +5343,10 @@ class CryptoTradingBot:
                 # Step 6: Monitor open trades (stop-loss, take-profit, time, signals)
                 if self.portfolio.open_trades:
                     logger.info(
-                        f"💼 Monitoring {len(self.portfolio.open_trades)} open trades...")
+                        "💼 Monitoring %d open trades after %.1fs of iteration work...",
+                        len(self.portfolio.open_trades),
+                        time.monotonic() - iteration_started,
+                    )
                     self._manage_open_trades(
                         current_market_data, market_analysis)
 

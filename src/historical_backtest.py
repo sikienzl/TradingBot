@@ -395,6 +395,7 @@ class HistoricalRuleBacktester:
         sells = [trade for trade in trades if trade["action"] == "sell"]
         wins = [trade["pnl_base"] for trade in sells if trade["pnl_base"] > 0]
         losses = [-trade["pnl_base"] for trade in sells if trade["pnl_base"] < 0]
+        break_even_trades = sum(trade["pnl_base"] == 0 for trade in sells)
         gross_loss = sum(losses)
         peak = equity[0]
         max_drawdown = 0.0
@@ -408,6 +409,7 @@ class HistoricalRuleBacktester:
             "pnl": ending_cash - self.settings.initial_cash,
             "return_pct": (ending_cash / self.settings.initial_cash - 1) * 100,
             "closed_trades": len(sells),
+            "break_even_trades": break_even_trades,
             "win_rate_pct": len(wins) / len(sells) * 100 if sells else 0.0,
             "profit_factor": sum(wins) / gross_loss if gross_loss else math.inf,
             "max_drawdown_pct": max_drawdown * 100,
@@ -421,6 +423,7 @@ def _print_result(label: str, result: dict, base_currency: str) -> None:
     factor_text = "inf" if math.isinf(profit_factor) else f"{profit_factor:.3f}"
     print(
         f"{label}: closed={result['closed_trades']} "
+        f"break_even={result['break_even_trades']} "
         f"win_rate={result['win_rate_pct']:.1f}% "
         f"PnL={result['pnl']:+.4f} {base_currency} "
         f"return={result['return_pct']:+.2f}% "

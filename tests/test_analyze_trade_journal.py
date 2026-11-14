@@ -2,9 +2,11 @@ import pandas as pd
 
 from src.analyze_trade_journal import (
     optimize_confidence_threshold,
-    report_journal_freshness,
+    report_daily,
     report_exit_excursions,
+    report_journal_freshness,
     report_run_config_breakdown,
+    summarize,
 )
 
 
@@ -74,3 +76,30 @@ def test_run_and_exit_reports_segment_journal_rows(capsys):
     assert "run_id=run-a config_hash=abcdef123456" in output
     assert "MAX-HOLD-TIME" in output
     assert "avg_mfe_pct" in output
+
+
+def test_reports_count_break_evens_without_inflating_win_rate(capsys):
+    sells = pd.DataFrame(
+        [
+            {
+                "action": "sell", "timestamp": pd.Timestamp("2026-11-14"),
+                "pnl_base": 1.0, "hold_seconds": 0.0,
+            },
+            {
+                "action": "sell", "timestamp": pd.Timestamp("2026-11-14"),
+                "pnl_base": -1.0, "hold_seconds": 0.0,
+            },
+            {
+                "action": "sell", "timestamp": pd.Timestamp("2026-11-14"),
+                "pnl_base": 0.0, "hold_seconds": 0.0,
+            },
+        ]
+    )
+
+    summarize(sells.copy(), "EUR")
+    report_daily(sells, "EUR")
+
+    output = capsys.readouterr().out
+    assert "Wins / Losses / BE:   1 / 1 / 1" in output
+    assert "Win rate:            33.33%" in output
+    assert "break_even" in output
