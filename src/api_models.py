@@ -59,6 +59,7 @@ class ScorecardResult(BaseModel):
 
 class ScorecardMetrics(BaseModel):
     closed_trades: int
+    break_even_trades: int
     realized_pnl: float
     avg_pnl: float
     win_rate: float
@@ -68,11 +69,14 @@ class ScorecardMetrics(BaseModel):
     max_drawdown_base: float
     max_drawdown_pct: float
     recent_closed_trades: int
+    recent_break_even_trades: int
     recent_realized_pnl: float
     recent_win_rate: float
     catboost_closed_trades: int
+    catboost_break_even_trades: int
     catboost_realized_pnl: float
     rules_closed_trades: int
+    rules_break_even_trades: int
     rules_realized_pnl: float
     catboost_vs_rules_pnl_delta: float
 

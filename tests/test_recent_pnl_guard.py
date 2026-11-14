@@ -1,6 +1,9 @@
+import logging
+from types import SimpleNamespace
+
 import pandas as pd
 
-from src.trading_bot import _compute_recent_pnl_guard_state
+from src.trading_bot import CryptoTradingBot, _compute_recent_pnl_guard_state
 
 
 class TestRecentPnlGuard:
@@ -43,3 +46,23 @@ class TestRecentPnlGuard:
 
         assert state["active"] is False
         assert state["reason"] == "healthy_recent_window"
+
+
+def test_guard_status_logs_stale_and_unknown_freshness(caplog):
+    bot = CryptoTradingBot.__new__(CryptoTradingBot)
+    bot.config = SimpleNamespace(base_currency="EUR", recent_pnl_guard_stale_hours=24)
+    with caplog.at_level(logging.INFO):
+        bot._log_recent_pnl_guard_status({
+            "active": True, "journal_age_hours": 48, "journal_stale": True,
+            "latest_closed_trade_at": "2026-11-12T07:00:00Z",
+            "reason": "negative_recent_pnl_and_low_pf",
+        })
+        bot._log_recent_pnl_guard_status({
+            "active": False, "reason": "journal_missing",
+        })
+    assert "journal_age_hours=48.0" in caplog.text
+    assert "journal_stale=True, journal_freshness=stale" in caplog.text
+    assert "latest_closed_trade=2026-11-12T07:00:00Z" in caplog.text
+    assert "guard inactive" in caplog.text
+    assert "reason=journal_missing" in caplog.text
+    assert "journal_freshness=unknown" in caplog.text

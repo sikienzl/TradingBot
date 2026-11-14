@@ -153,6 +153,62 @@ def test_loss_streak_sets_pause(monkeypatch):
     assert "BUY pause" in reason
 
 
+def test_close_performance_counts_break_even_and_reports_positive_only_win_rate(
+    monkeypatch, caplog, tmp_path
+):
+    bot = _make_test_bot(monkeypatch)
+    entry_trade = {
+        "buy_price": 100.0,
+        "amount_coin": 1.0,
+        "timestamp": datetime.now(),
+        "signal_source": "rules",
+    }
+
+    bot._record_close_performance(entry_trade, sell_price=101.0, sell_amount=1.0)
+    bot._record_close_performance(entry_trade, sell_price=99.0, sell_amount=1.0)
+    bot.consecutive_losses = 1
+    bot._record_close_performance(entry_trade, sell_price=100.0, sell_amount=1.0)
+
+    journal_file = tmp_path / "trade_journal.csv"
+    pd.DataFrame(
+        [
+            {
+                "action": "sell", "coin": "ETH", "pnl_base": 1.0,
+                "hold_seconds": 1.0, "reason": "test",
+            },
+            {
+                "action": "sell", "coin": "ETH", "pnl_base": -1.0,
+                "hold_seconds": 1.0, "reason": "test",
+            },
+            {
+                "action": "sell", "coin": "ETH", "pnl_base": 0.0,
+                "hold_seconds": 1.0, "reason": "test",
+            },
+        ]
+    ).to_csv(journal_file, index=False)
+    bot.config.performance_log_enabled = True
+    bot.config.performance_log_file = str(journal_file)
+
+    assert bot.performance["wins"] == 1
+    assert bot.performance["losses"] == 1
+    assert bot.performance["break_even"] == 1
+    assert bot.performance["closed_trades"] == 3
+    assert bot.consecutive_losses == 0
+
+    snapshot_performance = bot._ai_copilot_snapshot()["performance"]
+    assert snapshot_performance["break_even"] == 1
+    assert snapshot_performance["win_rate_pct"] == (1 / 3) * 100.0
+    snapshot = bot._ai_copilot_snapshot()
+    assert snapshot["recent_trade_summary"]["recent_break_even_count"] == 1
+    assert snapshot["recent_trade_summary"]["coin_sell_summary"]["ETH"][
+        "break_even_count"
+    ] == 1
+
+    caplog.set_level(logging.INFO)
+    bot._log_performance_report()
+    assert "Wins=1 | Losses=1 | BreakEven=1 | WinRate=33.3%" in caplog.text
+
+
 def test_tabular_gate_allows_same_direction_confirmation(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.tabular_source_gate_enabled = True
@@ -1352,7 +1408,7 @@ def test_downtrend_reversal_weak_signal_exit_closes_trade_early(monkeypatch):
     assert "ETH" not in bot.portfolio.open_trades
 
 
-def test_coin_specific_max_hold_seconds_override(monkeypatch):
+def test_coin_specific_max_hold_seconds_override(monkeypatch, caplog):
     bot = _make_test_bot(monkeypatch)
     bot.config.partial_take_profit_enabled = False
     bot.config.trailing_stop_enabled = False
@@ -1387,12 +1443,17 @@ def test_coin_specific_max_hold_seconds_override(monkeypatch):
 
     monkeypatch.setattr(bot, "_execute_trade", _fake_execute_trade)
 
-    bot._manage_open_trades({"SUI": {"price": 100.0}})
+    with caplog.at_level("WARNING"):
+        bot._manage_open_trades({"SUI": {"price": 100.0}})
 
     assert executed["coin"] == "SUI"
     assert executed["action"] == "sell"
     assert "MAX-HOLD-TIME reached (500s >= 420s)" in executed["reason"]
     assert "SUI" not in bot.portfolio.open_trades
+    assert "coin=SUI" in caplog.text
+    assert "limit_seconds=420" in caplog.text
+    assert "overdue_seconds=" in caplog.text
+    assert "atr_fetch_seconds=" in caplog.text
 
 
 def test_failed_exit_sell_retains_open_position(monkeypatch):

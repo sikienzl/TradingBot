@@ -365,6 +365,22 @@ class TestComputeMetrics:
         assert result.catboost_closed_trades == 0
         assert result.rules_closed_trades == 0
 
+    def test_compute_metrics_counts_break_even_separately(self):
+        df = pd.DataFrame([
+            {"action": "sell", "pnl_base": 1.0, "signal_source": "catboost"},
+            {"action": "sell", "pnl_base": -1.0, "signal_source": "rules"},
+            {"action": "sell", "pnl_base": 0.0, "signal_source": "rules"},
+        ])
+
+        result = _compute_metrics(df, starting_capital=20.0)
+
+        assert result.closed_trades == 3
+        assert result.win_rate == (1.0 / 3.0) * 100.0
+        assert result.break_even_trades == 1
+        assert result.recent_break_even_trades == 1
+        assert result.catboost_break_even_trades == 0
+        assert result.rules_break_even_trades == 1
+
 
 class TestScorecardResultDataclass:
     """Tests for ScorecardResult dataclass."""

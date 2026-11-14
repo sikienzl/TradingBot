@@ -96,6 +96,7 @@ def _review_trades(rows: list[dict[str, Any]], cutoff_utc: datetime) -> dict[str
         "closed_trades": closed,
         "wins": wins,
         "losses": losses,
+        "break_even": closed - wins - losses,
         "win_rate_pct": round(win_rate, 4),
         "realized_pnl": round(realized, 8),
         "avg_pnl_per_trade": round(avg_pnl, 8),
@@ -270,6 +271,9 @@ def _build_text(report: dict[str, Any]) -> str:
         "[Trades]",
         f"buys: {t['buys']}",
         f"closed_trades: {t['closed_trades']}",
+        f"wins: {t['wins']}",
+        f"losses: {t['losses']}",
+        f"break_even: {t['break_even']}",
         f"win_rate_pct: {t['win_rate_pct']}",
         f"realized_pnl: {t['realized_pnl']}",
         f"avg_pnl_per_trade: {t['avg_pnl_per_trade']}",
@@ -478,6 +482,7 @@ def _build_html(report: dict[str, Any]) -> str:
                     <tr><th>Closed trades</th><td>{trades['closed_trades']}</td></tr>
                     <tr><th>Wins</th><td>{trades['wins']}</td></tr>
                     <tr><th>Losses</th><td>{trades['losses']}</td></tr>
+                    <tr><th>Break-even</th><td>{trades['break_even']}</td></tr>
                     <tr><th>Win rate</th><td>{_fmt_number(trades['win_rate_pct'], 2)}%</td></tr>
                     <tr><th>Realized PnL</th><td>{_fmt_number(trades['realized_pnl'], 8)}</td></tr>
                     <tr><th>Avg. PnL per trade</th><td>{_fmt_number(trades['avg_pnl_per_trade'], 8)}</td></tr>

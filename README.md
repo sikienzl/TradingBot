@@ -214,6 +214,41 @@ Trade-journal confidence-threshold analysis selects a candidate on the first
 The report also warns when journal events are older than 24 hours, since stale
 trade metrics should not be mistaken for current bot activity.
 
+Dry-run execution costs are opt-in. Set `DRY_RUN_COSTS_ENABLED=true` to apply
+`DRY_RUN_FEE_RATE=0.002` and `DRY_RUN_SLIPPAGE_RATE=0.001` per side; both rates
+are fractions, not percentages. Slippage is a combined execution-cost
+allowance, not a separately measured bid-ask spread. Buy fees are included in
+the requested budget; sell proceeds are reduced by the sell fee. Simulated
+cash, position basis and realized PnL include these assumptions, including
+partial exits. Live order execution is unaffected. Existing positions retain
+their recorded entry basis: enabling costs cannot reconstruct historical
+entry fees, so only later execution costs are applied. Use a separate new
+simulation and journal when comparing gross legacy and cost-aware results.
+
+The CSV journal labels the execution mode and records reference prices,
+fees and slippage for new trades. It also records gross reference-price PnL
+and net PnL separately when both entry and exit references are available.
+Legacy records are not retroactively made
+net of costs; the existing PostgreSQL trade schema does not record these
+additional cost fields. Cost assumptions are estimates, not actual exchange
+fills or fees.
+
+Win rate counts strictly positive sell-event PnL divided by all sell events.
+Zero-PnL events are reported separately as break-even; partial sells each count
+as an event rather than a fully closed position. These metrics describe the
+journal's recorded PnL, which can contain historical gross results. A win
+rate by itself does not establish profitability.
+
+The recent PnL guard reports its state, latest close and journal freshness
+even when inactive. Staleness is diagnostic and does not disable the guard.
+`MAX_HOLD_SECONDS` is checked during the trading loop, not at a precise
+deadline: market data, sequential analysis, ATR retrieval, retries and the
+configured sleep all affect the delay. The bot logs iteration work before
+position monitoring and, when a limit is reached, the effective per-coin
+limit, overdue time and ATR-fetch duration. Missing market data or a failed
+sell can delay an exit further. These diagnostics do not change exit priority
+or relax any guard.
+
 Each process gets a generated `run_id` (override with `TRADING_RUN_ID`) and a
 SHA-256 fingerprint of non-secret bot settings. These are stored on CSV and
 Postgres trade events to keep runs/configurations separate; credentials and
