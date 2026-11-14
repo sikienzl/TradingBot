@@ -183,6 +183,32 @@ Override the assumptions with `--backtest-fee-rate` and
 `--backtest-slippage`. These results are only as representative as the input
 data and strategy; they are not a live-performance forecast.
 
+For an offline replay of the bot's shared rule-based recommendations against
+historical OHLCV candles, collect data and run the chronological training /
+holdout report:
+
+```sh
+python3 -m src.get_data
+python3 -m src.historical_backtest --file full_crypto_data.csv \
+  --initial-cash 19.50 --base-currency EUR
+```
+
+The collector currently retrieves up to 720 hourly candles per active EUR
+market. The replay uses the same rule recommendation helper as live analysis,
+executes on the next candle's open, and models fees, slippage, strict BUY
+entries, the recent-PnL guard, fixed-percentage stop-loss/take-profit, and
+maximum hold time. It resets the portfolio at the chronological holdout
+boundary while retaining earlier candles for indicator warm-up; the holdout
+PnL guard is seeded from training closes, not training positions. The report
+shows candle freshness and warns for data older than 24 hours. Time exits are
+resolved only at candle boundaries, so hourly bars cannot model the bot's
+120-second default hold time precisely. It does not
+model journal-driven coin exclusions, fallback/force-fill entries, optional
+ML models, other runtime guards, ATR/trailing/partial exits, portfolio scaling
+tiers, or exchange-specific fills. Small samples are
+descriptive only; this replay is not a profitability forecast or a live-trading
+recommendation.
+
 Trade-journal confidence-threshold analysis selects a candidate on the first
 70% of chronological trades and reports its result on the final 30% holdout.
 The report also warns when journal events are older than 24 hours, since stale

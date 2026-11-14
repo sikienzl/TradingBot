@@ -17,6 +17,8 @@ prepared; this file intentionally remains under **Unreleased** until then.
 - Break journal results down by run/configuration and exit reason, including
   observed excursions; flag coin/source samples below 20 trades as descriptive
   only.
+- Add an offline historical OHLCV replay using shared rule recommendations,
+  next-candle execution, transaction costs, and a chronological holdout.
 
 ### Changed
 
@@ -33,5 +35,7 @@ prepared; this file intentionally remains under **Unreleased** until then.
 
 - No entry/exit thresholds or PnL-guard behavior were changed by these
   diagnostics and analysis updates.
+- The historical replay is offline-only and does not change live trading
+  behavior; its holdout results are not a profitability guarantee.
 - Run in dry-run/simulation first and compare results by `run_id` and
   `config_hash`; these reports do not guarantee profitability.

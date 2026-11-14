@@ -192,6 +192,33 @@ After an upgrade, keep `DRY_RUN=true` and verify:
 The stale-journal diagnostic does not disable or bypass the recent-PnL guard.
 These metrics support review; they do not establish profitability.
 
+### Historical rule replay
+
+The offline replay evaluates the same shared rules-based recommendation logic
+used by the live analyzer. On a development machine, collect historical public
+OHLCV data and run the chronological training / holdout report:
+
+```sh
+python3 -m src.get_data
+python3 -m src.historical_backtest --file full_crypto_data.csv \
+  --initial-cash 19.50 --base-currency EUR
+```
+
+The collector retrieves up to 720 hourly candles per active EUR market. The
+replay fills at the next candle's open and includes fee/slippage assumptions,
+the recent-PnL guard, strict BUY entries, fixed-percentage stop-loss/take-profit,
+and maximum hold time. It resets the portfolio at the holdout boundary and
+uses earlier candles only to warm up indicators; the holdout PnL guard is
+seeded from training closes, not training positions. It reports candle
+freshness and warns when data is older than 24 hours. Time exits are resolved
+only at candle boundaries, so hourly bars cannot model the bot's 120-second
+default hold time precisely. Journal-driven coin exclusions,
+fallback/force-fill entries, optional ML models, other runtime guards,
+portfolio scaling tiers, ATR/trailing/partial exits, and exchange-specific
+fills are not simulated.
+Review the holdout and trade count; this is an offline diagnostic, not a
+profitability forecast. It does not connect to the exchange or place orders.
+
 ### Useful systemd Commands
 
 ```bash

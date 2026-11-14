@@ -23,6 +23,11 @@ import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
+if __package__:
+    from src.strategy_rules import rule_recommendation as get_rule_recommendation
+else:
+    from strategy_rules import rule_recommendation as get_rule_recommendation
+
 logger = logging.getLogger(__name__)
 
 
@@ -3712,34 +3717,15 @@ class CryptoTradingBot:
             3).iloc[-1]) if len(ohlcv_df) >= 4 else 0.0
 
         # Simple strategy based on indicators
-        recommendation = "HOLD"
-        score = 50  # Neutral score
+        recommendation, score = get_rule_recommendation(
+            rsi, sma_short, sma_long, current_price
+        )
         signal_source = 'rules'
         signal_confidence = None
         tab_buy_proba = None
         tab_hold_proba = None
         tab_sell_proba = None
         macd_hist = None
-
-        if not np.isnan(rsi) and not np.isnan(sma_short) and not np.isnan(sma_long):
-            if rsi < 30 and sma_short > sma_long and current_price > sma_short:
-                recommendation = "STRONG BUY"
-                score = 90
-            elif rsi < 40 and sma_short > sma_long:
-                recommendation = "BUY"
-                score = 75
-            elif rsi > 70 and sma_short < sma_long and current_price < sma_short:
-                recommendation = "SELL"
-                score = 10
-            elif rsi > 60 and sma_short < sma_long:
-                recommendation = "WEAK SELL"
-                score = 25
-            elif sma_short > sma_long:
-                recommendation = "HOLD (Up-Trend)"
-                score = 60
-            elif sma_short < sma_long:
-                recommendation = "HOLD (Down-Trend)"
-                score = 40
 
         rule_recommendation = recommendation
         rule_score = score
