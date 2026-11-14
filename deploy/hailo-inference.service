@@ -1,0 +1,23 @@
+[Unit]
+Description=Trading Bot Hailo-8 Inference Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=siegfried
+Group=siegfried
+WorkingDirectory=/opt/trading_hailo
+EnvironmentFile=/etc/trading-hailo.env
+Environment=PYTHONPATH=/opt/trading_hailo:/usr/lib/python3/dist-packages
+ExecStart=/opt/trading_hailo/.venv/bin/uvicorn src.hailo_service:app --host 192.168.62.75 --port 8001
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/trading_hailo/model
+
+[Install]
+WantedBy=multi-user.target

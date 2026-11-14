@@ -1,7 +1,10 @@
+import math
 from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from src.hailo_contract import HAILO_FEATURES, HAILO_LABEL_MAP
 
 
 class ScorecardVerdict(StrEnum):
@@ -145,3 +148,38 @@ class CatBoostPredictionResponse(BaseModel):
     proba: dict[str, float] = Field(default_factory=dict)
     threshold_used: float = Field(ge=0.0, le=1.0)
     margin: float = Field(ge=0.0)
+
+
+class HailoPredictionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    features: dict[str, float] = Field(min_length=1)
+    confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_features(self) -> "HailoPredictionRequest":
+        unknown = set(self.features).difference(HAILO_FEATURES)
+        if unknown:
+            raise ValueError(f"Unknown Hailo feature(s): {', '.join(sorted(unknown))}")
+        if not all(math.isfinite(value) for value in self.features.values()):
+            raise ValueError("Hailo feature values must be finite numbers")
+        return self
+
+
+class HailoPredictionResponse(BaseModel):
+    model_id: str
+    decision: TradingDecision
+    confidence: float = Field(ge=0.0, le=1.0)
+    proba: dict[str, float]
+    threshold_used: float = Field(ge=0.0, le=1.0)
+    margin: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_probabilities(self) -> "HailoPredictionResponse":
+        if set(self.proba) != set(HAILO_LABEL_MAP):
+            raise ValueError("Hailo response must include all three class probabilities")
+        if not all(math.isfinite(value) and 0 <= value <= 1 for value in self.proba.values()):
+            raise ValueError("Hailo probabilities must be finite values between zero and one")
+        if not math.isclose(sum(self.proba.values()), 1.0, abs_tol=1e-5):
+            raise ValueError("Hailo class probabilities must sum to one")
+        return self

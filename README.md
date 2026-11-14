@@ -232,6 +232,34 @@ CatBoost inference is available through `CatBoostTradingPredictor` in
 `USE_TABULAR_MODEL=true`; the module does not currently provide a standalone
 command-line entry point.
 
+### Optional Hailo-8 inference
+
+The bot can use a separate Hailo-8 inference service without moving trading or
+exchange credentials off the bot host. In the current cluster, the bot remains
+on `192.168.62.74` and the Hailo service is intended for `192.168.62.75`.
+CatBoost remains the default backend; no Hailo model is enabled by default.
+
+The exporter trains a small tabular MLP and creates ONNX plus a strict
+feature/normalization metadata contract:
+
+```sh
+pip install '.[hailo-export]'
+python3 -m src.train_hailo_model --data-path training_data.csv
+```
+
+This only creates an ONNX model, not a Hailo HEF. Hailo Dataflow Compiler (DFC)
+is not included on the Hailo runtime host; compile and validate the ONNX model
+in a compatible DFC environment before configuring the inference service. The
+existing image-classification HEFs on the cluster are not trading models.
+Hailo must be explicitly enabled on the bot with
+`USE_TABULAR_MODEL=true`, `TABULAR_MODEL_BACKEND=hailo`, `HAILO_SERVICE_URL`,
+and a strong `HAILO_API_TOKEN`. A service
+failure blocks entries for the affected coin; it does not fall back to
+rules-only buying. Keep the token and service on a trusted, firewalled network:
+the example HTTP endpoint does not encrypt traffic. The Hailo option is
+preparation only and is not a profitability claim or live-trading
+recommendation.
+
 ## Configuration
 
 All parameters are set via `.env` (see `.env.example` for the full list). Key variables:
@@ -260,8 +288,12 @@ All parameters are set via `.env` (see `.env.example` for the full list). Key va
 | `OHLCV_TIMEFRAME` | `1h` | Candle interval |
 | `TICKER_BATCH_SIZE` | `80` | Symbols per `fetch_tickers` request (smaller is more stable) |
 | `TICKER_FETCH_RETRIES` | `2` | Retries per ticker batch on exchange/network errors |
-| `USE_TABULAR_MODEL` | `true` | Enable CatBoost signal filter |
-| `TABULAR_MIN_CONFIDENCE` | `0.45` | Minimum CatBoost confidence required for non-HOLD signal |
+| `USE_TABULAR_MODEL` | `true` | Enable tabular-model signal filter |
+| `TABULAR_MODEL_BACKEND` | `catboost` | Tabular backend: local `catboost` or remote `hailo` |
+| `HAILO_SERVICE_URL` | `http://192.168.62.75:8001` | Remote Hailo inference endpoint |
+| `HAILO_API_TOKEN` | unset | Required bearer token when Hailo is enabled |
+| `HAILO_TIMEOUT_SECONDS` | `3` | Maximum remote inference request time |
+| `TABULAR_MIN_CONFIDENCE` | `0.45` | Minimum tabular-model confidence required for non-HOLD signal |
 | `UPTREND_ENTRY_MAX_RSI_BY_COIN` | `XDC:78,TRX:74` | Coin-specific RSI override for uptrend entry gating |
 | `UPTREND_ENTRY_MIN_BUY_PROBA_BY_COIN` | `TRX:0.150` | Coin-specific CatBoost buy-probability override for uptrend entry gating |
 | `UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN` | `ONDO:0.445` | Coin-specific CatBoost sell-probability override for uptrend entry gating |

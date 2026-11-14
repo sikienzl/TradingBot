@@ -27,6 +27,9 @@ data/research_signal_raw_test.json
 # Model artifacts
 catboost_info/
 old_data/
+model/hailo_trading_model/
+*.hef
+*.onnx
 
 # Results & checkpoints
 results/

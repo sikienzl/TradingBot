@@ -1,0 +1,28 @@
+HAILO_FEATURES = (
+    "rsi",
+    "macd",
+    "macd_signal",
+    "macd_hist",
+    "sma_50",
+    "sma_200",
+    "ema_20",
+    "ema_50",
+    "ema_200",
+    "atr_14",
+    "stoch_k",
+    "stoch_d",
+    "cci_20",
+    "obv",
+    "bb_upper",
+    "bb_middle",
+    "bb_lower",
+    "volume",
+    "ret_1",
+    "ret_3",
+    "ret_6",
+    "vol_6",
+)
+
+HAILO_LABEL_MAP = {"verkaufen": 0, "halten": 1, "kaufen": 2}
+HAILO_INPUT_NAME = "features"
+HAILO_OUTPUT_NAME = "logits"

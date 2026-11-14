@@ -60,6 +60,11 @@ train = [
     "accelerate>=0.30",
     "bitsandbytes>=0.43",
 ]
+# pip install crypto-trading-bot[hailo-export] – train and export the optional Hailo MLP
+hailo-export = [
+    "torch>=2.2",
+    "onnx>=1.16",
+]
 # pip install crypto-trading-bot[dev]
 dev = [
     "pytest>=8.0",
@@ -103,6 +108,7 @@ include = [
     "LICENSE",
     "requirements.txt",
     "requirements-pi.txt",
+    "requirements-hailo-server.txt",
     ".env.example",
     ".env.live.example",
     ".env.simulation.example",

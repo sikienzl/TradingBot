@@ -841,8 +841,18 @@ class BotConfig:
             'MODEL_PATH', './model/fine_tuned_trading_model')
         # Minimum confidence for ML signals (0.0 - 1.0)
         self.ml_min_confidence = float(os.getenv('ML_MIN_CONFIDENCE', str(0.5)))
-        # Optional CatBoost model for fast tabular signals
+        # Optional local CatBoost or remote Hailo inference for tabular signals
         self.use_tabular_model = _env_bool('USE_TABULAR_MODEL', False)
+        self.tabular_model_backend = os.getenv(
+            'TABULAR_MODEL_BACKEND', 'catboost').strip().lower()
+        if self.tabular_model_backend not in {'catboost', 'hailo'}:
+            raise ValueError(
+                "TABULAR_MODEL_BACKEND must be 'catboost' or 'hailo'")
+        self.hailo_service_url = os.getenv(
+            'HAILO_SERVICE_URL', 'http://192.168.62.75:8001').strip()
+        self.hailo_api_token = os.getenv('HAILO_API_TOKEN', '').strip()
+        self.hailo_timeout_seconds = float(
+            os.getenv('HAILO_TIMEOUT_SECONDS', str(3.0)))
         self.tabular_model_path = os.getenv(
             'TABULAR_MODEL_PATH', './model/catboost_trading_model')
         self.tabular_research_signal_path = os.getenv(
@@ -859,7 +869,7 @@ class BotConfig:
             os.getenv('TABULAR_OVERRIDE_MIN_CONFIDENCE', str(0.60)))
         self.tabular_override_margin = float(
             os.getenv('TABULAR_OVERRIDE_MARGIN', str(0.15)))
-        # Optional safety filter: block new entries when CatBoost signals a strong sell
+        # Optional safety filter: block new entries when the tabular model signals a strong sell
         self.tabular_block_on_sell = _env_bool('TABULAR_BLOCK_ON_SELL', False)
         self.tabular_sell_block_min_proba = float(
             os.getenv('TABULAR_SELL_BLOCK_MIN_PROBA', str(0.50)))
@@ -1334,29 +1344,44 @@ class CryptoTradingBot:
 
         self.tabular_predictor = None
         if self.config.use_tabular_model:
-            try:
-                from src.predict_catboost import CatBoostTradingPredictor
-                self.tabular_predictor = CatBoostTradingPredictor(
-                    self.config.tabular_model_path,
-                    research_signal_path=self.config.tabular_research_signal_path,
+            if self.config.tabular_model_backend == 'hailo':
+                from src.predict_hailo_remote import HailoRemotePredictor
+                self.tabular_predictor = HailoRemotePredictor(
+                    service_url=self.config.hailo_service_url,
+                    api_token=self.config.hailo_api_token,
+                    timeout_seconds=self.config.hailo_timeout_seconds,
                 )
                 logger.info(
-                    f"📊 CatBoost model loaded from '{self.config.tabular_model_path}'.")
-            except (
-                ImportError,
-                OSError,
-                RuntimeError,
-                TypeError,
-                ValueError,
-                KeyError,
-            ) as e:
-                logger.warning(
-                    f"CatBoost model could not be loaded: {e}.")
+                    "Remote Hailo inference configured at %s",
+                    self.config.hailo_service_url,
+                )
+            else:
+                try:
+                    from src.predict_catboost import CatBoostTradingPredictor
+                    self.tabular_predictor = CatBoostTradingPredictor(
+                        self.config.tabular_model_path,
+                        research_signal_path=self.config.tabular_research_signal_path,
+                    )
+                    logger.info(
+                        f"📊 CatBoost model loaded from '{self.config.tabular_model_path}'.")
+                except (
+                    ImportError,
+                    OSError,
+                    RuntimeError,
+                    TypeError,
+                    ValueError,
+                    KeyError,
+                ) as e:
+                    logger.warning(
+                        f"CatBoost model could not be loaded: {e}.")
 
         if self.config.performance_log_enabled:
             self._init_trade_journal()
 
-        if self.config.use_tabular_model:
+        if (
+            self.config.use_tabular_model
+            and self.config.tabular_model_backend == 'catboost'
+        ):
             self._maybe_auto_tune_tabular_confidence()
 
     def _init_trade_journal(self):
@@ -3602,7 +3627,7 @@ class CryptoTradingBot:
         return recommendation == 'HOLD (Up-Trend)' and signal_source == 'rules'
 
     def _passes_downtrend_reversal_filter(self, coin_data: dict) -> tuple[bool, str]:
-        """Allows down-trend fallback entries only for oversold coins with improving CatBoost odds."""
+        """Allows down-trend fallback entries only for oversold coins with improving tabular odds."""
         recommendation = str(coin_data.get('recommendation', ''))
         if recommendation != 'HOLD (Down-Trend)':
             return True, 'not_downtrend'
@@ -3873,12 +3898,13 @@ class CryptoTradingBot:
                 tab_sell_proba = float(tab_proba.get('verkaufen', 0.0))
                 tab_hold_proba = float(tab_proba.get('halten', 0.0))
                 tab_buy_proba = float(tab_proba.get('kaufen', 0.0))
+                model_name = self.config.tabular_model_backend.upper()
                 logger.info(
-                    f"  📊 CatBoost for {coin}: {tab_decision.upper()} "
+                    f"  📊 {model_name} for {coin}: {tab_decision.upper()} "
                     f"(Confidence: {tab_confidence*100:.0f}%, Proba: {tab_proba})")
 
                 # Safety filter: block new entries even on rules-BUYs
-                # if CatBoost sees a high-probability sell signal.
+                # if the tabular model sees a high-probability sell signal.
                 if (
                     self.config.tabular_block_on_sell
                     and tab_sell_proba >= self.config.tabular_sell_block_min_proba
@@ -3886,10 +3912,10 @@ class CryptoTradingBot:
                 ):
                     recommendation = 'WEAK SELL'
                     score = min(score, 25)
-                    signal_source = 'catboost'
+                    signal_source = self.config.tabular_model_backend
                     signal_confidence = tab_sell_proba
                     logger.info(
-                        f"  🛡️ CatBoost sell-filter active for {coin}: "
+                        f"  🛡️ {model_name} sell-filter active for {coin}: "
                         f"P(sell)={tab_sell_proba*100:.0f}% >= "
                         f"{self.config.tabular_sell_block_min_proba*100:.0f}%")
 
@@ -3902,13 +3928,13 @@ class CryptoTradingBot:
                 required_confidence = self.config.tabular_buy_min_confidence if tab_decision == 'kaufen' else self.config.tabular_min_confidence
                 if tab_confidence >= required_confidence and not should_apply:
                     logger.info(
-                        f"  🚧 CatBoost gated for {coin}: {gate_reason} "
+                        f"  🚧 {model_name} gated for {coin}: {gate_reason} "
                         f"(rule={rule_recommendation}, rule_score={rule_score}, "
                         f"tab_decision={tab_decision}, tab_confidence={tab_confidence*100:.0f}%)"
                     )
 
                 if should_apply:
-                    signal_source = 'catboost'
+                    signal_source = self.config.tabular_model_backend
                     signal_confidence = tab_confidence
                     if tab_decision == 'kaufen':
                         if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'HOLD (Down-Trend)']:
@@ -3923,8 +3949,22 @@ class CryptoTradingBot:
                         elif recommendation in ['SELL', 'WEAK SELL']:
                             score = max(score - int(tab_confidence * 8), 3)
             except (IndexError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
-                logger.warning(
-                    f"CatBoost prediction for {coin} failed: {e}")
+                if self.config.tabular_model_backend == 'hailo':
+                    logger.error(
+                        "Hailo prediction for %s failed; suppressing this coin's entries: %s",
+                        coin,
+                        e,
+                    )
+                    recommendation = 'HOLD'
+                    score = 0
+                    signal_source = 'hailo_unavailable'
+                    signal_confidence = 0.0
+                    tab_sell_proba = 0.0
+                    tab_hold_proba = 0.0
+                    tab_buy_proba = 0.0
+                else:
+                    logger.warning(
+                        f"CatBoost prediction for {coin} failed: {e}")
 
         return {
             'rsi': rsi,

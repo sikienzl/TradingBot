@@ -84,6 +84,88 @@ Reports are written to:
 - results/scorecards/
 - results/scorecards/latest_scorecard.txt
 
+## Hailo-8 Remote Inference (Optional)
+
+The trading bot stays on `192.168.62.74`; the Hailo-8 service is intended to
+run separately on `192.168.62.75`. This setup does not move exchange
+credentials to the accelerator host. CatBoost remains the default backend.
+Do not enable Hailo until a trading-specific HEF has been compiled and
+validated: the Hailo runtime host currently has HailoRT but not the DFC
+compiler, and the available image-model HEFs are incompatible.
+
+### Prepare and compile the model
+
+On a development machine with training dependencies and historical
+`training_data.csv`:
+
+```sh
+pip install '.[hailo-export]'
+python3 -m src.train_hailo_model --data-path training_data.csv \
+  --output-dir ./model/hailo_trading_model
+```
+
+The exporter writes `trading_mlp.onnx` and `metadata.json`. It does not create
+a HEF. Compile the ONNX file using a DFC release compatible with the Hailo-8
+runtime on `.75`, and place the resulting `trading_mlp.hef` alongside its
+metadata on `.75`. Verify the exact tensor names, shape, normalization
+contract, and output logits before starting the service. No live trading or
+profitability should be inferred from export-time validation metrics.
+
+### Install the service on `.75`
+
+Install the repository files under `/opt/trading_hailo`, keeping the model
+artifacts readable by the `siegfried` service account. Use the host-installed
+HailoRT Python bindings and NumPy through a system-site-packages virtual
+environment:
+
+```sh
+cd /opt/trading_hailo
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install -r requirements-hailo-server.txt
+```
+
+Create `/etc/trading-hailo.env` with mode `0600` and a long random token:
+
+```sh
+HAILO_HEF_PATH=/opt/trading_hailo/model/trading_mlp.hef
+HAILO_METADATA_PATH=/opt/trading_hailo/model/metadata.json
+HAILO_API_TOKEN=<long-random-secret>
+```
+
+Install and start the supplied service unit only after the HEF and metadata
+exist:
+
+```sh
+sudo cp deploy/hailo-inference.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now hailo-inference.service
+sudo systemctl status hailo-inference.service
+```
+
+The unit binds to `192.168.62.75:8001`; restrict inbound TCP/8001 to the bot
+host (`192.168.62.74`) with the host/network firewall. The bearer token is sent
+over HTTP and is not encrypted, so do not expose this service outside a trusted
+private network. The unauthenticated health route should also remain network
+restricted. Check service logs with `sudo journalctl -u hailo-inference.service`.
+
+### Enable on the bot host only after validation
+
+In `/opt/trading_2/.env` on `.74`, set:
+
+```sh
+USE_TABULAR_MODEL=true
+TABULAR_MODEL_BACKEND=hailo
+HAILO_SERVICE_URL=http://192.168.62.75:8001
+HAILO_API_TOKEN=<same-long-random-secret>
+HAILO_TIMEOUT_SECONDS=3
+```
+
+Keep the existing risk guards enabled and first run in simulation/dry-run.
+Remote inference errors fail closed for entries on the affected coin and are
+logged; they do not switch to rules-only buying. Confidence threshold
+auto-tuning remains CatBoost-only. The Hailo service and bot are not deployed
+or enabled by this repository change.
+
 ## 4b. Weekly Auto-Tuning Cycle
 
 The repository includes a weekly tuning cycle that:
