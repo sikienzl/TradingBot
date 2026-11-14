@@ -44,6 +44,7 @@ results/
 
 # Bot state (runtime-generated)
 auto_tune_state*.json
+.portfolio_state.json
 
 # Testing
 .pytest_cache/

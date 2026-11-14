@@ -379,9 +379,12 @@ class Portfolio:
         self.last_update: datetime | None = None
         self.initial_portfolio_value: float | None = None
         self.state_file: str = ".portfolio_state.json"  # Persistency file for dry-run
+        self.strict_persistence = False
+        self.simulation_iteration = 0
 
     def save_state(self, filepath: str | None = None) -> bool:
         """Save portfolio state to JSON file (for dry-run persistency)."""
+        temporary_path = None
         try:
             state_file = filepath or self.state_file
             state = {
@@ -390,16 +393,35 @@ class Portfolio:
                 'open_trades': self.open_trades,
                 'base_currency': self.base_currency,
                 'initial_portfolio_value': self.initial_portfolio_value,
+                'simulation_iteration': self.simulation_iteration,
                 'timestamp': datetime.now().isoformat(),
             }
-            with open(state_file, 'w') as f:
+            with tempfile.NamedTemporaryFile(
+                mode='w', encoding='utf-8', dir=os.path.dirname(os.path.abspath(state_file)),
+                prefix='.portfolio-state-', delete=False,
+            ) as f:
+                temporary_path = f.name
                 json.dump(state, f, indent=2, default=lambda o: o.isoformat(
                 ) if isinstance(o, datetime) else str(o))
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_path, state_file)
+            temporary_path = None
+            directory_fd = os.open(os.path.dirname(os.path.abspath(state_file)), os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
             logger.debug(f"Portfolio state saved to {state_file}")
             return True
         except (OSError, TypeError, ValueError) as e:
             logger.error(f"Failed to save portfolio state: {e}")
+            if self.strict_persistence:
+                raise RuntimeError("Cannot persist simulation portfolio; stopping") from e
             return False
+        finally:
+            if temporary_path is not None and os.path.exists(temporary_path):
+                os.unlink(temporary_path)
 
     def load_state(self, filepath: str | None = None) -> bool:
         """Load portfolio state from JSON file (for dry-run persistency)."""
@@ -410,6 +432,17 @@ class Portfolio:
                 return False
             with open(state_file, 'r') as f:
                 state = json.load(f)
+            if self.strict_persistence and (
+                not isinstance(state, dict)
+                or state.get('base_currency') != self.base_currency
+                or not isinstance(state.get('holdings'), dict)
+                or not isinstance(state.get('open_trades'), dict)
+                or 'cash' not in state
+                or not isinstance(state.get('simulation_iteration', 0), int)
+                or state.get('simulation_iteration', 0) < 0
+            ):
+                raise ValueError("Invalid or incompatible simulation portfolio")
+            self.simulation_iteration = state.get('simulation_iteration', 0)
             self.cash = float(state.get('cash', 0.0))
             self.holdings = {k: float(v)
                              for k, v in state.get('holdings', {}).items()}
@@ -417,6 +450,11 @@ class Portfolio:
             initial_value = state.get('initial_portfolio_value')
             self.initial_portfolio_value = float(
                 initial_value) if initial_value not in (None, '') else None
+            if self.strict_persistence and (
+                not math.isfinite(self.cash) or self.cash < 0
+                or any(not math.isfinite(v) or v < 0 for v in self.holdings.values())
+            ):
+                raise ValueError("Invalid simulation portfolio balances")
             for trade in self.open_trades.values():
                 ts = trade.get('timestamp')
                 if isinstance(ts, str):
@@ -440,6 +478,8 @@ class Portfolio:
             ValueError,
         ) as e:
             logger.error(f"Failed to load portfolio state: {e}")
+            if self.strict_persistence:
+                raise RuntimeError("Cannot restore simulation portfolio; stopping") from e
             return False
 
     def get_value(self, prices: dict[str, float]) -> float:
@@ -645,6 +685,8 @@ class BotConfig:
         self.check_interval = int(os.getenv('CHECK_INTERVAL', str(100)))
         self.dry_run = _env_bool('DRY_RUN', True)
         self.simulate_data = _env_bool('SIMULATE_DATA', False)
+        self.simulation_initial_balance_from_kraken = _env_bool(
+            'SIMULATION_INITIAL_BALANCE_FROM_KRAKEN', False)
         self.simulation_seed = int(os.getenv('SIMULATION_SEED', str(42)))
         self.simulation_regime = _env_str(
             'SIMULATION_REGIME', 'neutral').lower()
@@ -1276,10 +1318,19 @@ class CryptoTradingBot:
 
     def __init__(self, config: BotConfig):
         self.config = config
+        if config.simulation_initial_balance_from_kraken and (
+            not config.dry_run or not config.simulate_data
+            or config.exchange_name != 'kraken' or config.base_currency != 'EUR'
+        ):
+            raise ValueError(
+                "Kraken simulation initialization requires DRY_RUN, SIMULATE_DATA, "
+                "Kraken and EUR"
+            )
         self.run_id = os.getenv('TRADING_RUN_ID', '').strip() or uuid.uuid4().hex
         self.config_hash = _config_fingerprint(config)
         self._journal_fields = list(_TRADE_JOURNAL_FIELDS)
         self.portfolio = Portfolio(config.base_currency)
+        self.portfolio.strict_persistence = config.simulation_initial_balance_from_kraken
         self.analytics_writer = PostgresAnalyticsWriter(config)
         self.iteration = 0
         self.performance = {
@@ -2727,6 +2778,43 @@ class CryptoTradingBot:
                     continue
                 holdings[currency] = float(amount)
             return cash, holdings
+
+        if self.config.simulation_initial_balance_from_kraken:
+            if self.portfolio.last_update is not None:
+                return
+            if os.path.lexists(self.portfolio.state_file):
+                if not self.portfolio.load_state():
+                    raise RuntimeError("Cannot restore existing simulation portfolio")
+                self.iteration = self.portfolio.simulation_iteration + 1
+                logger.warning(
+                    "Simulation restarted: restored the last saved portfolio; "
+                    "Kraken balance was not fetched again."
+                )
+            else:
+                if not self.config.api_key or not self.config.api_secret:
+                    raise RuntimeError("Kraken read-only API credentials are required for initial balance")
+                exchange = ccxt.kraken({
+                    'apiKey': self.config.api_key,
+                    'secret': self.config.api_secret,
+                    'enableRateLimit': True,
+                    'timeout': self.config.exchange_timeout_ms,
+                })
+                try:
+                    balance = exchange.fetch_balance()
+                    free = balance['free']
+                    value = next((free[key] for key in ('EUR', 'ZEUR', 'XEUR')
+                                  if key in free and free[key] is not None), None)
+                    cash = float(value)
+                except (ccxt.BaseError, KeyError, TypeError, ValueError):
+                    raise RuntimeError("Could not obtain free EUR balance from Kraken") from None
+                if not math.isfinite(cash) or cash < 0:
+                    raise ValueError("Kraken returned an invalid free EUR balance")
+                self.portfolio.cash = cash
+                self.portfolio.initial_portfolio_value = cash
+                self.portfolio.save_state()
+                logger.info("Simulation initialized once from Kraken free EUR balance: %.2f EUR", cash)
+            self.portfolio.last_update = datetime.now()
+            return
 
         if self.config.simulate_data or self.exchange is None:
             needs_initialization = (
@@ -4582,9 +4670,8 @@ class CryptoTradingBot:
         logger.info(
             "🚀 Crypto trading bot started - analysing markets for trading opportunities.")
         safe_config = vars(self.config).copy()
-        safe_config['api_key'] = _mask_secret(safe_config.get('api_key', ''))
-        safe_config['api_secret'] = _mask_secret(
-            safe_config.get('api_secret', ''))
+        safe_config['api_key'] = '[REDACTED]' if safe_config.get('api_key') else ''
+        safe_config['api_secret'] = '[REDACTED]' if safe_config.get('api_secret') else ''
         safe_config['ai_copilot_api_key'] = _mask_secret(
             safe_config.get('ai_copilot_api_key', ''))
         safe_config['hailo_api_token'] = (
@@ -4595,8 +4682,14 @@ class CryptoTradingBot:
             logger.warning(
                 "DRY-RUN MODE IS ACTIVE! No real trades will be executed.")
         if self.config.simulate_data:
-            logger.warning(
-                "SIMULATION MODE IS ACTIVE! No real exchange data will be fetched or trades executed.")
+            if self.config.simulation_initial_balance_from_kraken:
+                logger.warning(
+                    "SIMULATION MODE IS ACTIVE! Market data and trades are simulated; "
+                    "Kraken may be queried once for the initial free EUR balance."
+                )
+            else:
+                logger.warning(
+                    "SIMULATION MODE IS ACTIVE! No real exchange data will be fetched or trades executed.")
 
         try:
             while True:
@@ -4606,6 +4699,8 @@ class CryptoTradingBot:
 
                 # Step 1: Update balance and portfolio
                 self._update_portfolio_balance()
+                if self.config.simulation_initial_balance_from_kraken:
+                    self.portfolio.simulation_iteration = self.iteration
 
                 # Step 2: Fetch market data (prices, volumes)
                 current_market_data = self._get_market_data()
@@ -5083,6 +5178,8 @@ class CryptoTradingBot:
                     f"  - Open trades details: {self.portfolio.open_trades}")
                 self._write_analytics_snapshot(
                     portfolio_value, market_analysis)
+                if self.config.simulation_initial_balance_from_kraken:
+                    self.portfolio.save_state()
 
                 if self.iteration % max(1, self.config.performance_report_every) == 0:
                     self._log_performance_report()

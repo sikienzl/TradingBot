@@ -109,8 +109,10 @@ described below:
   through SSH to `.75`; `trading-hailo-shadow-dryrun` uses host networking and
   writes its own state and journal under `~siegfried/trading-hailo-shadow/data`.
   It runs with `DRY_RUN=true`, `SIMULATE_DATA=true` and `SIMULATION_REGIME=mixed`.
-  Its simulated starting capital is currently 1,000 EUR, not the real account
-  balance. It does not use exchange credentials.
+  The current shadow portfolio was initialized once from Kraken's available
+  EUR balance; subsequent runs restore its saved simulated state without
+  Kraken credentials. Other deployments retain the 1,000 EUR default unless
+  explicitly configured otherwise.
 - Both nodes need systemd user lingering. The separate cluster Ansible
   repository configures this; otherwise an administrator can enable it for
   the service user with `sudo loginctl enable-linger siegfried`.
@@ -212,6 +214,40 @@ Hailo predictions, and the absence of prediction errors. The service and
 tunnel are user units; `systemctl --user status` checks each. To stop only the
 shadow bot, use `rtk proxy docker stop trading-hailo-shadow-dryrun`. Do not
 enable live trading on the strength of the simulation.
+
+#### Optional Kraken EUR starting balance
+
+For a new simulation, set `SIMULATION_INITIAL_BALANCE_FROM_KRAKEN=true` in
+the private shadow environment and supply `KRAKEN_API_KEY` and
+`KRAKEN_API_SECRET` there. Prefer a dedicated Kraken API key with permission
+to query funds only, without trading or withdrawal permissions. The option
+requires Kraken, EUR, `DRY_RUN=true` and `SIMULATE_DATA=true`; otherwise the
+bot refuses to start. Docker administrators can inspect these credentials.
+
+When `/data/.portfolio_state.json` is absent, the bot fetches the available
+EUR balance once, excludes crypto holdings, and persists the resulting
+simulation portfolio before trading. The exchange is not queried on
+subsequent starts: the saved portfolio is restored and a restart is logged.
+Market data and trades remain simulated. Kraken errors, invalid balances,
+unreadable state or persistence failures stop the bot instead of falling back
+to 1,000 EUR. An existing state, including the old 1,000 EUR simulation, is
+always restored rather than replaced. To start a *new* Kraken-funded
+simulation, first stop only the shadow container and securely back up its
+state and journal, then move the old state out of `/data` before starting.
+Never delete or replace a state file accidentally.
+After initialization, recreate the container with a private environment file
+that omits both Kraken credentials; they are not needed while the saved state
+is present. Remove the temporary credential-bearing environment file securely.
+If the state is lost, the bot cannot initialize again without credentials.
+
+Keep `/data/.portfolio_state.json` on persistent storage and back it up
+outside the cluster. It contains sensitive account-derived information and
+must not be committed. Atomic writes protect the last complete state from
+partial writes, but cannot protect against failed storage or a lost backup.
+The restart message identifies a bot restart, not specifically a host reboot
+or power outage. The simulation iteration is saved along with the portfolio;
+performance counters are not restored, and the trade journal is a separate
+file.
 
 ### Prepare and compile the model
 
