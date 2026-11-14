@@ -1,6 +1,7 @@
 import csv
 import hashlib
 import importlib
+import io
 import json
 import logging
 import math
@@ -384,20 +385,24 @@ class Portfolio:
         self.strict_persistence = False
         self.simulation_iteration = 0
 
-    def save_state(self, filepath: str | None = None) -> bool:
+    def _state(self) -> dict:
+        return {
+            'cash': self.cash,
+            'holdings': self.holdings,
+            'open_trades': self.open_trades,
+            'base_currency': self.base_currency,
+            'initial_portfolio_value': self.initial_portfolio_value,
+            'simulation_iteration': self.simulation_iteration,
+            'timestamp': datetime.now().isoformat(),
+        }
+
+    def save_state(self, filepath: str | None = None, *, state: dict | None = None) -> bool:
         """Save portfolio state to JSON file (for dry-run persistency)."""
         temporary_path = None
         try:
             state_file = filepath or self.state_file
-            state = {
-                'cash': self.cash,
-                'holdings': self.holdings,
-                'open_trades': self.open_trades,
-                'base_currency': self.base_currency,
-                'initial_portfolio_value': self.initial_portfolio_value,
-                'simulation_iteration': self.simulation_iteration,
-                'timestamp': datetime.now().isoformat(),
-            }
+            if state is None:
+                state = self._state()
             with tempfile.NamedTemporaryFile(
                 mode='w', encoding='utf-8', dir=os.path.dirname(os.path.abspath(state_file)),
                 prefix='.portfolio-state-', delete=False,
@@ -1351,6 +1356,7 @@ class CryptoTradingBot:
         self.run_id = os.getenv('TRADING_RUN_ID', '').strip() or uuid.uuid4().hex
         self.config_hash = _config_fingerprint(config)
         self._journal_fields = list(_TRADE_JOURNAL_FIELDS)
+        self._paper_trade_failed = False
         self.portfolio = Portfolio(config.base_currency)
         self.portfolio.strict_persistence = config.simulation_initial_balance_from_kraken
         self.analytics_writer = PostgresAnalyticsWriter(config)
@@ -1456,6 +1462,10 @@ class CryptoTradingBot:
                     logger.warning(
                         f"CatBoost model could not be loaded: {e}.")
 
+        if self._public_paper_mode():
+            if not self.config.performance_log_enabled:
+                raise RuntimeError("Public paper trading requires an enabled trade journal")
+            self._recover_paper_trade()
         if self.config.performance_log_enabled:
             self._init_trade_journal()
 
@@ -1508,6 +1518,146 @@ class CryptoTradingBot:
             if os.path.exists(temporary_path):
                 os.unlink(temporary_path)
 
+    def _public_paper_mode(self) -> bool:
+        return (self.config.dry_run
+                and getattr(self.config, 'simulation_initial_balance_from_kraken', False)
+                and not getattr(self.config, 'simulate_data', True))
+
+    @staticmethod
+    def _sync_directory(path: str) -> None:
+        descriptor = os.open(os.path.dirname(os.path.abspath(path)), os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def _recover_paper_trade(self) -> None:
+        """Complete a durable intent before permitting another paper trade."""
+        intent_path = self.portfolio.state_file + '.trade-transaction.json'
+        if not os.path.lexists(intent_path):
+            return
+        try:
+            with open(intent_path, encoding='utf-8') as f:
+                envelope = json.load(f)
+            payload = envelope['payload']
+            encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'),
+                                 ensure_ascii=True).encode('utf-8')
+            if (envelope['sha256'] != hashlib.sha256(encoded).hexdigest()
+                    or payload['version'] != 1
+                    or payload['journal'] != os.path.abspath(self.config.performance_log_file)
+                    or payload['state_file'] != os.path.abspath(self.portfolio.state_file)
+                    or not isinstance(payload['offset'], int) or payload['offset'] < 0
+                    or not isinstance(payload['row'], str)
+                    or not isinstance(payload['state'], dict)
+                    or payload['state'].get('base_currency') != self.portfolio.base_currency):
+                raise ValueError("Invalid paper trade intent")
+            row = payload['row'].encode('utf-8')
+            if not row:
+                raise ValueError("Empty paper trade row")
+            with open(payload['journal'], 'r+b') as journal:
+                prefix = journal.read(payload['offset'])
+                if (len(prefix) != payload['offset']
+                        or hashlib.sha256(prefix).hexdigest() != payload['prefix_sha256']):
+                    raise ValueError("Paper trade journal prefix changed")
+                tail = journal.read()
+                if not row.startswith(tail):
+                    raise ValueError("Paper trade journal has an unexpected tail")
+                if tail != row:
+                    journal.seek(payload['offset'])
+                    journal.write(row)
+                    journal.truncate()
+                journal.flush()
+                os.fsync(journal.fileno())
+            self.portfolio.save_state(state=payload['state'])
+            os.unlink(intent_path)
+            self._sync_directory(intent_path)
+            logger.info("Completed public paper trade transaction")
+        except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("Cannot recover paper trade transaction; stopping") from exc
+
+    def _commit_paper_trade(self, row: dict) -> None:
+        intent_path = self.portfolio.state_file + '.trade-transaction.json'
+        temporary_path = None
+        self._paper_trade_failed = True
+        if os.path.lexists(intent_path):
+            raise RuntimeError("Pending paper trade transaction; restart to recover")
+        row = self._journal_row(row)
+        buffer = io.StringIO(newline='')
+        csv.DictWriter(buffer, fieldnames=self._journal_fields,
+                       extrasaction='ignore').writerow(row)
+        try:
+            journal_path = os.path.abspath(self.config.performance_log_file)
+            with open(journal_path, 'rb') as journal:
+                prefix = journal.read()
+                os.fsync(journal.fileno())
+            if not prefix.endswith(b'\n'):
+                raise ValueError("Paper trade journal has an incomplete last row")
+            self._sync_directory(journal_path)
+            payload = {
+                'version': 1,
+                'journal': journal_path,
+                'state_file': os.path.abspath(self.portfolio.state_file),
+                'offset': len(prefix),
+                'prefix_sha256': hashlib.sha256(prefix).hexdigest(),
+                'row': buffer.getvalue(),
+                'state': self.portfolio._state(),
+            }
+            # Normalize datetimes exactly as the portfolio writer does.
+            payload = json.loads(json.dumps(payload, default=lambda o: o.isoformat()
+                                            if isinstance(o, datetime) else str(o)))
+            encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'),
+                                 ensure_ascii=True).encode('utf-8')
+            with tempfile.NamedTemporaryFile(
+                mode='w', encoding='utf-8',
+                dir=os.path.dirname(os.path.abspath(intent_path)),
+                prefix='.paper-trade-', delete=False,
+            ) as f:
+                temporary_path = f.name
+                json.dump({'payload': payload, 'sha256': hashlib.sha256(encoded).hexdigest()}, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_path, intent_path)
+            temporary_path = None
+            self._sync_directory(intent_path)
+            self._recover_paper_trade()
+            self._paper_trade_failed = False
+        except (OSError, TypeError, ValueError) as exc:
+            raise RuntimeError("Cannot commit paper trade transaction; stopping") from exc
+        finally:
+            if temporary_path is not None and os.path.exists(temporary_path):
+                os.unlink(temporary_path)
+        self.analytics_writer.write_trade(row, self.config.base_currency)
+
+    def _journal_row(self, row: dict) -> dict:
+        row = {
+            **row,
+            'run_id': row.get('run_id', self.run_id),
+            'config_hash': row.get('config_hash', self.config_hash),
+            'execution_cost_mode': row.get(
+                'execution_cost_mode', 'gross_legacy' if row.get(
+                    'dry_run', self.config.dry_run) else 'live_exchange'),
+        }
+        return {
+            **row,
+            'timestamp': row.get('timestamp', datetime.now(UTC).isoformat()),
+            'iteration': row.get('iteration', self.iteration),
+            'coin': row.get('coin', ''),
+            'action': row.get('action', ''),
+            'price': row.get('price', 0.0),
+            'amount_coin': row.get('amount_coin', 0.0),
+            'amount_base': row.get('amount_base', 0.0),
+            'pnl_base': row.get('pnl_base', 0.0),
+            'pnl_pct': row.get('pnl_pct', 0.0),
+            'hold_seconds': row.get('hold_seconds', 0.0),
+            'signal_source': row.get('signal_source', ''),
+            'signal_confidence': row.get('signal_confidence', ''),
+            'recommendation': row.get('recommendation', ''),
+            'reason': row.get('reason', ''),
+            'dry_run': row.get('dry_run', self.config.dry_run),
+            'mfe_pct': row.get('mfe_pct', ''),
+            'mae_pct': row.get('mae_pct', ''),
+        }
+
     def _append_trade_journal(self, row: dict):
         row = {
             **row,
@@ -1522,26 +1672,7 @@ class CryptoTradingBot:
                 writer = csv.DictWriter(
                     f, fieldnames=self._journal_fields,
                     extrasaction='ignore')
-                writer.writerow({
-                    **row,
-                    'timestamp': row.get('timestamp', datetime.now(UTC).isoformat()),
-                    'iteration': row.get('iteration', self.iteration),
-                    'coin': row.get('coin', ''),
-                    'action': row.get('action', ''),
-                    'price': row.get('price', 0.0),
-                    'amount_coin': row.get('amount_coin', 0.0),
-                    'amount_base': row.get('amount_base', 0.0),
-                    'pnl_base': row.get('pnl_base', 0.0),
-                    'pnl_pct': row.get('pnl_pct', 0.0),
-                    'hold_seconds': row.get('hold_seconds', 0.0),
-                    'signal_source': row.get('signal_source', ''),
-                    'signal_confidence': row.get('signal_confidence', ''),
-                    'recommendation': row.get('recommendation', ''),
-                    'reason': row.get('reason', ''),
-                    'dry_run': row.get('dry_run', self.config.dry_run),
-                    'mfe_pct': row.get('mfe_pct', ''),
-                    'mae_pct': row.get('mae_pct', ''),
-                })
+                writer.writerow(self._journal_row(row))
         self.analytics_writer.write_trade(row, self.config.base_currency)
 
     def _write_analytics_snapshot(
@@ -2883,6 +3014,8 @@ class CryptoTradingBot:
         if self.config.simulation_initial_balance_from_kraken:
             if self.portfolio.last_update is not None:
                 return
+            if self._public_paper_mode():
+                self._recover_paper_trade()
             if os.path.lexists(self.portfolio.state_file):
                 if not self.portfolio.load_state():
                     raise RuntimeError("Cannot restore existing simulation portfolio")
@@ -4323,11 +4456,14 @@ class CryptoTradingBot:
         signal_confidence: float | None = None,
         recommendation: str = 'HOLD',
         reason: str = '',
+        partial_take_profit: bool = False,
     ):
         """
         Executes a (simulated) trade.
         Uses market orders for simplicity; limit orders would be preferable in a real bot.
         """
+        if self._public_paper_mode() and getattr(self, '_paper_trade_failed', False):
+            raise RuntimeError("Paper trade transaction failed; restart to recover")
         if self.config.dry_run:
             costs_enabled = self.config.dry_run_costs_enabled
             tracked_entry = self.portfolio.open_trades.get(coin, {})
@@ -4393,7 +4529,7 @@ class CryptoTradingBot:
                 self.performance['buys'] += 1
                 self.performance['by_source'][signal_source]['buys'] += 1
                 self._register_buy_timestamp()
-                self._append_trade_journal({
+                journal_row = {
                     'coin': coin,
                     'action': 'buy',
                     'price': fill_price,
@@ -4408,9 +4544,12 @@ class CryptoTradingBot:
                     'reference_price': price,
                     'fee_base': amount_coin * fill_price * self.config.dry_run_fee_rate if costs_enabled else 0.0,
                     'slippage_base': amount_coin * (fill_price - price) if costs_enabled else 0.0,
-                })
+                }
                 # Persist portfolio state after successful dry-run buy
-                if self.config.dry_run:
+                if self._public_paper_mode():
+                    self._commit_paper_trade(journal_row)
+                else:
+                    self._append_trade_journal(journal_row)
                     self.portfolio.save_state()
             elif action == "sell":
                 held = self.portfolio.holdings.get(coin, 0.0)
@@ -4480,7 +4619,7 @@ class CryptoTradingBot:
                             gross_pnl_base = gross_pnl
                             net_pnl_base = pnl_base
                 mfe_pct, mae_pct = self._trade_excursion_metrics(entry_trade)
-                self._append_trade_journal({
+                journal_row = {
                     'coin': coin,
                     'action': 'sell',
                     'price': fill_price,
@@ -4503,7 +4642,9 @@ class CryptoTradingBot:
                     'slippage_base': sell_amount * (price - fill_price) if costs_enabled else 0.0,
                     'gross_pnl_base': gross_pnl_base,
                     'net_pnl_base': net_pnl_base,
-                })
+                }
+                if not self._public_paper_mode():
+                    self._append_trade_journal(journal_row)
                 self._register_sell_timestamp(coin)
                 if remaining_open_amount > 1e-12 and coin in self.portfolio.open_trades:
                     if costs_enabled or entry_cost_mode == 'net_costs':
@@ -4512,10 +4653,15 @@ class CryptoTradingBot:
                         remaining_basis = float(entry_trade.get('amount_base', 0.0)) * remaining_ratio
                     self.portfolio.open_trades[coin]['amount_coin'] = remaining_open_amount
                     self.portfolio.open_trades[coin]['amount_base'] = remaining_basis
+                    if self._public_paper_mode() and partial_take_profit:
+                        self.portfolio.open_trades[coin]['partial_tp_taken'] = True
+                        self.portfolio.open_trades[coin]['partial_tp_timestamp'] = datetime.now()
                 else:
                     self.portfolio.remove_trade(coin)
                 # Persist portfolio state after successful dry-run sell
-                if self.config.dry_run:
+                if self._public_paper_mode():
+                    self._commit_paper_trade(journal_row)
+                else:
                     self.portfolio.save_state()
             return True
 
@@ -4726,8 +4872,9 @@ class CryptoTradingBot:
                         partial_amount_coin * current_price,
                         atr=atr,
                         reason=partial_reason,
+                        partial_take_profit=True,
                     ):
-                        if coin in self.portfolio.open_trades:
+                        if coin in self.portfolio.open_trades and not self._public_paper_mode():
                             self.portfolio.open_trades[coin]['partial_tp_taken'] = True
                             self.portfolio.open_trades[coin]['partial_tp_timestamp'] = datetime.now(
                             )

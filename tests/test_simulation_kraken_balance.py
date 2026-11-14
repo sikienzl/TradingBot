@@ -9,6 +9,7 @@ from src.trading_bot import BotConfig, CryptoTradingBot, Portfolio
 
 
 def make_bot(monkeypatch, tmp_path, *, key="test-key", secret="test-secret"):
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SIMULATE_DATA", "true")
     monkeypatch.setenv("DRY_RUN", "true")
     monkeypatch.setenv("SIMULATION_INITIAL_BALANCE_FROM_KRAKEN", "true")
@@ -17,6 +18,8 @@ def make_bot(monkeypatch, tmp_path, *, key="test-key", secret="test-secret"):
     monkeypatch.setenv("USE_TABULAR_MODEL", "false")
     monkeypatch.setenv("USE_ML_MODEL", "false")
     monkeypatch.setenv("ANALYTICS_DB_ENABLED", "false")
+    monkeypatch.setenv("PERFORMANCE_LOG_ENABLED", "true")
+    monkeypatch.setenv("PERFORMANCE_LOG_FILE", str(tmp_path / "journal.csv"))
     bot = CryptoTradingBot(BotConfig())
     bot.portfolio.state_file = str(tmp_path / "portfolio.json")
     return bot
@@ -143,6 +146,7 @@ def test_initialization_option_requires_safe_mode(monkeypatch, tmp_path, name, v
 
 
 def test_public_paper_restores_state_and_uses_unauthenticated_exchange(monkeypatch, tmp_path):
+    monkeypatch.setenv("PERFORMANCE_LOG_ENABLED", "false")
     initial = make_bot(monkeypatch, tmp_path)
     initial.portfolio.cash = 19.25
     initial.portfolio.save_state()
@@ -168,6 +172,7 @@ def test_public_paper_restores_state_and_uses_unauthenticated_exchange(monkeypat
 
 
 def test_public_paper_requires_initialized_portfolio(monkeypatch, tmp_path):
+    monkeypatch.setenv("PERFORMANCE_LOG_ENABLED", "false")
     make_bot(monkeypatch, tmp_path)
     monkeypatch.setenv("SIMULATE_DATA", "false")
     monkeypatch.setenv("KRAKEN_API_KEY", "")

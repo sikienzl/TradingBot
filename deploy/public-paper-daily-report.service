@@ -1,0 +1,11 @@
+[Unit]
+Description=Read-only public Kraken paper daily observation
+After=network.target
+
+[Service]
+Type=oneshot
+# Replace this path if the reporting scripts are installed elsewhere.
+ExecStart=/bin/bash %h/trading-hailo-public-paper/reporting/scripts/run_public_paper_daily_report.sh
+EnvironmentFile=-%h/trading-hailo-public-paper/report.env
+UMask=0077
+NoNewPrivileges=true
