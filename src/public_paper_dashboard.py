@@ -443,13 +443,7 @@ DASHBOARD_HTML = """<!doctype html>
     *{box-sizing:border-box}body{margin:0 auto;padding:24px;max-width:1280px}
     header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:20px}
     .header-tools{display:flex;align-items:center;gap:16px}
-    .clock{width:48px;height:48px;flex:none}
-    .clock-face{fill:#121d30;stroke:#52647e;stroke-width:2}
-    .clock-tick{stroke:#90a0b7;stroke-width:2;stroke-linecap:round}
-    .clock-hour{stroke:#e8edf5;stroke-width:3;stroke-linecap:round}
-    .clock-minute{stroke:#a8bdd8;stroke-width:2;stroke-linecap:round}
-    .clock-second{stroke:#72db9d;stroke-width:1.5;stroke-linecap:round}
-    .clock-center{fill:#72db9d}
+    .clock{min-width:82px;color:#e8edf5;font-size:1.05rem;font-variant-numeric:tabular-nums;font-weight:650;letter-spacing:.04em}
     h1{font-size:1.55rem;margin:0}h2{font-size:1rem;margin:0 0 14px;color:#c5d2e5}
     .status{color:#8ce0b1;font-size:.88rem}.muted{color:#90a0b7;font-size:.82rem}
     .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:12px;margin-bottom:16px}
@@ -466,7 +460,7 @@ DASHBOARD_HTML = """<!doctype html>
   </style>
 </head>
 <body>
-  <header><div><h1>Paper Trading</h1><div class="muted">Nur Anzeige · keine Order-Steuerung</div></div><div class="header-tools"><div id="updated" class="status">Lade Daten …</div><svg id="local-clock" class="clock" viewBox="0 0 100 100" role="img" aria-label="Lokale Uhr"><title>Lokale Uhr</title><circle class="clock-face" cx="50" cy="50" r="46"/><g class="clock-tick"><path d="M50 10v7M50 83v7M10 50h7M83 50h7"/></g><line id="clock-hour" class="clock-hour" x1="50" y1="50" x2="50" y2="29"/><line id="clock-minute" class="clock-minute" x1="50" y1="50" x2="50" y2="19"/><line id="clock-second" class="clock-second" x1="50" y1="55" x2="50" y2="13"/><circle class="clock-center" cx="50" cy="50" r="3"/></svg></div></header>
+  <header><div><h1>Paper Trading</h1><div class="muted">Nur Anzeige · keine Order-Steuerung</div></div><div class="header-tools"><div id="updated" class="status">Lade Daten …</div><time id="local-clock" class="clock" aria-label="Lokale Uhrzeit">--:--:--</time></div></header>
   <div id="metrics" class="grid"></div>
   <div class="columns">
     <section><h2>Netto-PnL je UTC-Tag</h2><svg id="chart" class="chart" viewBox="0 0 700 220" role="img" aria-label="Netto-PnL der letzten 14 Tage"></svg></section>
@@ -479,12 +473,9 @@ DASHBOARD_HTML = """<!doctype html>
     const cls=n=>n===null||n===undefined?'neutral':n<0?'negative':n>0?'positive':'neutral';
     function metric(label,value,color='neutral'){return `<div class="card"><div class="label">${label}</div><div class="value ${color}">${value}</div></div>`}
     function updateClock(){
-      const now=new Date(), seconds=now.getSeconds()+now.getMilliseconds()/1000;
-      const minute=now.getMinutes()+seconds/60,hour=(now.getHours()%12)+minute/60;
-      document.getElementById('clock-second').setAttribute('transform',`rotate(${seconds*6} 50 50)`);
-      document.getElementById('clock-minute').setAttribute('transform',`rotate(${minute*6} 50 50)`);
-      document.getElementById('clock-hour').setAttribute('transform',`rotate(${hour*30} 50 50)`);
-      document.getElementById('local-clock').setAttribute('aria-label',`Lokale Uhr: ${now.toLocaleTimeString('de-DE')}`);
+      document.getElementById('local-clock').textContent=new Intl.DateTimeFormat('de-DE',{
+        hour:'2-digit',minute:'2-digit',second:'2-digit'
+      }).format(new Date());
     }
     function drawChart(points){
       const svg=document.getElementById('chart'), w=700,h=220,p=34;

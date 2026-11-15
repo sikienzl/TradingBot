@@ -86,8 +86,10 @@ def test_dashboard_requires_https_and_authentication(client):
     assert response.headers["www-authenticate"] == "Basic"
     assert response.headers["cache-control"] == "no-store"
     page = client.get("/", auth=("viewer", "long-test-password"))
-    assert 'id="local-clock"' in page.text
+    assert '<time id="local-clock"' in page.text
     assert "setInterval(updateClock,1000)" in page.text
+    assert "hour:'2-digit',minute:'2-digit',second:'2-digit'" in page.text
+    assert 'id="clock-hour"' not in page.text
 
     response = client.get("/", auth=("viewer", "wrong-password"))
     assert response.status_code == 401
