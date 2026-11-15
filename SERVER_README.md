@@ -402,6 +402,7 @@ credentials, or TLS private keys.
 From a checkout on the paper host:
 
 ```sh
+git pull --ff-only
 rtk proxy mkdir -m 700 "$HOME/trading-paper-dashboard"
 rtk proxy mkdir -m 700 "$HOME/trading-paper-dashboard/tls"
 cp deploy/public-paper-dashboard.env.example \
@@ -413,8 +414,18 @@ Edit the private environment file. Set `DASHBOARD_BIND_HOST` to the host's
 reachable interface address, `DASHBOARD_ALLOWED_NETWORKS` to the authorized
 private CIDRs (including any routed VPN subnet), and choose a unique username
 and long random password. The example leaves the network allowlist empty so the
-service fails closed until you configure it privately. Generate a private
-self-signed certificate for the exact IP address used in the browser:
+service fails closed until you configure it privately. Add only client source
+networks that are routed to this host, not the server's own subnet by habit.
+Separate multiple IPv4 or IPv6 networks with commas. The application rejects
+public networks and checks the actual peer IP; it does not trust
+`X-Forwarded-For`. A VPN route or proxy must therefore preserve the client
+source address. Configure the VPN routing and host/network firewall separately
+to allow TCP port `8443` only from these client networks; do not expose it to
+the public Internet.
+
+Generate a private self-signed certificate whose Subject Alternative Name
+matches every host address/name users will enter in their browser. For example,
+when accessing by IP, replace the placeholder with that address:
 
 ```sh
 openssl req -x509 -newkey rsa:3072 -nodes -days 825 \
@@ -422,7 +433,8 @@ openssl req -x509 -newkey rsa:3072 -nodes -days 825 \
   -out "$HOME/trading-paper-dashboard/tls/server.crt" \
   -subj "/CN=<dashboard-host-address>" \
   -addext "subjectAltName=IP:<dashboard-host-address>" \
-  -addext "basicConstraints=critical,CA:TRUE"
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign"
 chmod 600 "$HOME/trading-paper-dashboard/tls/server.key"
 chmod 644 "$HOME/trading-paper-dashboard/tls/server.crt"
 ```
@@ -430,7 +442,9 @@ chmod 644 "$HOME/trading-paper-dashboard/tls/server.crt"
 Replace both `<dashboard-host-address>` placeholders with the actual address;
 do not place it in repository files. Trust `server.crt` on client devices over
 the trusted SSH connection (or accept the browser's certificate warning after
-verifying its fingerprint). Then build and enable the service:
+verifying its SHA-256 fingerprint). Never copy the private key to clients.
+
+Build the image from the repository root and install the user service:
 
 ```sh
 rtk proxy docker build \
@@ -447,12 +461,39 @@ systemctl --user enable --now public-paper-dashboard.service
 Open `https://<dashboard-host-address>:8443` from an allowed LAN/VPN client and
 authenticate with the configured dashboard credentials. The process binds
 only to `DASHBOARD_BIND_HOST`; the application independently checks the
-request's source IP against every configured CIDR and ignores forwarded-IP
-headers. Keep network routing/firewall policy restricted as well. Inspect the
-service with `systemctl --user status public-paper-dashboard.service` and
-`journalctl --user -u public-paper-dashboard.service`. Dashboard values are
-read-only observations; missing legacy cost data is shown as unavailable rather
-than as zero.
+request's source IP against every configured CIDR. The container runs as the
+unprivileged `trading` UID/GID, drops all capabilities, uses a read-only root
+filesystem, and has only read-only mounts for paper data, reports, and TLS
+files. It does not mount the Docker socket inside the container. The host
+service uses `sg docker` because systemd user managers may not inherit the
+account's supplementary Docker group; do not remove it unless the service
+manager's group access is verified.
+
+Check service health and listener:
+
+```sh
+systemctl --user status public-paper-dashboard.service
+journalctl --user -u public-paper-dashboard.service -n 50 --no-pager
+docker ps --filter name=trading-paper-dashboard
+ss -ltn | grep ':8443'
+```
+
+The service should be enabled and active, the container should be running, and
+the listener should show only the address configured in
+`DASHBOARD_BIND_HOST`. Test without credentials (expected HTTP `401`) and in
+the browser with credentials from an allowed client. If the service repeatedly
+restarts, check that the allowlist is non-empty and private, the certificate
+and key paths are readable, the bind address belongs to the host, TCP `8443`
+is unused, and the account can run Docker through `sg docker`. If login works
+but a client receives `403`, check its routed source IP against the allowlist;
+forwarded headers do not affect the decision.
+
+To rotate the password, edit the private `dashboard.env` with mode `0600` and
+restart the service. To update the dashboard, pull the desired repository
+revision, rebuild the image with the same UID/GID build arguments and tag, then
+restart the user service. The dashboard itself is read-only and separate from
+the paper-bot container; do not stop or recreate the paper bot to update it.
+Missing legacy cost data is shown as unavailable rather than as zero.
 
 Optional private `~/trading-hailo-public-paper/report.env` settings for the
 wrapper: `PUBLIC_PAPER_DIR`, `PUBLIC_PAPER_REPORT_DIR`,
