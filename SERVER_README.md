@@ -199,16 +199,20 @@ currently running container. A rebuild may resolve different base-image or
 transitive dependency versions and is not bit-for-bit identical.
 
 ```sh
-rtk proxy docker build -f docker/hailo-shadow.Dockerfile -t trading-hailo-shadow:dryrun .
+rtk proxy docker build \
+  --build-arg TRADING_UID="$(id -u)" \
+  --build-arg TRADING_GID="$(id -g)" \
+  -f docker/hailo-shadow.Dockerfile -t trading-hailo-shadow:dryrun .
 rtk proxy mkdir -p ~/trading-hailo-shadow/data
 rtk proxy cp deploy/hailo-shadow.env.example ~/trading-hailo-shadow/shadow.env
 rtk proxy chmod 600 ~/trading-hailo-shadow/shadow.env
 ```
 
 Set the same bearer token in the private `shadow.env`; do not commit it. The
-data directory must be writable by container UID 1000. Start only when the
-service and tunnel health checks pass, and do not replace an existing container
-without reviewing its state:
+build arguments align the container account with the host's `trading` UID and
+GID so it can write its bind-mounted data. Start only when the service and
+tunnel health checks pass, and do not replace an existing container without
+reviewing its state:
 
 ```sh
 rtk proxy docker run -d --name trading-hailo-shadow-dryrun \
@@ -275,7 +279,10 @@ by the long-running bot.
 ```sh
 rtk proxy mkdir -m 700 ~/trading-hailo-public-paper
 rtk proxy mkdir -m 700 ~/trading-hailo-public-paper/data
-rtk proxy docker build -f docker/hailo-shadow.Dockerfile -t trading-hailo-public-paper:local .
+rtk proxy docker build \
+  --build-arg TRADING_UID="$(id -u)" \
+  --build-arg TRADING_GID="$(id -g)" \
+  -f docker/hailo-shadow.Dockerfile -t trading-hailo-public-paper:local .
 rtk proxy docker run --rm --network host \
   --mount type=bind,src="$HOME/trading-hailo-public-paper/data",dst=/data \
   --mount type=bind,src=/opt/trading_2/.env,dst=/run/kraken.env,readonly \

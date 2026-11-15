@@ -1,7 +1,10 @@
 FROM python:3.12-slim
 
-RUN groupadd --gid 1000 trading \
-    && useradd --uid 1000 --gid trading --create-home trading
+ARG TRADING_UID=1000
+ARG TRADING_GID=1000
+
+RUN groupadd --gid "${TRADING_GID}" trading \
+    && useradd --uid "${TRADING_UID}" --gid trading --create-home trading
 WORKDIR /app
 COPY requirements-hailo-shadow.txt /app/
 RUN pip install --no-cache-dir -r requirements-hailo-shadow.txt
