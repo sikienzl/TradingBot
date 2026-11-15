@@ -123,6 +123,14 @@ python3 -m src.train_catboost_model
 ```
 Outputs a ready-to-use model in `model/catboost_trading_model/`.
 
+The training pipeline sorts timestamped data chronologically, purges training
+rows whose forward label window overlaps the validation boundary, and runs an
+expanding-window walk-forward evaluation when there is enough data. The
+validation set is also used for model selection and confidence-threshold tuning,
+so its metrics are not a final untouched test. Provide causally computed,
+time-aligned input features and assess the result on a separate fresh period;
+these safeguards do not eliminate every source of lookahead bias.
+
 Fine-tune the LLM (requires a GPU with ≥ 16 GB VRAM):
 ```sh
 python3 -m src.train_trading_model

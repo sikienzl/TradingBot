@@ -15,6 +15,13 @@ engineer features, use rules and optional CatBoost/LLM signals, and evaluate
 strategies through backtesting or paper trading. Live trading is also available
 but requires explicit configuration and careful risk management.
 
+**Anti-leakage:** CatBoost training uses chronological splits and, when enough
+data is available, expanding-window walk-forward evaluation. Training rows
+whose forward label window overlaps validation are removed, and the latest
+research signal is not copied into historical training data. These safeguards
+reduce lookahead risk; input features must still be time-aligned and results
+should be checked on a fresh, untouched period.
+
 ## Example output
 
 On a fresh checkout without a trade journal, the scorecard reports insufficient
