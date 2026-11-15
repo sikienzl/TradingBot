@@ -1,0 +1,80 @@
+---
+- name: Validate database configuration
+  ansible.builtin.assert:
+    that:
+      - postgresql_version is match('^[0-9]+$')
+      - postgresql_db is match('^[a-z_][a-z0-9_]*$')
+      - postgresql_user is match('^[a-z_][a-z0-9_]*$')
+      - "'REPLACE_WITH' not in postgresql_db"
+      - "'REPLACE_WITH' not in postgresql_user"
+      - vault_postgresql_password is defined and vault_postgresql_password | length >= 16
+      - "'REPLACE_WITH' not in vault_postgresql_password"
+      - postgresql_listen_address is match('^[a-zA-Z0-9.:-]+$')
+      - postgresql_allow_remote | bool or postgresql_listen_address in ['127.0.0.1', 'localhost', '::1']
+      - not enable_postgresql_k8s | bool or postgresql_allow_remote | bool
+      - not enable_postgresql_k8s | bool or enable_k3s | bool
+  no_log: true
+- name: Validate remote access inputs
+  ansible.builtin.assert:
+    that:
+      - postgresql_listen_address not in ['127.0.0.1', 'localhost', '::1']
+      - "'REPLACE_WITH' not in postgresql_listen_address"
+      - postgresql_client_cidr is match('^[0-9a-fA-F.:]+/[0-9]{1,3}$')
+  when: postgresql_allow_remote | bool
+- name: Validate remote client network is a valid, non-global CIDR
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - "import ipaddress,sys; n=ipaddress.ip_network(sys.argv[1], strict=False); sys.exit(0 if n.is_private else 1)"
+      - "{{ postgresql_client_cidr }}"
+  changed_when: false
+  check_mode: false
+  when: postgresql_allow_remote | bool
+- name: Install PostgreSQL and controller prerequisites
+  ansible.builtin.apt:
+    name:
+      - "postgresql-{{ postgresql_version }}"
+      - python3-psycopg2
+      - acl
+    state: present
+    update_cache: true
+- name: Configure PostgreSQL listening address
+  ansible.builtin.lineinfile:
+    path: "/etc/postgresql/{{ postgresql_version }}/main/postgresql.conf"
+    regexp: '^#?\s*listen_addresses\s*='
+    line: "listen_addresses = '{{ postgresql_listen_address }}'"
+  notify: Restart PostgreSQL
+- name: Configure the permitted database client network
+  ansible.builtin.blockinfile:
+    path: "/etc/postgresql/{{ postgresql_version }}/main/pg_hba.conf"
+    marker: "# {mark} CLUSTER STARTER"
+    block: "host {{ postgresql_db }} {{ postgresql_user }} {{ postgresql_client_cidr }} scram-sha-256"
+    state: "{{ 'present' if postgresql_allow_remote | bool else 'absent' }}"
+  notify: Restart PostgreSQL
+- name: Start PostgreSQL
+  ansible.builtin.service:
+    name: postgresql
+    enabled: true
+    state: started
+- name: Apply database configuration
+  ansible.builtin.meta: flush_handlers
+- name: Create database user
+  community.postgresql.postgresql_user:
+    name: "{{ postgresql_user }}"
+    password: "{{ vault_postgresql_password }}"
+    encrypted: true
+    login_unix_socket: /var/run/postgresql
+  become_user: postgres
+  become: true
+  no_log: true
+- name: Create database
+  community.postgresql.postgresql_db:
+    name: "{{ postgresql_db }}"
+    owner: "{{ postgresql_user }}"
+    login_unix_socket: /var/run/postgresql
+  become_user: postgres
+  become: true
+- name: Publish optional Kubernetes connection resources
+  ansible.builtin.import_tasks: kubernetes.yml
+  when: enable_postgresql_k8s | bool

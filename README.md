@@ -87,6 +87,13 @@ An optional read-only paper dashboard is documented in
 [SERVER_README.md](./SERVER_README.md). It requires HTTPS, HTTP Basic
 authentication, and an operator-configured private CIDR allowlist; network
 ranges and credentials belong only in the private deployment environment.
+An optional generic Ansible starter for deploying that dashboard to a
+pre-provisioned Debian/Ubuntu host is included under [ansible/](./ansible/);
+it intentionally contains no site-specific inventory or secrets.
+A separate generic CM5/K3s cluster starter is available under
+[cluster-starter/](./cluster-starter/). Its manually triggered GitHub Actions
+workflow validates and publishes versioned ZIP pre-releases; it does not
+provision hardware or deploy to hosts.
 
 ## Project structure
 

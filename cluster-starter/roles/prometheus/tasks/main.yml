@@ -1,0 +1,34 @@
+---
+- name: Validate Prometheus targets
+  ansible.builtin.assert:
+    that:
+      - prometheus_scrape_targets | length > 0
+      - "'REPLACE_WITH' not in (prometheus_scrape_targets | join(','))"
+      - prometheus_listen_address is match('^[a-zA-Z0-9.:-]+:[0-9]+$')
+- name: Install Prometheus
+  ansible.builtin.apt:
+    name: prometheus
+    state: present
+    update_cache: true
+- name: Configure scraping
+  ansible.builtin.template:
+    src: prometheus.yml.j2
+    dest: /etc/prometheus/prometheus.yml
+    owner: root
+    group: prometheus
+    mode: "0640"
+    validate: "promtool check config %s"
+  notify: Restart Prometheus
+- name: Restrict Prometheus HTTP listener
+  ansible.builtin.lineinfile:
+    path: /etc/default/prometheus
+    regexp: '^ARGS='
+    line: 'ARGS="--web.listen-address={{ prometheus_listen_address }}"'
+    create: true
+    mode: "0644"
+  notify: Restart Prometheus
+- name: Enable Prometheus
+  ansible.builtin.service:
+    name: prometheus
+    enabled: true
+    state: started

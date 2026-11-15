@@ -1,0 +1,22 @@
+[Unit]
+Description=Read-only authenticated paper trading dashboard
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ public_paper_dashboard_service_user }}
+Group={{ public_paper_dashboard_service_group }}
+SupplementaryGroups=docker
+ExecStartPre=-/usr/bin/docker rm -f {{ public_paper_dashboard_container_name }}
+ExecStart=/usr/bin/docker run --rm --name {{ public_paper_dashboard_container_name }} --network host --user {{ public_paper_dashboard_service_user_uid }}:{{ public_paper_dashboard_service_group_gid }} --cap-drop=ALL --security-opt=no-new-privileges --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m --pids-limit=64 --memory=256m --env-file {{ public_paper_dashboard_config_dir }}/dashboard.env --mount type=bind,src={{ public_paper_dashboard_data_dir }},dst=/data,readonly --mount type=bind,src={{ public_paper_dashboard_reports_dir }},dst=/reports,readonly --mount type=bind,src={{ public_paper_dashboard_tls_dir }},dst=/tls,readonly {{ public_paper_dashboard_image_name }}:{{ public_paper_dashboard_image_tag }}
+ExecStop=/usr/bin/docker stop --time 15 {{ public_paper_dashboard_container_name }}
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+TimeoutStopSec=30
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+token: {{ vault_k3s_token | to_json }}
+node-name: {{ k3s_node_name | to_json }}
+{% if k3s_role == 'agent' %}
+server: {{ ('https://' ~ k3s_server_address ~ ':6443') | to_json }}
+{% else %}
+tls-san:
+  - {{ k3s_server_address | to_json }}
+{% endif %}

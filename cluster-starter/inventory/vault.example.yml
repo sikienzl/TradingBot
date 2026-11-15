@@ -1,0 +1,7 @@
+---
+# Copy to vault.yml, replace ALL values, then encrypt with ansible-vault.
+# This file is an example, not a credential and not encrypted.
+vault_k3s_token: REPLACE_WITH_LONG_RANDOM_K3S_TOKEN
+vault_nas_username: REPLACE_WITH_NAS_USERNAME
+vault_nas_password: REPLACE_WITH_NAS_PASSWORD
+vault_postgresql_password: REPLACE_WITH_LONG_RANDOM_DATABASE_PASSWORD

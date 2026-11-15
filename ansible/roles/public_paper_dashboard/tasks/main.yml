@@ -1,0 +1,194 @@
+---
+- name: Validate dashboard deployment settings
+  ansible.builtin.assert:
+    that:
+      - public_paper_dashboard_bind_host | length > 0
+      - "'REPLACE_WITH' not in public_paper_dashboard_bind_host"
+      - public_paper_dashboard_allowed_networks | length > 0
+      - >-
+        public_paper_dashboard_allowed_networks
+        | select('search', 'REPLACE_WITH')
+        | list
+        | length == 0
+      - public_paper_dashboard_username | length > 0
+      - public_paper_dashboard_password | length >= 20
+      - "'REPLACE_WITH' not in public_paper_dashboard_password"
+      - public_paper_dashboard_tls_certificate_source | length > 0
+      - public_paper_dashboard_tls_private_key_source | length > 0
+      - public_paper_dashboard_git_version | length > 0
+      - "'REPLACE_WITH' not in public_paper_dashboard_git_version"
+      - "'REPLACE_WITH' not in public_paper_dashboard_data_dir"
+      - "'REPLACE_WITH' not in public_paper_dashboard_reports_dir"
+    fail_msg: >-
+      Replace all REPLACE_WITH placeholders. Set the host bind address, private
+      CIDR allowlist, credentials, TLS source files, existing paper directories,
+      and a pinned source revision before deployment.
+  no_log: true
+
+- name: Install Docker and Git
+  ansible.builtin.apt:
+    name: "{{ public_paper_dashboard_docker_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Ensure Docker is enabled and running
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Ensure dashboard service group exists
+  ansible.builtin.group:
+    name: "{{ public_paper_dashboard_service_group }}"
+    system: true
+    state: present
+
+- name: Ensure Docker group exists
+  ansible.builtin.group:
+    name: docker
+    state: present
+
+- name: Ensure dashboard service user exists
+  ansible.builtin.user:
+    name: "{{ public_paper_dashboard_service_user }}"
+    group: "{{ public_paper_dashboard_service_group }}"
+    groups:
+      - docker
+    append: true
+    home: "{{ public_paper_dashboard_service_home }}"
+    create_home: true
+    shell: /usr/sbin/nologin
+    system: true
+    state: present
+
+- name: Read dashboard service user UID
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ public_paper_dashboard_service_user }}"
+
+- name: Read dashboard service group GID
+  ansible.builtin.getent:
+    database: group
+    key: "{{ public_paper_dashboard_service_group }}"
+
+- name: Save dashboard container identity
+  ansible.builtin.set_fact:
+    public_paper_dashboard_service_user_uid: "{{ ansible_facts.getent_passwd[public_paper_dashboard_service_user][2] }}"
+    public_paper_dashboard_service_group_gid: "{{ ansible_facts.getent_group[public_paper_dashboard_service_group][2] }}"
+
+- name: Create dashboard directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ public_paper_dashboard_service_user }}"
+    group: "{{ public_paper_dashboard_service_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ public_paper_dashboard_checkout_path }}"
+      mode: "0755"
+    - path: "{{ public_paper_dashboard_config_dir }}"
+      mode: "0700"
+    - path: "{{ public_paper_dashboard_tls_dir }}"
+      mode: "0700"
+
+- name: Check that the paper data directory exists
+  ansible.builtin.stat:
+    path: "{{ public_paper_dashboard_data_dir }}"
+  register: public_paper_dashboard_data_dir_stat
+
+- name: Check that the paper reports directory exists
+  ansible.builtin.stat:
+    path: "{{ public_paper_dashboard_reports_dir }}"
+  register: public_paper_dashboard_reports_dir_stat
+
+- name: Require existing paper data and report directories
+  ansible.builtin.assert:
+    that:
+      - public_paper_dashboard_data_dir_stat.stat.isdir | default(false)
+      - public_paper_dashboard_reports_dir_stat.stat.isdir | default(false)
+    fail_msg: >-
+      Configure public_paper_dashboard_data_dir and public_paper_dashboard_reports_dir to existing
+      paper-bot directories before deployment.
+
+- name: Install dashboard TLS certificate
+  ansible.builtin.copy:
+    src: "{{ public_paper_dashboard_tls_certificate_source }}"
+    dest: "{{ public_paper_dashboard_tls_dir }}/server.crt"
+    owner: "{{ public_paper_dashboard_service_user }}"
+    group: "{{ public_paper_dashboard_service_group }}"
+    mode: "0644"
+
+- name: Install dashboard TLS private key
+  ansible.builtin.copy:
+    src: "{{ public_paper_dashboard_tls_private_key_source }}"
+    dest: "{{ public_paper_dashboard_tls_dir }}/server.key"
+    owner: "{{ public_paper_dashboard_service_user }}"
+    group: "{{ public_paper_dashboard_service_group }}"
+    mode: "0600"
+  no_log: true
+
+- name: Install private dashboard environment file
+  ansible.builtin.template:
+    src: dashboard.env.j2
+    dest: "{{ public_paper_dashboard_config_dir }}/dashboard.env"
+    owner: "{{ public_paper_dashboard_service_user }}"
+    group: "{{ public_paper_dashboard_service_group }}"
+    mode: "0600"
+  no_log: true
+
+- name: Check out the dashboard source
+  ansible.builtin.git:
+    repo: "{{ public_paper_dashboard_git_repository }}"
+    dest: "{{ public_paper_dashboard_checkout_path }}"
+    version: "{{ public_paper_dashboard_git_version }}"
+    update: true
+    force: false
+  become_user: "{{ public_paper_dashboard_service_user }}"
+  become: true
+  register: public_paper_dashboard_source_checkout
+
+- name: Check whether the requested dashboard image exists
+  ansible.builtin.command:
+    argv:
+      - docker
+      - image
+      - inspect
+      - "{{ public_paper_dashboard_image_name }}:{{ public_paper_dashboard_image_tag }}"
+  register: public_paper_dashboard_image_inspect
+  changed_when: false
+  failed_when: false
+
+- name: Build the dashboard container image
+  ansible.builtin.command:
+    argv:
+      - docker
+      - build
+      - "--build-arg=TRADING_UID={{ public_paper_dashboard_service_user_uid }}"
+      - "--build-arg=TRADING_GID={{ public_paper_dashboard_service_group_gid }}"
+      - -f
+      - docker/public-paper-dashboard.Dockerfile
+      - -t
+      - "{{ public_paper_dashboard_image_name }}:{{ public_paper_dashboard_image_tag }}"
+      - .
+    chdir: "{{ public_paper_dashboard_checkout_path }}"
+  when: public_paper_dashboard_source_checkout.changed or public_paper_dashboard_image_inspect.rc != 0
+  changed_when: true
+  notify: Restart paper dashboard
+
+- name: Install dashboard systemd service
+  ansible.builtin.template:
+    src: trading-paper-dashboard.service.j2
+    dest: /etc/systemd/system/trading-paper-dashboard.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart paper dashboard
+
+- name: Enable and start dashboard service
+  ansible.builtin.systemd_service:
+    name: trading-paper-dashboard.service
+    enabled: true
+    state: started

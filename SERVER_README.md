@@ -495,6 +495,15 @@ restart the user service. The dashboard itself is read-only and separate from
 the paper-bot container; do not stop or recreate the paper bot to update it.
 Missing legacy cost data is shown as unavailable rather than as zero.
 
+For a reproducible Ansible deployment on an already-provisioned Debian/Ubuntu
+host, see the generic starter in [`ansible/`](./ansible/) and its
+[`README.md`](./ansible/README.md). For a separate, generic two-node CM5/K3s
+bootstrap package, see [`cluster-starter/`](./cluster-starter/README.md); its
+GitHub Actions workflow publishes validated ZIP pre-releases. Both starters
+require operator-supplied inventory and secrets, and neither contains this
+site's addresses or credentials. The cluster starter does not provision
+hardware, VPN or firewall configuration, or deploy the TradingBot workloads.
+
 Optional private `~/trading-hailo-public-paper/report.env` settings for the
 wrapper: `PUBLIC_PAPER_DIR`, `PUBLIC_PAPER_REPORT_DIR`,
 `PUBLIC_PAPER_LOG`, `PUBLIC_PAPER_LOG_TIMEZONE`, `PYTHON_BIN`, and

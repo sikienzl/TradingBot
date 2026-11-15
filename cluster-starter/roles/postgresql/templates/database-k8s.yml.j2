@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ postgresql_k8s_namespace | to_json }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ postgresql_k8s_service | to_json }}
+  namespace: {{ postgresql_k8s_namespace | to_json }}
+spec:
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: {{ postgresql_k8s_service | to_json }}
+  namespace: {{ postgresql_k8s_namespace | to_json }}
+subsets:
+  - addresses:
+      - ip: {{ postgresql_k8s_endpoint_ip | to_json }}
+    ports:
+      - name: postgres
+        port: 5432
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ (postgresql_k8s_service ~ '-credentials') | to_json }}
+  namespace: {{ postgresql_k8s_namespace | to_json }}
+type: Opaque
+stringData:
+  database: {{ postgresql_db | to_json }}
+  username: {{ postgresql_user | to_json }}
+  password: {{ vault_postgresql_password | to_json }}

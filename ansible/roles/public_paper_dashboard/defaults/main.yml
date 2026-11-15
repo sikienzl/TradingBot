@@ -1,0 +1,28 @@
+---
+public_paper_dashboard_git_repository: https://github.com/sikienzl/TradingBot.git
+public_paper_dashboard_git_version: ""
+public_paper_dashboard_image_name: trading-paper-dashboard
+public_paper_dashboard_image_tag: "{{ public_paper_dashboard_git_version }}"
+public_paper_dashboard_container_name: trading-paper-dashboard
+
+public_paper_dashboard_service_user: trading
+public_paper_dashboard_service_group: trading
+public_paper_dashboard_service_home: /var/lib/trading
+public_paper_dashboard_checkout_path: /opt/tradingbot-dashboard
+public_paper_dashboard_data_dir: /var/lib/trading/paper/data
+public_paper_dashboard_reports_dir: /var/lib/trading/paper/reports
+public_paper_dashboard_config_dir: /var/lib/trading/paper-dashboard
+public_paper_dashboard_tls_dir: "{{ public_paper_dashboard_config_dir }}/tls"
+
+public_paper_dashboard_bind_host: ""
+public_paper_dashboard_port: 8443
+public_paper_dashboard_allowed_networks: []
+public_paper_dashboard_username: paper-viewer
+public_paper_dashboard_password: ""
+
+public_paper_dashboard_tls_certificate_source: ""
+public_paper_dashboard_tls_private_key_source: ""
+
+public_paper_dashboard_docker_packages:
+  - docker.io
+  - git

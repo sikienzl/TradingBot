@@ -1,0 +1,41 @@
+---
+- name: Validate NAS inputs
+  ansible.builtin.assert:
+    that:
+      - "'REPLACE_WITH' not in nas_share"
+      - "'REPLACE_WITH' not in nas_mount_path"
+      - nas_share is match('^//[^/]+/[^/]+$')
+      - nas_mount_path is match('^/[^\\s,]+$')
+      - vault_nas_username is defined and vault_nas_username | length > 0
+      - vault_nas_password is defined and vault_nas_password | length > 0
+      - "'REPLACE_WITH' not in vault_nas_username"
+      - "'REPLACE_WITH' not in vault_nas_password"
+      - "'\n' not in vault_nas_username and '\n' not in vault_nas_password"
+  no_log: true
+- name: Install CIFS support
+  ansible.builtin.apt:
+    name: cifs-utils
+    state: present
+    update_cache: true
+- name: Create protected credentials directory
+  ansible.builtin.file:
+    path: /etc/cluster-starter
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+- name: Install NAS credentials
+  ansible.builtin.copy:
+    dest: /etc/cluster-starter/nas.credentials
+    content: "username={{ vault_nas_username }}\npassword={{ vault_nas_password }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+- name: Mount NAS and persist mount
+  ansible.posix.mount:
+    path: "{{ nas_mount_path }}"
+    src: "{{ nas_share }}"
+    fstype: cifs
+    opts: "credentials=/etc/cluster-starter/nas.credentials,vers={{ nas_version }},_netdev,nofail"
+    state: mounted

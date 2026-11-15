@@ -1,0 +1,18 @@
+---
+- name: Validate service account inputs
+  ansible.builtin.assert:
+    that:
+      - service_account_name is match('^[a-z_][a-z0-9_-]*$')
+      - "'REPLACE_WITH' not in service_account_name"
+      - "'REPLACE_WITH' not in service_account_authorized_key"
+      - service_account_authorized_key is match('^(ssh-(ed25519|rsa)|ecdsa-sha2-[^ ]+) ')
+- name: Create service account without passwordless sudo
+  ansible.builtin.user:
+    name: "{{ service_account_name }}"
+    shell: /bin/bash
+    create_home: true
+- name: Authorize operator-supplied public key
+  ansible.posix.authorized_key:
+    user: "{{ service_account_name }}"
+    key: "{{ service_account_authorized_key }}"
+    state: present

@@ -1,0 +1,8 @@
+---
+all:
+  children:
+    paper_dashboard:
+      hosts:
+        dashboard:
+          ansible_host: dashboard.example.invalid
+          ansible_user: ansible

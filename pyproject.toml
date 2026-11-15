@@ -101,6 +101,7 @@ include = [
     "scripts/",
     "deploy/",
     "docker/",
+    "ansible/",
     "tests/",
     "README.md",
     "SERVER_README.md",

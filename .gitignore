@@ -53,3 +53,11 @@ auto_tune_state*.json
 # IDE
 .vscode/
 .idea/
+
+# Local Ansible inventory, secrets, and TLS material
+/ansible/inventory/hosts.yml
+/ansible/group_vars/paper_dashboard/vault.yml
+/ansible/.vault_pass.txt
+/ansible/files/*.crt
+/ansible/files/*.key
+/ansible/files/*.pem

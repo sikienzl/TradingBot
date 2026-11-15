@@ -1,0 +1,17 @@
+---
+- name: Install Netdata from distribution repositories
+  ansible.builtin.apt:
+    name: netdata
+    state: present
+    update_cache: true
+- name: Restrict the Netdata HTTP listener to localhost
+  ansible.builtin.copy:
+    dest: /etc/netdata/netdata.conf
+    content: "[web]\n    bind to = 127.0.0.1\n"
+    mode: "0644"
+  notify: Restart Netdata
+- name: Enable Netdata
+  ansible.builtin.service:
+    name: netdata
+    enabled: true
+    state: started
