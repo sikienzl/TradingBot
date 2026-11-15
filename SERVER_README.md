@@ -660,10 +660,24 @@ After an upgrade, keep `DRY_RUN=true` and verify:
 
 ### PostgreSQL analytics backups
 
-The PostgreSQL container keeps its own database process identity and owns its
-database files. The NAS backup and restore-check jobs run as the host account
-`trading`; they need Docker socket access and read/write access to the
-`nas-access` group mount at `/nas-1/postgresql`.
+The PostgreSQL container now runs with the host `trading` account's numeric
+UID and GID (`999:984` on the current bot host). The official image's
+`postgres` account is UID 999 inside the container, so its database processes
+map to host user and group `trading`. The existing database files remain owned
+by UID 999; do not recursively change their ownership during this migration.
+The NAS backup and restore-check jobs also run as host account `trading`; they
+need Docker socket access and read/write access to the `nas-access` group mount
+at `/nas-1/postgresql`.
+
+Verify the container identity after deployment with:
+
+```sh
+docker inspect --format '{{.Config.User}}' postgresql-node1
+docker exec postgresql-node1 ps -o uid,gid,user,group,comm -C postgres
+```
+
+The configured container user should match `id -u trading` and `id -g trading`
+on the host.
 
 Install the service units from `deploy/` and allow the `trading` group to
 execute the root-managed backup scripts:
