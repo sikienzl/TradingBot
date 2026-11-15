@@ -95,6 +95,11 @@ def test_dashboard_requires_https_and_authentication(client):
     assert "Next update in" in page.text
     assert "Aktualisierung in" in page.text
     assert "paper-dashboard-language" in page.text
+    assert "timeLocal:'Zeit (lokal)'" in page.text
+    assert "timeLocal:'Time (local)'" in page.text
+    assert "new Intl.DateTimeFormat" in page.text
+    assert "localDateTime(x.timestamp)" in page.text
+    assert "timeUtc:" not in page.text
     assert "setInterval(updateCountdown,1000)" in page.text
     assert "setTimeout(refresh,REFRESH_INTERVAL_MS)" in page.text
 
@@ -141,6 +146,7 @@ def test_dashboard_data_is_read_only_and_reports_paper_metrics(client):
     assert body["daily_report"] == {"primary": {}}
     assert len(body["daily_net_pnl"]) == 14
     assert body["recent_events"][0]["action"] == "sell"
+    assert body["recent_events"][0]["timestamp"].endswith("+00:00")
 
 
 def test_dashboard_does_not_claim_net_pnl_for_legacy_cost_data(client, monkeypatch):
