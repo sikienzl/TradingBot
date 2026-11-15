@@ -442,6 +442,14 @@ DASHBOARD_HTML = """<!doctype html>
     :root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#e8edf5;background:#0b1220}
     *{box-sizing:border-box}body{margin:0 auto;padding:24px;max-width:1280px}
     header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:20px}
+    .header-tools{display:flex;align-items:center;gap:16px}
+    .clock{width:48px;height:48px;flex:none}
+    .clock-face{fill:#121d30;stroke:#52647e;stroke-width:2}
+    .clock-tick{stroke:#90a0b7;stroke-width:2;stroke-linecap:round}
+    .clock-hour{stroke:#e8edf5;stroke-width:3;stroke-linecap:round}
+    .clock-minute{stroke:#a8bdd8;stroke-width:2;stroke-linecap:round}
+    .clock-second{stroke:#72db9d;stroke-width:1.5;stroke-linecap:round}
+    .clock-center{fill:#72db9d}
     h1{font-size:1.55rem;margin:0}h2{font-size:1rem;margin:0 0 14px;color:#c5d2e5}
     .status{color:#8ce0b1;font-size:.88rem}.muted{color:#90a0b7;font-size:.82rem}
     .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:12px;margin-bottom:16px}
@@ -458,7 +466,7 @@ DASHBOARD_HTML = """<!doctype html>
   </style>
 </head>
 <body>
-  <header><div><h1>Paper Trading</h1><div class="muted">Nur Anzeige · keine Order-Steuerung</div></div><div id="updated" class="status">Lade Daten …</div></header>
+  <header><div><h1>Paper Trading</h1><div class="muted">Nur Anzeige · keine Order-Steuerung</div></div><div class="header-tools"><div id="updated" class="status">Lade Daten …</div><svg id="local-clock" class="clock" viewBox="0 0 100 100" role="img" aria-label="Lokale Uhr"><title>Lokale Uhr</title><circle class="clock-face" cx="50" cy="50" r="46"/><g class="clock-tick"><path d="M50 10v7M50 83v7M10 50h7M83 50h7"/></g><line id="clock-hour" class="clock-hour" x1="50" y1="50" x2="50" y2="29"/><line id="clock-minute" class="clock-minute" x1="50" y1="50" x2="50" y2="19"/><line id="clock-second" class="clock-second" x1="50" y1="55" x2="50" y2="13"/><circle class="clock-center" cx="50" cy="50" r="3"/></svg></div></header>
   <div id="metrics" class="grid"></div>
   <div class="columns">
     <section><h2>Netto-PnL je UTC-Tag</h2><svg id="chart" class="chart" viewBox="0 0 700 220" role="img" aria-label="Netto-PnL der letzten 14 Tage"></svg></section>
@@ -470,6 +478,14 @@ DASHBOARD_HTML = """<!doctype html>
     const esc=(s)=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const cls=n=>n===null||n===undefined?'neutral':n<0?'negative':n>0?'positive':'neutral';
     function metric(label,value,color='neutral'){return `<div class="card"><div class="label">${label}</div><div class="value ${color}">${value}</div></div>`}
+    function updateClock(){
+      const now=new Date(), seconds=now.getSeconds()+now.getMilliseconds()/1000;
+      const minute=now.getMinutes()+seconds/60,hour=(now.getHours()%12)+minute/60;
+      document.getElementById('clock-second').setAttribute('transform',`rotate(${seconds*6} 50 50)`);
+      document.getElementById('clock-minute').setAttribute('transform',`rotate(${minute*6} 50 50)`);
+      document.getElementById('clock-hour').setAttribute('transform',`rotate(${hour*30} 50 50)`);
+      document.getElementById('local-clock').setAttribute('aria-label',`Lokale Uhr: ${now.toLocaleTimeString('de-DE')}`);
+    }
     function drawChart(points){
       const svg=document.getElementById('chart'), w=700,h=220,p=34;
       const values=points.map(x=>x.net_pnl).filter(x=>x!==null);
@@ -504,7 +520,7 @@ DASHBOARD_HTML = """<!doctype html>
       document.getElementById('events').innerHTML=d.recent_events.length?`<table><thead><tr><th>Zeit (UTC)</th><th>Asset</th><th>Aktion</th><th class="num">Betrag</th><th class="num">Netto-PnL</th></tr></thead><tbody>${d.recent_events.map(x=>`<tr><td>${esc(x.timestamp)}</td><td>${esc(x.coin)}</td><td>${esc(x.action)}</td><td class="num">${fmt(x.amount_base,c)}</td><td class="num ${cls(x.net_pnl_base)}">${fmt(x.net_pnl_base,c)}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">Noch keine Journal-Ereignisse</div>';
     }
     async function refresh(){try{const r=await fetch('/api/dashboard',{cache:'no-store'});if(!r.ok)throw new Error(`HTTP ${r.status}`);render(await r.json());document.getElementById('updated').textContent='Aktualisiert: '+new Date().toLocaleTimeString('de-DE')}catch(e){document.getElementById('updated').textContent='Dashboard-Daten nicht erreichbar';console.error(e)}}
-    refresh();setInterval(refresh,15000);
+    updateClock();setInterval(updateClock,1000);refresh();setInterval(refresh,15000);
   </script>
 </body>
 </html>"""

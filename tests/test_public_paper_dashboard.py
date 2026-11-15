@@ -85,6 +85,9 @@ def test_dashboard_requires_https_and_authentication(client):
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Basic"
     assert response.headers["cache-control"] == "no-store"
+    page = client.get("/", auth=("viewer", "long-test-password"))
+    assert 'id="local-clock"' in page.text
+    assert "setInterval(updateClock,1000)" in page.text
 
     response = client.get("/", auth=("viewer", "wrong-password"))
     assert response.status_code == 401
