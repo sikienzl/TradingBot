@@ -388,6 +388,72 @@ public-paper-daily-report.service`. The report user needs read access to the
 paper data. The scheduled report reads the persistent bot log, so replacing
 the container does not discard the earlier observations.
 
+#### Optional browser dashboard (read-only)
+
+The standalone dashboard displays the paper portfolio, recent journal events,
+daily net PnL, modeled costs, and counts of ATR/Hailo entry blocks. It does not
+control the bot or submit orders. It reads paper data and reports through
+read-only mounts and does not mount the Docker socket. Access is protected by
+HTTPS, HTTP Basic authentication, and a private CIDR allowlist. The allowlist
+is private deployment configuration: include each authorized LAN or routed
+VPN client subnet there, separated by commas. Never commit actual site CIDRs,
+credentials, or TLS private keys.
+
+From a checkout on the paper host:
+
+```sh
+rtk proxy mkdir -m 700 "$HOME/trading-paper-dashboard"
+rtk proxy mkdir -m 700 "$HOME/trading-paper-dashboard/tls"
+cp deploy/public-paper-dashboard.env.example \
+  "$HOME/trading-paper-dashboard/dashboard.env"
+chmod 600 "$HOME/trading-paper-dashboard/dashboard.env"
+```
+
+Edit the private environment file. Set `DASHBOARD_BIND_HOST` to the host's
+reachable interface address, `DASHBOARD_ALLOWED_NETWORKS` to the authorized
+private CIDRs (including any routed VPN subnet), and choose a unique username
+and long random password. The example leaves the network allowlist empty so the
+service fails closed until you configure it privately. Generate a private
+self-signed certificate for the exact IP address used in the browser:
+
+```sh
+openssl req -x509 -newkey rsa:3072 -nodes -days 825 \
+  -keyout "$HOME/trading-paper-dashboard/tls/server.key" \
+  -out "$HOME/trading-paper-dashboard/tls/server.crt" \
+  -subj "/CN=<dashboard-host-address>" \
+  -addext "subjectAltName=IP:<dashboard-host-address>" \
+  -addext "basicConstraints=critical,CA:TRUE"
+chmod 600 "$HOME/trading-paper-dashboard/tls/server.key"
+chmod 644 "$HOME/trading-paper-dashboard/tls/server.crt"
+```
+
+Replace both `<dashboard-host-address>` placeholders with the actual address;
+do not place it in repository files. Trust `server.crt` on client devices over
+the trusted SSH connection (or accept the browser's certificate warning after
+verifying its fingerprint). Then build and enable the service:
+
+```sh
+rtk proxy docker build \
+  --build-arg TRADING_UID="$(id -u)" \
+  --build-arg TRADING_GID="$(id -g)" \
+  -f docker/public-paper-dashboard.Dockerfile \
+  -t trading-paper-dashboard:local .
+mkdir -p "$HOME/.config/systemd/user"
+cp deploy/public-paper-dashboard.service "$HOME/.config/systemd/user/"
+systemctl --user daemon-reload
+systemctl --user enable --now public-paper-dashboard.service
+```
+
+Open `https://<dashboard-host-address>:8443` from an allowed LAN/VPN client and
+authenticate with the configured dashboard credentials. The process binds
+only to `DASHBOARD_BIND_HOST`; the application independently checks the
+request's source IP against every configured CIDR and ignores forwarded-IP
+headers. Keep network routing/firewall policy restricted as well. Inspect the
+service with `systemctl --user status public-paper-dashboard.service` and
+`journalctl --user -u public-paper-dashboard.service`. Dashboard values are
+read-only observations; missing legacy cost data is shown as unavailable rather
+than as zero.
+
 Optional private `~/trading-hailo-public-paper/report.env` settings for the
 wrapper: `PUBLIC_PAPER_DIR`, `PUBLIC_PAPER_REPORT_DIR`,
 `PUBLIC_PAPER_LOG`, `PUBLIC_PAPER_LOG_TIMEZONE`, `PYTHON_BIN`, and

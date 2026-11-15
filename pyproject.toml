@@ -111,6 +111,7 @@ include = [
     "requirements-pi.txt",
     "requirements-hailo-server.txt",
     "requirements-hailo-shadow.txt",
+    "requirements-dashboard.txt",
     ".env.example",
     ".env.live.example",
     ".dockerignore",

@@ -83,6 +83,11 @@ git config core.hooksPath .githooks
 
 Weekly decision automation is separated in `.github/workflows/weekly-scorecard.yml`.
 
+An optional read-only paper dashboard is documented in
+[SERVER_README.md](./SERVER_README.md). It requires HTTPS, HTTP Basic
+authentication, and an operator-configured private CIDR allowlist; network
+ranges and credentials belong only in the private deployment environment.
+
 ## Project structure
 
 | File | Purpose |
