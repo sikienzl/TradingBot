@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HOST="${1:-siegfried@192.168.62.87}"
+HOST="${1:-${TRADING_HOST:-}}"
+if [[ -z "$HOST" ]]; then
+  echo "Set TRADING_HOST or pass a trading@host destination." >&2
+  exit 2
+fi
 COIN="${2:-${SIGNAL_COIN:-VVV}}"
 LOG_PATH="${SIGNAL_LOG_PATH:-/opt/trading_2/logs/bot.log}"
 

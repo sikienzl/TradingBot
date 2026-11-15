@@ -86,8 +86,8 @@ Reports are written to:
 
 ## Hailo-8 Remote Inference (Optional)
 
-The trading bot stays on `192.168.62.74`; the Hailo-8 service is intended to
-run separately on `192.168.62.75`. This setup does not move exchange
+The trading bot stays on the bot host; the Hailo-8 service runs separately on
+the configured Hailo host. This setup does not move exchange
 credentials to the accelerator host. CatBoost remains the default backend.
 The current deployment is an isolated **simulation-only shadow bot**, not a
 replacement for the existing bot containers. The Hailo runtime host has
@@ -112,13 +112,14 @@ described below:
 - The commands below use `rtk` where they are executed. The current Raspberry
   Pis do not have `rtk` installed; from a host with RTK, invoke the equivalent
   command on the appropriate Pi through `rtk proxy ssh <host> ...` instead.
-- `.75`: `~siegfried/trading-hailo-dryrun` holds the inference code, virtual
+- Hailo host: `~trading/trading-hailo-dryrun` holds the inference code, virtual
   environment, private `service.env`, and the matching `model/hailo_model.hef`
   and `model/metadata.json`. The enabled user unit
   `trading-hailo-dryrun.service` listens only on `127.0.0.1:18001`.
-- `.74`: `trading-hailo-tunnel.service` forwards its localhost port 18001
-  through SSH to `.75`; `trading-hailo-shadow-dryrun` uses host networking and
-  writes its own state and journal under `~siegfried/trading-hailo-shadow/data`.
+- Bot host: `trading-hailo-tunnel.service` forwards its localhost port 18001
+  through SSH to the Hailo host; `trading-hailo-shadow-dryrun` uses host
+  networking and writes its own state and journal under
+  `~trading/trading-hailo-shadow/data`.
   It runs with `DRY_RUN=true`, `SIMULATE_DATA=true` and `SIMULATION_REGIME=mixed`.
   The current shadow portfolio was initialized once from Kraken's available
   EUR balance; subsequent runs restore its saved simulated state without
@@ -126,7 +127,7 @@ described below:
   explicitly configured otherwise.
 - Both nodes need systemd user lingering. The separate cluster Ansible
   repository configures this; otherwise an administrator can enable it for
-  the service user with `sudo loginctl enable-linger siegfried`.
+  the service user with `sudo loginctl enable-linger trading`.
 
 The model was trained on public Kraken hourly data for ten markets and is for
 simulation research only. In an ONNX-versus-Hailo test of 1,320 validation
@@ -137,7 +138,7 @@ token are stored in Git. For exact recovery, securely back up the matching HEF,
 metadata and input data outside Git; training again on newer market data will
 produce a different model.
 
-#### Restore the user service on `.75`
+#### Restore the user service on the Hailo host
 
 The following assumes a repository checkout on the host. Do not overwrite an
 existing deployment without backing it up. Place the validated matching HEF
@@ -156,8 +157,8 @@ rtk proxy cp deploy/trading-hailo-dryrun.service ~/.config/systemd/user/
 Create `~/trading-hailo-dryrun/service.env` with mode `0600`, containing
 `HAILO_HEF_PATH` and `HAILO_METADATA_PATH` as absolute paths to those artifacts,
 and `HAILO_API_TOKEN` as a long random secret. The exact same token must be
-stored in the shadow env file on `.74` over a trusted encrypted channel; do not
-put it in Git, command arguments, or logs. Then:
+stored in the shadow env file on the bot host over a trusted encrypted channel;
+do not put it in Git, command arguments, or logs. Then:
 
 ```sh
 rtk proxy systemctl --user daemon-reload
@@ -165,21 +166,22 @@ rtk proxy systemctl --user enable --now trading-hailo-dryrun.service
 rtk proxy curl --fail --silent --show-error http://127.0.0.1:18001/health
 ```
 
-#### Restore the restricted tunnel on `.74`
+#### Restore the restricted tunnel on the bot host
 
 Create `~/trading-hailo-shadow` with mode `0700`. Generate a dedicated
 `tunnel_ed25519` SSH key there; do not overwrite an existing key. Obtain and
-verify `.75`'s ED25519 host-key fingerprint through a trusted channel, then
-store its public host key in `~/trading-hailo-shadow/known_hosts`. On `.75`,
-add only the tunnel public key to the service user's `~/.ssh/authorized_keys`
-with this restriction prefix:
+verify the Hailo host's ED25519 host-key fingerprint through a trusted channel,
+then store its public host key in `~/trading-hailo-shadow/known_hosts`. On the
+Hailo host, add only the tunnel public key to the `trading` user's
+`~/.ssh/authorized_keys` with this restriction prefix:
 
 ```text
 restrict,port-forwarding,permitopen="127.0.0.1:18001",command="/bin/false" ssh-ed25519 <public-key>
 ```
 
-The private key must never leave `.74`. The unit is configured for the current
-user `siegfried` and host `.75`; adjust those values for another cluster.
+Create `~/trading-hailo-shadow/tunnel.env` with mode `0600` and set
+`HAILO_SSH_HOST` to the Hailo host's DNS name or IP address. The unit always
+connects as `trading`. The private key must never leave the bot host.
 
 ```sh
 rtk proxy cp deploy/trading-hailo-tunnel.service ~/.config/systemd/user/
@@ -188,7 +190,7 @@ rtk proxy systemctl --user enable --now trading-hailo-tunnel.service
 rtk proxy curl --fail --silent --show-error http://127.0.0.1:18001/health
 ```
 
-#### Restore the isolated shadow container on `.74`
+#### Restore the isolated shadow container on the bot host
 
 The repository's `docker/hailo-shadow.Dockerfile` is a standalone rebuild path
 for the same application and configuration. It does not require the
@@ -409,9 +411,9 @@ the export metadata and refuses to replace existing outputs without
 retrained to use this calibration tool.
 
 The exporter writes `trading_mlp.onnx` and `metadata.json`. It does not create
-a HEF. The compiler does not need to be installed on `.75`: compile on an
-x86-64 SDK host, then place the resulting `trading_mlp.hef` and its matching
-metadata on `.75`.
+a HEF. The compiler does not need to be installed on the Hailo host: compile on
+an x86-64 SDK host, then place the resulting `trading_mlp.hef` and its matching
+metadata on the Hailo host.
 
 The local development host has a `trading-hailo-compiler:3.34.0` Docker image
 with DFC 3.34.0 and HailoRT CLI 4.24.0. Its
@@ -475,17 +477,17 @@ rtk proxy docker run --rm --network none \
 The wrapper refuses to overwrite an existing HEF. The smoke test with 64
 synthetic calibration samples and no GPU used DFC's reduced optimization level;
 DFC warned that this is not recommended for production. The particular model
-in the current shadow deployment was also checked on `.75` with HailoRT 4.23.0
-against its ONNX output, as described above. For every newly compiled model,
+in the current shadow deployment was also checked on the Hailo host with
+HailoRT 4.23.0 against its ONNX output, as described above. For every newly compiled model,
 repeat the hardware and numerical validation, including tensor shapes,
 normalization contract, and output logits, before deployment.
 No live trading or profitability should be inferred from export-time validation
 metrics.
 
-### Install the service on `.75`
+### Install the service on the Hailo host
 
 Install the repository files under `/opt/trading_hailo`, keeping the model
-artifacts readable by the `siegfried` service account. Use the host-installed
+artifacts readable by the `trading` service account. Use the host-installed
 HailoRT Python bindings and NumPy through a system-site-packages virtual
 environment:
 
@@ -501,7 +503,11 @@ Create `/etc/trading-hailo.env` with mode `0600` and a long random token:
 HAILO_HEF_PATH=/opt/trading_hailo/model/trading_mlp.hef
 HAILO_METADATA_PATH=/opt/trading_hailo/model/metadata.json
 HAILO_API_TOKEN=<long-random-secret>
+HAILO_BIND_HOST=<hailo-host-ip>
 ```
+
+`HAILO_BIND_HOST` should be the Hailo host's private network interface address.
+If omitted, the service binds to loopback only.
 
 Install and start the supplied service unit only after the HEF and metadata
 exist:
@@ -513,23 +519,26 @@ sudo systemctl enable --now hailo-inference.service
 sudo systemctl status hailo-inference.service
 ```
 
-The unit binds to `192.168.62.75:8001`; restrict inbound TCP/8001 to the bot
-host (`192.168.62.74`) with the host/network firewall. The bearer token is sent
-over HTTP and is not encrypted, so do not expose this service outside a trusted
+The unit binds to the configured Hailo host address on port 8001; restrict
+inbound TCP/8001 to the bot host with the host/network firewall. The bearer
+token is sent over HTTP and is not encrypted, so do not expose this service outside a trusted
 private network. The unauthenticated health route should also remain network
 restricted. Check service logs with `sudo journalctl -u hailo-inference.service`.
 
 ### Enable on the bot host only after validation
 
-In `/opt/trading_2/.env` on `.74`, set:
+In `/opt/trading_2/.env` on the bot host, set:
 
 ```sh
 USE_TABULAR_MODEL=true
 TABULAR_MODEL_BACKEND=hailo
-HAILO_SERVICE_URL=http://192.168.62.75:8001
+HAILO_SERVICE_URL=http://hailo-host:8001
 HAILO_API_TOKEN=<same-long-random-secret>
 HAILO_TIMEOUT_SECONDS=3
 ```
+
+Replace `hailo-host` with the Hailo host's private IP address or resolvable
+hostname.
 
 Keep the existing risk guards enabled and first run in simulation/dry-run.
 Remote inference errors fail closed for entries on the affected coin and are

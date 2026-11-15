@@ -111,12 +111,12 @@ def test_remote_predictor_sends_features_and_validates_response(monkeypatch):
 
     monkeypatch.setattr("src.predict_hailo_remote.urlopen", fake_urlopen)
     predictor = HailoRemotePredictor(
-        "http://192.168.62.75:8001", "test-token", timeout_seconds=2.0
+        "http://127.0.0.1:8001", "test-token", timeout_seconds=2.0
     )
     result = predictor.predict(pd.DataFrame([{"rsi": 55.0}]), 0.55)
 
     request = captured["request"]
-    assert request.full_url == "http://192.168.62.75:8001/predict/hailo"
+    assert request.full_url == "http://127.0.0.1:8001/predict/hailo"
     assert request.get_header("Authorization") == "Bearer test-token"
     assert json.loads(request.data) == {
         "features": {"rsi": 55.0},

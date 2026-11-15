@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PI_HOST=${PI_HOST:-siegfried@192.168.62.87}
+PI_HOST=${PI_HOST:-${TRADING_HOST:-}}
 PI_APP_DIR=${PI_APP_DIR:-/opt/trading_2}
 PI_SERVICE_USER=${PI_SERVICE_USER:-trading}
 PI_PYTHON=${PI_PYTHON:-$PI_APP_DIR/.venv/bin/python}
@@ -15,6 +15,11 @@ run_local() {
 if [[ "$PI_HOST" == "local" || "$PI_HOST" == "localhost" ]]; then
     run_local "$@"
     exit 0
+fi
+
+if [[ -z "$PI_HOST" ]]; then
+    echo "Set PI_HOST or TRADING_HOST to a trading@host destination (or use PI_HOST=local)." >&2
+    exit 2
 fi
 
 ssh "$PI_HOST" bash -s -- \

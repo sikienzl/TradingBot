@@ -913,7 +913,7 @@ class BotConfig:
             raise ValueError(
                 "TABULAR_MODEL_BACKEND must be 'catboost' or 'hailo'")
         self.hailo_service_url = os.getenv(
-            'HAILO_SERVICE_URL', 'http://192.168.62.75:8001').strip()
+            'HAILO_SERVICE_URL', 'http://127.0.0.1:8001').strip()
         self.hailo_api_token = os.getenv('HAILO_API_TOKEN', '').strip()
         self.hailo_timeout_seconds = float(
             os.getenv('HAILO_TIMEOUT_SECONDS', str(3.0)))

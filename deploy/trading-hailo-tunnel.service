@@ -4,7 +4,8 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/bin/ssh -F /dev/null -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%h/trading-hailo-shadow/known_hosts -o IdentitiesOnly=yes -i %h/trading-hailo-shadow/tunnel_ed25519 -L 127.0.0.1:18001:127.0.0.1:18001 siegfried@192.168.62.75
+EnvironmentFile=%h/trading-hailo-shadow/tunnel.env
+ExecStart=/usr/bin/ssh -F /dev/null -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%h/trading-hailo-shadow/known_hosts -o IdentitiesOnly=yes -i %h/trading-hailo-shadow/tunnel_ed25519 -L 127.0.0.1:18001:127.0.0.1:18001 trading@${HAILO_SSH_HOST}
 Restart=always
 RestartSec=5
 NoNewPrivileges=true

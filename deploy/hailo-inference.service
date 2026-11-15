@@ -5,12 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=siegfried
-Group=siegfried
+User=trading
+Group=trading
 WorkingDirectory=/opt/trading_hailo
 EnvironmentFile=/etc/trading-hailo.env
 Environment=PYTHONPATH=/opt/trading_hailo:/usr/lib/python3/dist-packages
-ExecStart=/opt/trading_hailo/.venv/bin/uvicorn src.hailo_service:app --host 192.168.62.75 --port 8001
+ExecStart=/opt/trading_hailo/.venv/bin/python -m src.hailo_service
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

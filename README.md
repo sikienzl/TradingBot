@@ -73,6 +73,13 @@ GitHub Actions pipeline in `.github/workflows/ci.yml` runs on push and pull requ
 - Lint gate: `ruff check` with annotations in GitHub Checks
 - Test gate: `pytest` with JUnit XML (`pytest-report.xml`) and artifact upload
 - Explicit gate steps fail the job when lint/tests are not green
+- Deployment check: rejects personal service accounts and hard-coded host IPs
+
+Enable the matching local pre-commit hook once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
 
 Weekly decision automation is separated in `.github/workflows/weekly-scorecard.yml`.
 
@@ -301,8 +308,8 @@ command-line entry point.
 ### Optional Hailo-8 inference
 
 The bot can use a separate Hailo-8 inference service without moving trading or
-exchange credentials off the bot host. In the current cluster, the bot remains
-on `192.168.62.74` and the Hailo service is intended for `192.168.62.75`.
+exchange credentials off the bot host. Configure the bot and Hailo service host
+addresses for your own network.
 CatBoost remains the default backend; no Hailo model is enabled by default.
 
 The exporter trains a small tabular MLP and creates ONNX plus a strict
@@ -398,7 +405,7 @@ All parameters are set via `.env` (see `.env.example` for the full list). Key va
 | `TICKER_FETCH_RETRIES` | `2` | Retries per ticker batch on exchange/network errors |
 | `USE_TABULAR_MODEL` | `true` | Enable tabular-model signal filter |
 | `TABULAR_MODEL_BACKEND` | `catboost` | Tabular backend: local `catboost` or remote `hailo` |
-| `HAILO_SERVICE_URL` | `http://192.168.62.75:8001` | Remote Hailo inference endpoint |
+| `HAILO_SERVICE_URL` | `http://127.0.0.1:8001` | Hailo inference endpoint; set the host address when using a separate server |
 | `HAILO_API_TOKEN` | unset | Required bearer token when Hailo is enabled |
 | `HAILO_TIMEOUT_SECONDS` | `3` | Maximum remote inference request time |
 | `TABULAR_MIN_CONFIDENCE` | `0.45` | Minimum tabular-model confidence required for non-HOLD signal |
