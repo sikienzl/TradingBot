@@ -90,6 +90,13 @@ def test_dashboard_requires_https_and_authentication(client):
     assert "setInterval(updateClock,1000)" in page.text
     assert "hour:'2-digit',minute:'2-digit',second:'2-digit'" in page.text
     assert 'id="clock-hour"' not in page.text
+    assert 'id="language-de"' in page.text
+    assert 'id="language-en"' in page.text
+    assert "Next update in" in page.text
+    assert "Aktualisierung in" in page.text
+    assert "paper-dashboard-language" in page.text
+    assert "setInterval(updateCountdown,1000)" in page.text
+    assert "setTimeout(refresh,REFRESH_INTERVAL_MS)" in page.text
 
     response = client.get("/", auth=("viewer", "wrong-password"))
     assert response.status_code == 401

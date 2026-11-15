@@ -444,6 +444,10 @@ DASHBOARD_HTML = """<!doctype html>
     header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:20px}
     .header-tools{display:flex;align-items:center;gap:16px}
     .clock{min-width:82px;color:#e8edf5;font-size:1.05rem;font-variant-numeric:tabular-nums;font-weight:650;letter-spacing:.04em}
+    .refresh-countdown{color:#90a0b7;font-size:.82rem;font-variant-numeric:tabular-nums;white-space:nowrap}
+    .language-switch{display:flex;gap:4px;padding:3px;border:1px solid #26354d;border-radius:8px}
+    .language-switch button{border:0;border-radius:5px;padding:5px 8px;color:#90a0b7;background:transparent;font:inherit;font-size:.78rem;cursor:pointer}
+    .language-switch button[aria-pressed="true"]{color:#e8edf5;background:#26354d}
     h1{font-size:1.55rem;margin:0}h2{font-size:1rem;margin:0 0 14px;color:#c5d2e5}
     .status{color:#8ce0b1;font-size:.88rem}.muted{color:#90a0b7;font-size:.82rem}
     .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:12px;margin-bottom:16px}
@@ -456,31 +460,61 @@ DASHBOARD_HTML = """<!doctype html>
     th{color:#91a2ba;font-weight:500}td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
     .table-wrap{overflow:auto}.pills{display:flex;gap:8px;flex-wrap:wrap}
     .pill{background:#1b2b42;border-radius:999px;padding:7px 10px;font-size:.82rem}
-    @media(max-width:720px){body{padding:14px}.columns{grid-template-columns:1fr}header{align-items:flex-start;flex-direction:column}td,th{white-space:nowrap}}
+    @media(max-width:720px){body{padding:14px}.columns{grid-template-columns:1fr}header{align-items:flex-start;flex-direction:column}.header-tools{gap:9px;flex-wrap:wrap}td,th{white-space:nowrap}}
   </style>
 </head>
 <body>
-  <header><div><h1>Paper Trading</h1><div class="muted">Nur Anzeige · keine Order-Steuerung</div></div><div class="header-tools"><div id="updated" class="status">Lade Daten …</div><time id="local-clock" class="clock" aria-label="Lokale Uhrzeit">--:--:--</time></div></header>
+  <header><div><h1>Paper Trading</h1><div class="muted" data-i18n="readonly">Nur Anzeige · keine Order-Steuerung</div></div><div class="header-tools"><div id="updated" class="status">Aktualisiert: —</div><span id="refresh-countdown" class="refresh-countdown" role="timer" aria-live="off"></span><time id="local-clock" class="clock" aria-label="Lokale Uhrzeit">--:--:--</time><div class="language-switch" role="group" aria-label="Sprache"><button id="language-de" type="button" aria-pressed="true">DE</button><button id="language-en" type="button" aria-pressed="false">EN</button></div></div></header>
   <div id="metrics" class="grid"></div>
   <div class="columns">
-    <section><h2>Netto-PnL je UTC-Tag</h2><svg id="chart" class="chart" viewBox="0 0 700 220" role="img" aria-label="Netto-PnL der letzten 14 Tage"></svg></section>
-    <section><h2>Offene Positionen</h2><div id="positions" class="table-wrap"></div><h2 style="margin-top:20px">Filter und Feed</h2><div id="filters" class="pills"></div></section>
+    <section><h2 data-i18n="dailyPnl">Netto-PnL je UTC-Tag</h2><svg id="chart" class="chart" viewBox="0 0 700 220" role="img" aria-label="Netto-PnL der letzten 14 Tage"></svg></section>
+    <section><h2 data-i18n="openPositions">Offene Positionen</h2><div id="positions" class="table-wrap"></div><h2 style="margin-top:20px" data-i18n="filtersFeed">Filter und Feed</h2><div id="filters" class="pills"></div></section>
   </div>
-  <section><h2>Letzte Paper-Ereignisse</h2><div id="events" class="table-wrap"></div></section>
+  <section><h2 data-i18n="recentEvents">Letzte Paper-Ereignisse</h2><div id="events" class="table-wrap"></div></section>
   <script>
-    const fmt=(n,c='EUR')=>n===null||n===undefined?'n/a':new Intl.NumberFormat('de-DE',{style:'currency',currency:c,maximumFractionDigits:2}).format(n);
+    const REFRESH_INTERVAL_MS=15000;
+    const translations={
+      de:{readonly:'Nur Anzeige · keine Order-Steuerung',dailyPnl:'Netto-PnL je UTC-Tag',openPositions:'Offene Positionen',filtersFeed:'Filter und Feed',recentEvents:'Letzte Paper-Ereignisse',cash:'Verfügbares Cash',initialValue:'Startwert',todayPnl:'Netto-PnL heute',weekPnl:'Netto-PnL · 7 Tage',weekSells:'Verkaufsereignisse · 7 Tage',fees:'Gebühren heute',slippage:'Slippage heute',iteration:'Iteration',asset:'Asset',amount:'Menge',investment:'Einsatz',entry:'Einstieg',noneOpen:'Keine offenen Trades',atrFilter:'ATR-Filter',sellVeto:'Hailo-SELL-Veto',hailoErrors:'Hailo-Fehler',holdings:'Holdings',lastEvent:'Letztes Journal-Ereignis',timeUtc:'Zeit (UTC)',action:'Aktion',netPnl:'Netto-PnL',noEvents:'Noch keine Journal-Ereignisse',pnlUnavailable:'Netto-PnL nicht verfügbar',updated:'Aktualisiert',portfolioAt:'Portfolio-Stand',unavailable:'nicht verfügbar',refreshIn:'Aktualisierung in',seconds:'s',dashboardUnavailable:'Dashboard-Daten nicht erreichbar',buy:'Kauf',sell:'Verkauf',language:'Sprache',localTime:'Lokale Uhrzeit'},
+      en:{readonly:'Read-only · no order controls',dailyPnl:'Net PnL by UTC day',openPositions:'Open positions',filtersFeed:'Filters and feed',recentEvents:'Recent paper events',cash:'Available cash',initialValue:'Starting value',todayPnl:'Net PnL today',weekPnl:'Net PnL · 7 days',weekSells:'Sell events · 7 days',fees:'Fees today',slippage:'Slippage today',iteration:'Iteration',asset:'Asset',amount:'Amount',investment:'Invested',entry:'Entry',noneOpen:'No open trades',atrFilter:'ATR filter',sellVeto:'Hailo SELL veto',hailoErrors:'Hailo errors',holdings:'Holdings',lastEvent:'Last journal event',timeUtc:'Time (UTC)',action:'Action',netPnl:'Net PnL',noEvents:'No journal events yet',pnlUnavailable:'Net PnL unavailable',updated:'Updated',portfolioAt:'Portfolio as of',unavailable:'unavailable',refreshIn:'Next update in',seconds:'s',dashboardUnavailable:'Dashboard data unavailable',buy:'Buy',sell:'Sell',language:'Language',localTime:'Local time'}
+    };
+    let locale='de';
+    try{const saved=localStorage.getItem('paper-dashboard-language');if(saved==='de'||saved==='en')locale=saved}catch(e){console.warn('Language preference could not be loaded',e)}
+    let nextRefreshAt=Date.now()+REFRESH_INTERVAL_MS;
+    const t=key=>translations[locale][key];
+    const fmt=(n,c='EUR')=>n===null||n===undefined?'—':new Intl.NumberFormat(locale==='de'?'de-DE':'en-US',{style:'currency',currency:c,maximumFractionDigits:2}).format(n);
     const esc=(s)=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const cls=n=>n===null||n===undefined?'neutral':n<0?'negative':n>0?'positive':'neutral';
     function metric(label,value,color='neutral'){return `<div class="card"><div class="label">${label}</div><div class="value ${color}">${value}</div></div>`}
     function updateClock(){
-      document.getElementById('local-clock').textContent=new Intl.DateTimeFormat('de-DE',{
+      const clock=document.getElementById('local-clock'),now=new Date();
+      clock.textContent=new Intl.DateTimeFormat(locale==='de'?'de-DE':'en-US',{
         hour:'2-digit',minute:'2-digit',second:'2-digit'
-      }).format(new Date());
+      }).format(now);
+      clock.setAttribute('aria-label',`${t('localTime')}: ${clock.textContent}`);
+    }
+    function updateCountdown(){
+      const remaining=Math.max(0,Math.ceil((nextRefreshAt-Date.now())/1000));
+      document.getElementById('refresh-countdown').textContent=`${t('refreshIn')} ${remaining}${t('seconds')}`;
+    }
+    function updateLanguage(){
+      document.documentElement.lang=locale;
+      document.querySelectorAll('[data-i18n]').forEach(node=>{node.textContent=t(node.dataset.i18n)});
+      document.getElementById('language-de').setAttribute('aria-pressed',String(locale==='de'));
+      document.getElementById('language-en').setAttribute('aria-pressed',String(locale==='en'));
+      document.querySelector('.language-switch').setAttribute('aria-label',t('language'));
+      if(!window.dashboardData)document.getElementById('updated').textContent=`${t('updated')}: —`;
+      updateClock();updateCountdown();
+    }
+    function setLanguage(value){
+      locale=value;
+      try{localStorage.setItem('paper-dashboard-language',locale)}catch(e){console.warn('Language preference could not be saved',e)}
+      updateLanguage();
+      if(window.dashboardData)render(window.dashboardData);
     }
     function drawChart(points){
       const svg=document.getElementById('chart'), w=700,h=220,p=34;
       const values=points.map(x=>x.net_pnl).filter(x=>x!==null);
-      if(!values.length){svg.innerHTML='<text x="20" y="35">Netto-PnL nicht verfügbar</text>';return}
+      if(!values.length){svg.innerHTML=`<text x="20" y="35">${t('pnlUnavailable')}</text>`;return}
       const min=Math.min(0,...values),max=Math.max(0,...values),span=max-min||1;
       const y=v=>p+(max-v)/span*(h-p*2),zero=y(0),step=(w-p*2)/Math.max(1,points.length-1);
       const bars=points.map((x,i)=>{const v=x.net_pnl;if(v===null)return '';const yy=y(v),top=Math.min(yy,zero),height=Math.max(2,Math.abs(zero-yy));return `<rect x="${p+i*step-8}" y="${top}" width="16" height="${height}" rx="3" fill="${v<0?'#ff8585':'#72db9d'}"><title>${esc(x.date)}: ${fmt(v)}</title></rect>`}).join('');
@@ -488,30 +522,33 @@ DASHBOARD_HTML = """<!doctype html>
       svg.innerHTML=`<line x1="${p}" y1="${zero}" x2="${w-p}" y2="${zero}" stroke="#52647e"/>${bars}${labels}`;
     }
     function render(d){
+      window.dashboardData=d;
       const c=d.portfolio.base_currency,a=d.activity;
       document.getElementById('metrics').innerHTML=[
-        metric('Verfügbares Cash',fmt(d.portfolio.cash,c)),
-        metric('Startwert',fmt(d.portfolio.initial_value,c)),
-        metric('Netto-PnL heute',fmt(a.today_net_pnl,c),cls(a.today_net_pnl)),
-        metric('Netto-PnL · 7 Tage',fmt(a.week_net_pnl,c),cls(a.week_net_pnl)),
-        metric('Verkaufsereignisse · 7 Tage',a.week_sell_events),
-        metric('Gebühren heute',fmt(a.today_fees,c)),
-        metric('Slippage heute',fmt(a.today_slippage,c)),
-        metric('Iteration',d.portfolio.iteration??'n/a')
+        metric(t('cash'),fmt(d.portfolio.cash,c)),
+        metric(t('initialValue'),fmt(d.portfolio.initial_value,c)),
+        metric(t('todayPnl'),fmt(a.today_net_pnl,c),cls(a.today_net_pnl)),
+        metric(t('weekPnl'),fmt(a.week_net_pnl,c),cls(a.week_net_pnl)),
+        metric(t('weekSells'),a.week_sell_events),
+        metric(t('fees'),fmt(a.today_fees,c)),
+        metric(t('slippage'),fmt(a.today_slippage,c)),
+        metric(t('iteration'),d.portfolio.iteration??'—')
       ].join('');
-      document.getElementById('updated').textContent='Portfolio-Stand: '+(d.state_timestamp||'unbekannt');
+      document.querySelector('#chart').setAttribute('aria-label',`${t('dailyPnl')} · 14 ${locale==='de'?'Tage':'days'}`);
       drawChart(d.daily_net_pnl);
       const pos=d.portfolio.positions;
-      document.getElementById('positions').innerHTML=pos.length?`<table><thead><tr><th>Asset</th><th class="num">Menge</th><th class="num">Einsatz</th><th>Einstieg</th></tr></thead><tbody>${pos.map(x=>`<tr><td>${esc(x.coin)}</td><td class="num">${x.amount_coin??'n/a'}</td><td class="num">${fmt(x.amount_base,c)}</td><td>${esc(x.timestamp)}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">Keine offenen Trades</div>';
+      document.getElementById('positions').innerHTML=pos.length?`<table><thead><tr><th>${t('asset')}</th><th class="num">${t('amount')}</th><th class="num">${t('investment')}</th><th>${t('entry')}</th></tr></thead><tbody>${pos.map(x=>`<tr><td>${esc(x.coin)}</td><td class="num">${x.amount_coin??'—'}</td><td class="num">${fmt(x.amount_base,c)}</td><td>${esc(x.timestamp)}</td></tr>`).join('')}</tbody></table>`:`<div class="muted">${t('noneOpen')}</div>`;
       const f=d.filters;
       document.getElementById('filters').innerHTML=[
-        `ATR-Filter: ${f.atr_guard??'n/a'}`,`Hailo-SELL-Veto: ${f.tabular_sell_veto??'n/a'}`,`Hailo-Fehler: ${f.hailo_failures??'n/a'}`,
-        `Holdings: ${d.portfolio.holdings.length}`,`Letztes Journal-Ereignis: ${esc(d.last_journal_event||'keins')}`
+        `${t('atrFilter')}: ${f.atr_guard??'—'}`,`${t('sellVeto')}: ${f.tabular_sell_veto??'—'}`,`${t('hailoErrors')}: ${f.hailo_failures??'—'}`,
+        `${t('holdings')}: ${d.portfolio.holdings.length}`,`${t('lastEvent')}: ${esc(d.last_journal_event||'—')}`
       ].map(x=>`<span class="pill">${x}</span>`).join('');
-      document.getElementById('events').innerHTML=d.recent_events.length?`<table><thead><tr><th>Zeit (UTC)</th><th>Asset</th><th>Aktion</th><th class="num">Betrag</th><th class="num">Netto-PnL</th></tr></thead><tbody>${d.recent_events.map(x=>`<tr><td>${esc(x.timestamp)}</td><td>${esc(x.coin)}</td><td>${esc(x.action)}</td><td class="num">${fmt(x.amount_base,c)}</td><td class="num ${cls(x.net_pnl_base)}">${fmt(x.net_pnl_base,c)}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">Noch keine Journal-Ereignisse</div>';
+      document.getElementById('events').innerHTML=d.recent_events.length?`<table><thead><tr><th>${t('timeUtc')}</th><th>${t('asset')}</th><th>${t('action')}</th><th class="num">${t('amount')}</th><th class="num">${t('netPnl')}</th></tr></thead><tbody>${d.recent_events.map(x=>`<tr><td>${esc(x.timestamp)}</td><td>${esc(x.coin)}</td><td>${x.action==='buy'?t('buy'):x.action==='sell'?t('sell'):esc(x.action)}</td><td class="num">${fmt(x.amount_base,c)}</td><td class="num ${cls(x.net_pnl_base)}">${fmt(x.net_pnl_base,c)}</td></tr>`).join('')}</tbody></table>`:`<div class="muted">${t('noEvents')}</div>`;
     }
-    async function refresh(){try{const r=await fetch('/api/dashboard',{cache:'no-store'});if(!r.ok)throw new Error(`HTTP ${r.status}`);render(await r.json());document.getElementById('updated').textContent='Aktualisiert: '+new Date().toLocaleTimeString('de-DE')}catch(e){document.getElementById('updated').textContent='Dashboard-Daten nicht erreichbar';console.error(e)}}
-    updateClock();setInterval(updateClock,1000);refresh();setInterval(refresh,15000);
+    async function refresh(){try{const r=await fetch('/api/dashboard',{cache:'no-store'});if(!r.ok)throw new Error(`HTTP ${r.status}`);render(await r.json());document.getElementById('updated').textContent=`${t('updated')}: ${new Date().toLocaleTimeString(locale==='de'?'de-DE':'en-US')}`}catch(e){document.getElementById('updated').textContent=t('dashboardUnavailable');console.error(e)}finally{nextRefreshAt=Date.now()+REFRESH_INTERVAL_MS;updateCountdown();setTimeout(refresh,REFRESH_INTERVAL_MS)}}
+    document.getElementById('language-de').addEventListener('click',()=>setLanguage('de'));
+    document.getElementById('language-en').addEventListener('click',()=>setLanguage('en'));
+    updateLanguage();updateClock();updateCountdown();setInterval(updateClock,1000);setInterval(updateCountdown,1000);refresh();
   </script>
 </body>
 </html>"""
