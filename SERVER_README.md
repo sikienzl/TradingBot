@@ -367,6 +367,10 @@ environment keys. A genuine controlled comparison requires replaying the
 same recorded input and controlling all relevant settings; this tool does not
 provide that experiment.
 
+The regular report includes the completed previous UTC day and a separate
+current UTC day-to-now section. Passing `--date YYYY-MM-DD` explicitly reports
+only that completed UTC day, preserving historical comparisons.
+
 To schedule the previous UTC day at 00:10 UTC, install the **user** units
 `deploy/public-paper-daily-report.{service,timer}` into
 `~/.config/systemd/user/`, edit the service's `ExecStart` to this checkout's

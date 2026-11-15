@@ -652,7 +652,7 @@ class BotConfig:
         self.quote_currencies = [c.strip().upper() for c in os.getenv(
             'QUOTE_CURRENCIES', 'BTC,ETH').split(',') if c.strip()]
         configured_excluded_coins = {c.strip().upper() for c in os.getenv(
-            'EXCLUDED_COINS', 'USDC,USDT,EURT,DAI,TUSD,USDP,FDUSD,USDE').split(',') if c.strip()}
+            'EXCLUDED_COINS', 'USDC,USDT,EURT,EURC,DAI,TUSD,USDP,FDUSD,USDE').split(',') if c.strip()}
         lossmaker_excluded_coins = {c.strip().upper() for c in os.getenv(
             'LOSSMAKER_EXCLUDED_COINS', 'ZEC,HYPE,TON,BTC,XRP').split(',') if c.strip()}
         self.excluded_coins = configured_excluded_coins | lossmaker_excluded_coins
@@ -741,6 +741,8 @@ class BotConfig:
         self.sma_period_long = int(os.getenv('SMA_PERIOD_LONG', str(50)))
         # Minimum score for entries (HOLD (Up-Trend) also possible)
         self.min_entry_score = int(os.getenv('MIN_ENTRY_SCORE', str(60)))
+        # ATR/price is a volatility proxy for entry screening, not an expected return.
+        self.min_entry_atr_pct = float(os.getenv('MIN_ENTRY_ATR_PCT', str(0.012)))
         # If no classic BUY recommendation is available, still trade the strongest candidate
         self.enable_fallback_entry = _env_bool('ENABLE_FALLBACK_ENTRY', True)
         # Minimum score for fallback entries only (can be lower than MIN_ENTRY_SCORE)
@@ -3659,6 +3661,22 @@ class CryptoTradingBot:
 
         return True, 'ok'
 
+    def _entry_volatility_guard(self, coin_data: dict) -> tuple[bool, str]:
+        """Screens entries by ATR(14)/price, a volatility proxy rather than a return estimate."""
+        minimum = self.config.min_entry_atr_pct
+        if minimum <= 0:
+            return True, 'disabled'
+
+        try:
+            atr_pct = float(coin_data.get('atr_pct'))
+        except (TypeError, ValueError):
+            atr_pct = float('nan')
+        if not math.isfinite(atr_pct):
+            return False, 'atr_pct_unavailable'
+        if atr_pct < minimum:
+            return False, f'atr_pct_below_minimum ({atr_pct:.5f} < {minimum:.5f})'
+        return True, 'ok'
+
     def _entry_market_mode(self, market_analysis: dict[str, dict]) -> str:
         """Classifies the market to suppress aggressive entry filling in weak environments."""
         if not market_analysis:
@@ -4076,7 +4094,14 @@ class CryptoTradingBot:
         tab_buy_proba = None
         tab_hold_proba = None
         tab_sell_proba = None
+        tabular_sell_veto = False
         macd_hist = None
+        atr_14 = float(self._calculate_atr(ohlcv_df, 14))
+        atr_pct = (
+            atr_14 / current_price
+            if math.isfinite(atr_14) and math.isfinite(current_price) and current_price > 0
+            else None
+        )
 
         rule_recommendation = recommendation
         rule_score = score
@@ -4201,7 +4226,7 @@ class CryptoTradingBot:
                     'ema_20': _ema20,
                     'ema_50': _ema50,
                     'ema_200': _ema200,
-                    'atr_14': float(self._calculate_atr(ohlcv_df, 14)) if n >= 15 else 0.0,
+                    'atr_14': atr_14 if math.isfinite(atr_14) else 0.0,
                     'stoch_k': _stoch_k,
                     'stoch_d': _stoch_d,
                     'cci_20': _cci,
@@ -4229,13 +4254,19 @@ class CryptoTradingBot:
                     f"  📊 {model_name} for {coin}: {tab_decision.upper()} "
                     f"(Confidence: {tab_confidence*100:.0f}%, Proba: {tab_proba})")
 
-                # Safety filter: block new entries even on rules-BUYs
-                # if the tabular model sees a high-probability sell signal.
+                # A decisive tabular SELL is a separate veto; HOLD or low-confidence
+                # predictions are not treated as sell evidence.
                 if (
                     self.config.tabular_block_on_sell
+                    and tab_decision == 'verkaufen'
+                    and tab_confidence >= max(
+                        self.config.tabular_min_confidence,
+                        self.config.tabular_sell_block_min_proba,
+                    )
                     and tab_sell_proba >= self.config.tabular_sell_block_min_proba
                     and recommendation in ['HOLD', 'HOLD (Up-Trend)', 'HOLD (Down-Trend)', 'BUY', 'STRONG BUY']
                 ):
+                    tabular_sell_veto = True
                     recommendation = 'WEAK SELL'
                     score = min(score, 25)
                     signal_source = self.config.tabular_model_backend
@@ -4251,6 +4282,22 @@ class CryptoTradingBot:
                     tab_decision=tab_decision,
                     tab_confidence=tab_confidence,
                 )
+                if (
+                    self.config.tabular_block_on_sell
+                    and tab_decision == 'verkaufen'
+                    and rule_recommendation in ['BUY', 'STRONG BUY']
+                    and not tabular_sell_veto
+                ):
+                    should_apply = False
+                    gate_reason = 'sell_below_entry_veto_threshold'
+                    logger.info(
+                        "  🛡️ %s sell signal below entry-veto threshold for %s; "
+                        "preserving rule BUY (P(sell)=%.0f%%, threshold=%.0f%%)",
+                        model_name,
+                        coin,
+                        tab_sell_proba * 100,
+                        self.config.tabular_sell_block_min_proba * 100,
+                    )
                 required_confidence = self.config.tabular_buy_min_confidence if tab_decision == 'kaufen' else self.config.tabular_min_confidence
                 if tab_confidence >= required_confidence and not should_apply:
                     logger.info(
@@ -4288,6 +4335,7 @@ class CryptoTradingBot:
                     tab_sell_proba = 0.0
                     tab_hold_proba = 0.0
                     tab_buy_proba = 0.0
+                    tabular_sell_veto = False
                 else:
                     logger.warning(
                         f"CatBoost prediction for {coin} failed: {e}")
@@ -4308,6 +4356,9 @@ class CryptoTradingBot:
             'tabular_buy_proba': tab_buy_proba,
             'tabular_hold_proba': tab_hold_proba,
             'tabular_sell_proba': tab_sell_proba,
+            'tabular_sell_veto': tabular_sell_veto,
+            'atr_14': atr_14 if math.isfinite(atr_14) else None,
+            'atr_pct': atr_pct,
             'macd_hist': macd_hist,
         }
 
@@ -5118,6 +5169,52 @@ class CryptoTradingBot:
                                  'rules')).strip().lower()
                     return (str(coin).upper(), source) not in excluded_pairs
 
+                entry_guard_results: dict[str, bool] = {}
+
+                def _entry_guards_allow(
+                    coin: str,
+                    data: dict[str, Any],
+                    cache: dict[str, bool] = entry_guard_results,
+                ) -> bool:
+                    if coin in cache:
+                        return cache[coin]
+
+                    if data.get('tabular_sell_veto', False):
+                        logger.info(
+                            "⛔ Confident tabular SELL vetoed new entry for %s: "
+                            "P(sell)=%.3f",
+                            coin,
+                            float(data.get('tabular_sell_proba') or 0.0),
+                        )
+                        cache[coin] = False
+                        return False
+
+                    volatility_allowed, volatility_reason = (
+                        self._entry_volatility_guard(data)
+                    )
+                    if not volatility_allowed:
+                        minimum_atr_pct = self.config.min_entry_atr_pct
+                        if volatility_reason == 'atr_pct_unavailable':
+                            logger.warning(
+                                "⛔ Entry withheld for %s: ATR(14)/price volatility proxy "
+                                "is unavailable (minimum %.3f%%)",
+                                coin,
+                                minimum_atr_pct * 100,
+                            )
+                        else:
+                            logger.info(
+                                "⛔ Entry withheld for %s: ATR(14)/price volatility proxy "
+                                "%.3f%% is below minimum %.3f%%",
+                                coin,
+                                float(data['atr_pct']) * 100,
+                                minimum_atr_pct * 100,
+                            )
+                        cache[coin] = False
+                        return False
+
+                    cache[coin] = True
+                    return True
+
                 downtrend_filter_results = {
                     coin: self._passes_downtrend_reversal_filter(data)
                     for coin, data in market_analysis.items()
@@ -5135,6 +5232,7 @@ class CryptoTradingBot:
                     and data.get('recommendation') in ['STRONG BUY', 'BUY']
                     and data.get('score', 0) >= self.config.min_entry_score
                     and _entry_pair_allowed(coin, data)
+                    and _entry_guards_allow(coin, data)
                 ]
                 if recent_pnl_guard_active:
                     blocked_by_recent_guard = [
@@ -5169,6 +5267,7 @@ class CryptoTradingBot:
                     if coin not in occupied_positions
                     and coin not in top_buy_recommendations
                     if data.get('score', 0) >= self.config.fallback_min_score
+                    and _entry_guards_allow(coin, data)
                     and str(data.get('signal_source', 'rules')).strip().lower() not in degraded_entry_sources
                     and self._allows_entry_signal(
                         str(data.get('recommendation', '')),
@@ -5235,6 +5334,7 @@ class CryptoTradingBot:
                         if coin not in occupied_positions
                         and coin not in top_buy_recommendations
                         and data.get('score', 0) >= self.config.force_fill_min_score
+                        and _entry_guards_allow(coin, data)
                         and str(data.get('signal_source', 'rules')).strip().lower() not in degraded_entry_sources
                         and self._allows_entry_signal(
                             str(data.get('recommendation', '')),

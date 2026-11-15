@@ -254,6 +254,66 @@ def test_hailo_failure_suppresses_bot_entries(monkeypatch):
     assert result["signal_source"] == "hailo_unavailable"
 
 
+@pytest.mark.parametrize(
+    "decision,confidence,sell_proba,expected_veto",
+    [
+        ("verkaufen", 0.50, 0.50, True),
+        ("halten", 0.55, 0.55, False),
+        ("verkaufen", 0.49, 0.49, False),
+    ],
+)
+def test_confident_hailo_sell_is_distinct_entry_veto(
+    monkeypatch, decision, confidence, sell_proba, expected_veto
+):
+    monkeypatch.setenv("SIMULATE_DATA", "true")
+    monkeypatch.setenv("DRY_RUN", "true")
+    monkeypatch.setenv("USE_TABULAR_MODEL", "false")
+    monkeypatch.setenv("USE_ML_MODEL", "false")
+    monkeypatch.setenv("TABULAR_MODEL_BACKEND", "hailo")
+    monkeypatch.setenv("TABULAR_BLOCK_ON_SELL", "true")
+    monkeypatch.setenv("TABULAR_SELL_BLOCK_MIN_PROBA", "0.50")
+    monkeypatch.setenv("TABULAR_MIN_CONFIDENCE", "0.45")
+    monkeypatch.setenv("PERFORMANCE_LOG_ENABLED", "false")
+    bot = CryptoTradingBot(BotConfig())
+    bot.config.use_tabular_model = True
+    monkeypatch.setattr(
+        "src.trading_bot.get_rule_recommendation",
+        lambda *args: ("BUY", 75),
+    )
+
+    class Predictor:
+        def predict(self, *args, **kwargs):
+            return {
+                "decision": decision,
+                "confidence": confidence,
+                "proba": {
+                    "verkaufen": sell_proba,
+                    "halten": 0.25,
+                    "kaufen": 1.0 - sell_proba - 0.25,
+                },
+            }
+
+    bot.tabular_predictor = Predictor()
+    close = np.linspace(80.0, 120.0, bot.config.ohlcv_limit)
+    history = pd.DataFrame({
+        "open": close,
+        "high": close * 1.01,
+        "low": close * 0.99,
+        "close": close,
+        "volume": np.full(len(close), 1000.0),
+    })
+    bot._fetch_ohlcv_data = lambda *args, **kwargs: history
+
+    analysis = bot._analyze_coin("BTC", float(close[-1]))
+
+    assert analysis is not None
+    assert analysis["tabular_sell_veto"] is expected_veto
+    if expected_veto:
+        assert analysis["recommendation"] == "WEAK SELL"
+    else:
+        assert analysis["recommendation"] == "BUY"
+
+
 def test_bot_startup_does_not_log_hailo_token(monkeypatch, caplog):
     import logging
 

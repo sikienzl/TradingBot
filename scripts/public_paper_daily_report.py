@@ -20,6 +20,7 @@ from daily_dryrun_review import _parse_ts
 # Explicit allowlist: never copy credentials, tokens, service URLs or arbitrary env values.
 CONFIG_KEYS = (
     "DRY_RUN", "SIMULATE_DATA", "SIMULATION_REGIME", "BASE_CURRENCY",
+    "EXCLUDED_COINS", "MIN_ENTRY_ATR_PCT",
     "DRY_RUN_COSTS_ENABLED", "DRY_RUN_FEE_RATE", "DRY_RUN_SLIPPAGE_RATE",
     "CHECK_INTERVAL", "TOP_N_FOR_ANALYSIS", "USE_TABULAR_MODEL",
     "TABULAR_MODEL_BACKEND", "TABULAR_MIN_CONFIDENCE",
@@ -185,7 +186,8 @@ def main() -> int:
     args = parser.parse_args()
     if not args.compare_journal and any((args.compare_log, args.compare_container, args.compare_config)):
         parser.error("comparison inputs require --compare-journal")
-    day = args.date or (datetime.now(UTC).date() - timedelta(days=1))
+    now = datetime.now(UTC)
+    day = args.date or (now.date() - timedelta(days=1))
     start = datetime.combine(day, time.min, tzinfo=UTC)
     end = start + timedelta(days=1)
     try:
@@ -202,6 +204,18 @@ def main() -> int:
                 "Configuration is an operator-supplied snapshot; defaults, runtime overrides and changes are unknown.",
             ],
         }
+        if args.date is None:
+            current_start = datetime.combine(now.date(), time.min, tzinfo=UTC)
+            report["current_day_to_now"] = {
+                "window_utc": {
+                    "start_inclusive": current_start.isoformat(),
+                    "end_exclusive": now.isoformat(),
+                },
+                "observation": observation(
+                    args.journal, args.log, args.container, args.config, args.feed,
+                    current_start, now, timezone,
+                ),
+            }
         if args.compare_journal:
             comparison = observation(args.compare_journal, args.compare_log, args.compare_container,
                                      args.compare_config, args.compare_feed, start, end, timezone)

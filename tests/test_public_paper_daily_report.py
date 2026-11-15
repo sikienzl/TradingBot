@@ -94,6 +94,7 @@ def test_comparison_cli_reports_non_comparable_and_redacts_secrets(tmp_path):
         text=True, capture_output=True, check=True,
     )
     result = json.loads(completed.stdout)
+    assert "current_day_to_now" not in result
     assert result["comparison"]["status"] == "non-comparable"
     assert result["comparison"]["config_differences"]["SIMULATE_DATA"] == {
         "primary": "false", "comparison": "true"
@@ -101,6 +102,50 @@ def test_comparison_cli_reports_non_comparable_and_redacts_secrets(tmp_path):
     assert result["comparison"]["observation"]["feed_description_operator_supplied"] == "synthetic"
     assert result["primary"]["log"] is None
     assert "secret" not in completed.stdout
+
+
+def test_regular_report_includes_previous_day_and_current_day_to_now(
+    monkeypatch, tmp_path, capsys
+):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 6, 6, 12, tzinfo=UTC)
+
+    monkeypatch.setattr(report, "datetime", FixedDateTime)
+    journal = tmp_path / "journal.csv"
+    write_journal(journal, [
+        {"timestamp": "2026-06-05T12:00:00Z", "action": "sell",
+         "net_pnl_base": "1", "execution_cost_mode": "net_costs",
+         "entry_cost_mode": "net_costs"},
+        {"timestamp": "2026-06-06T10:00:00Z", "action": "sell",
+         "net_pnl_base": "2", "execution_cost_mode": "net_costs",
+         "entry_cost_mode": "net_costs"},
+        {"timestamp": "2026-06-06T12:00:00Z", "action": "sell",
+         "net_pnl_base": "3", "execution_cost_mode": "net_costs",
+         "entry_cost_mode": "net_costs"},
+    ])
+    config = tmp_path / "paper.env"
+    config.write_text(
+        "DRY_RUN=true\nHAILO_API_TOKEN=do-not-disclose\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "public_paper_daily_report.py", "--journal", str(journal),
+        "--config", str(config),
+    ])
+
+    assert report.main() == 0
+    output = capsys.readouterr().out
+    result = json.loads(output)
+
+    assert result["primary"]["journal"]["sell_events"] == 1
+    assert result["current_day_to_now"]["observation"]["journal"]["sell_events"] == 1
+    assert result["current_day_to_now"]["window_utc"] == {
+        "start_inclusive": "2026-06-06T00:00:00+00:00",
+        "end_exclusive": "2026-06-06T12:00:00+00:00",
+    }
+    assert "do-not-disclose" not in output
 
 
 def test_docker_log_errors_fail_report(monkeypatch):
@@ -133,4 +178,6 @@ def test_scheduled_wrapper_writes_private_report(tmp_path):
     result = json.loads(latest.read_text(encoding="utf-8"))
     assert result["primary"]["journal"]["buys"] == 0
     assert result["primary"]["log"]["parsed_lines_in_window"] == 0
+    assert result["current_day_to_now"]["observation"]["journal"]["buys"] == 0
+    assert result["current_day_to_now"]["observation"]["log"]["parsed_lines_in_window"] == 0
     assert latest.stat().st_mode & 0o077 == 0

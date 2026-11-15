@@ -180,6 +180,21 @@ investigation; do not delete the intent or edit the journal to force a restart.
 If recovery cannot complete, reconcile the portfolio and journal from trusted
 backups before resuming.
 
+New entries exclude `EURC` by default through `EXCLUDED_COINS`; overriding
+that list is configurable and does not liquidate existing holdings.
+`MIN_ENTRY_ATR_PCT=0.012` requires ATR(14)/price to be at least 1.2% for a
+new-entry candidate. This is a volatility proxy for screening, not an expected
+or guaranteed return; set it to `0` to disable the guard. If ATR data is
+unavailable, the candidate is withheld.
+
+With `TABULAR_BLOCK_ON_SELL=true`, a tabular prediction vetoes a new entry only
+when its decision is SELL and both its sell probability and confidence meet
+`TABULAR_SELL_BLOCK_MIN_PROBA` (0.50 in the paper example). A HOLD/HALTEN
+decision or a low-confidence prediction does not trigger the veto. To use
+Hailo for this filter, set `TABULAR_MODEL_BACKEND` to `hailo` and configure
+the Hailo service settings; otherwise the configured CatBoost backend remains
+in use.
+
 This protocol assumes filesystem support for durable file and directory
 `fsync` and atomic replacement. It cannot repair inconsistencies predating the
 protocol, and it does not transactionally persist analytics-database writes or

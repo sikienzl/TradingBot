@@ -36,7 +36,7 @@ class ReplaySettings:
     recent_pnl_guard_min_realized_pnl: float = 0.0
     timeframe_seconds: int = 3600
     excluded_coins: frozenset[str] = frozenset({
-        "USDC", "USDT", "EURT", "DAI", "TUSD", "USDP", "FDUSD", "USDE",
+        "USDC", "USDT", "EURT", "EURC", "DAI", "TUSD", "USDP", "FDUSD", "USDE",
         "ZEC", "HYPE", "TON", "BTC", "XRP",
     })
 

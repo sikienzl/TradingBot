@@ -926,6 +926,27 @@ def test_lossmaker_exclusions_are_merged_into_excluded_coins(monkeypatch):
             "XRP"}.issubset(config.excluded_coins)
 
 
+def test_default_entry_exclusion_and_atr_volatility_guard(monkeypatch):
+    monkeypatch.setattr("src.trading_bot.load_dotenv", lambda: None)
+    monkeypatch.delenv("EXCLUDED_COINS", raising=False)
+    monkeypatch.delenv("MIN_ENTRY_ATR_PCT", raising=False)
+    monkeypatch.setenv("SIMULATE_DATA", "true")
+    monkeypatch.setenv("DRY_RUN", "true")
+    monkeypatch.setenv("USE_TABULAR_MODEL", "false")
+    monkeypatch.setenv("USE_ML_MODEL", "false")
+    monkeypatch.setenv("PERFORMANCE_LOG_ENABLED", "false")
+
+    bot = CryptoTradingBot(BotConfig())
+
+    assert "EURC" in bot.config.excluded_coins
+    assert bot.config.min_entry_atr_pct == 0.012
+    assert bot._entry_volatility_guard({"atr_pct": 0.012}) == (True, "ok")
+    allowed, reason = bot._entry_volatility_guard({"atr_pct": 0.0119})
+    assert allowed is False
+    assert reason.startswith("atr_pct_below_minimum")
+    assert bot._entry_volatility_guard({}) == (False, "atr_pct_unavailable")
+
+
 def test_analytics_db_connect_kwargs_support_url_and_split_fields(monkeypatch):
     monkeypatch.setenv("ANALYTICS_DB_ENABLED", "true")
     monkeypatch.setenv("ANALYTICS_DB_URL",

@@ -9,7 +9,7 @@ DAY="$(date -u -d yesterday +%F)"
 umask 077
 mkdir -p "$OUT_DIR"
 
-args=(--date "$DAY" --journal "$PAPER_DIR/data/trade_journal.csv"
+args=(--journal "$PAPER_DIR/data/trade_journal.csv"
       --log "${PUBLIC_PAPER_LOG:-$PAPER_DIR/data/trading_bot.log}"
       --config "$PAPER_DIR/paper.env" --log-timezone "${PUBLIC_PAPER_LOG_TIMEZONE:-UTC}"
       --output "$OUT_DIR/report-$DAY.json")
