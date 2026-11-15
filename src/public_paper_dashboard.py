@@ -9,6 +9,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 import time
 from collections import Counter, defaultdict
@@ -146,14 +147,33 @@ def _field_total(rows: list[dict[str, str]], field: str) -> float | None:
     return round(sum(value for value in values if value is not None), 8)
 
 
-def _read_log_counts(path: Path, start: datetime) -> dict[str, int | None]:
+def _read_bot_log(
+    path: Path, start: datetime
+) -> tuple[dict[str, int | None], dict[str, str | int] | None]:
     counts: Counter[str] = Counter()
+    last_cycle: tuple[datetime, int] | None = None
     try:
         if not path.exists():
-            return {"atr_guard": None, "tabular_sell_veto": None, "hailo_failures": None}
+            return {"atr_guard": None, "tabular_sell_veto": None, "hailo_failures": None}, None
         if path.stat().st_size > 100 * 1024 * 1024:
             raise OSError("log file exceeds the dashboard read limit")
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            cycle_match = re.search(
+                r"Iteration\s+(\d+)\s+-\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})",
+                line,
+            )
+            if cycle_match:
+                try:
+                    cycle_time = datetime.strptime(
+                        cycle_match.group(2), "%Y-%m-%d %H:%M:%S"
+                    ).replace(tzinfo=UTC)
+                except ValueError:
+                    pass
+                else:
+                    cycle = (cycle_time, int(cycle_match.group(1)))
+                    if last_cycle is None or cycle > last_cycle:
+                        last_cycle = cycle
+
             timestamp_text = line[:23]
             try:
                 timestamp = datetime.strptime(
@@ -171,12 +191,18 @@ def _read_log_counts(path: Path, start: datetime) -> dict[str, int | None]:
                 counts["hailo_failures"] += 1
     except (OSError, UnicodeError) as exc:
         logger.error("Unable to read paper bot log: %s", exc)
-        return {"atr_guard": None, "tabular_sell_veto": None, "hailo_failures": None}
-    return {
+        return {"atr_guard": None, "tabular_sell_veto": None, "hailo_failures": None}, None
+    log_counts = {
         "atr_guard": counts["atr_guard"],
         "tabular_sell_veto": counts["tabular_sell_veto"],
         "hailo_failures": counts["hailo_failures"],
     }
+    cycle_data = (
+        {"timestamp": last_cycle[0].isoformat(), "iteration": last_cycle[1]}
+        if last_cycle
+        else None
+    )
+    return log_counts, cycle_data
 
 
 def load_dashboard_data() -> dict[str, Any]:
@@ -249,6 +275,9 @@ def load_dashboard_data() -> dict[str, Any]:
         logger.warning("Unable to read optional daily report: %s", exc)
 
     last_event = parsed_rows[-1][0].isoformat() if parsed_rows else None
+    log_counts, last_bot_cycle = _read_bot_log(
+        log_path, datetime.combine(today, datetime.min.time(), UTC)
+    )
     state_timestamp = str(state.get("timestamp") or "")
     recent = []
     for stamp, row in reversed(parsed_rows[-20:]):
@@ -272,6 +301,7 @@ def load_dashboard_data() -> dict[str, Any]:
         "generated_at": now.isoformat(),
         "state_timestamp": state_timestamp,
         "last_journal_event": last_event,
+        "last_bot_cycle": last_bot_cycle,
         "portfolio": {
             "base_currency": currency,
             "cash": _number(state.get("cash")),
@@ -290,7 +320,7 @@ def load_dashboard_data() -> dict[str, Any]:
             "week_net_pnl": _net_value(week_rows),
             "all_sell_events": len(all_sells),
         },
-        "filters": _read_log_counts(log_path, datetime.combine(today, datetime.min.time(), UTC)),
+        "filters": log_counts,
         "daily_net_pnl": chart,
         "recent_events": recent,
         "daily_report": report,
@@ -474,8 +504,8 @@ DASHBOARD_HTML = """<!doctype html>
   <script>
     const REFRESH_INTERVAL_MS=15000;
     const translations={
-      de:{readonly:'Nur Anzeige · keine Order-Steuerung',dailyPnl:'Netto-PnL je UTC-Tag',openPositions:'Offene Positionen',filtersFeed:'Filter und Feed',recentEvents:'Letzte Paper-Ereignisse',cash:'Verfügbares Cash',initialValue:'Startwert',todayPnl:'Netto-PnL heute',weekPnl:'Netto-PnL · 7 Tage',weekSells:'Verkaufsereignisse · 7 Tage',fees:'Gebühren heute',slippage:'Slippage heute',iteration:'Iteration',asset:'Asset',amount:'Menge',investment:'Einsatz',entry:'Einstieg',noneOpen:'Keine offenen Trades',atrFilter:'ATR-Filter',sellVeto:'Hailo-SELL-Veto',hailoErrors:'Hailo-Fehler',holdings:'Holdings',lastEvent:'Letztes Journal-Ereignis',timeLocal:'Zeit (lokal)',action:'Aktion',netPnl:'Netto-PnL',noEvents:'Noch keine Journal-Ereignisse',pnlUnavailable:'Netto-PnL nicht verfügbar',updated:'Aktualisiert',portfolioAt:'Portfolio-Stand',unavailable:'nicht verfügbar',refreshIn:'Aktualisierung in',seconds:'s',dashboardUnavailable:'Dashboard-Daten nicht erreichbar',buy:'Kauf',sell:'Verkauf',language:'Sprache',localTime:'Lokale Uhrzeit'},
-      en:{readonly:'Read-only · no order controls',dailyPnl:'Net PnL by UTC day',openPositions:'Open positions',filtersFeed:'Filters and feed',recentEvents:'Recent paper events',cash:'Available cash',initialValue:'Starting value',todayPnl:'Net PnL today',weekPnl:'Net PnL · 7 days',weekSells:'Sell events · 7 days',fees:'Fees today',slippage:'Slippage today',iteration:'Iteration',asset:'Asset',amount:'Amount',investment:'Invested',entry:'Entry',noneOpen:'No open trades',atrFilter:'ATR filter',sellVeto:'Hailo SELL veto',hailoErrors:'Hailo errors',holdings:'Holdings',lastEvent:'Last journal event',timeLocal:'Time (local)',action:'Action',netPnl:'Net PnL',noEvents:'No journal events yet',pnlUnavailable:'Net PnL unavailable',updated:'Updated',portfolioAt:'Portfolio as of',unavailable:'unavailable',refreshIn:'Next update in',seconds:'s',dashboardUnavailable:'Dashboard data unavailable',buy:'Buy',sell:'Sell',language:'Language',localTime:'Local time'}
+      de:{readonly:'Nur Anzeige · keine Order-Steuerung',dailyPnl:'Netto-PnL je UTC-Tag',openPositions:'Offene Positionen',filtersFeed:'Filter und Feed',recentEvents:'Letzte Paper-Ereignisse',cash:'Verfügbares Cash',initialValue:'Startwert',todayPnl:'Netto-PnL heute',weekPnl:'Netto-PnL · 7 Tage',weekSells:'Verkaufsereignisse · 7 Tage',fees:'Gebühren heute',slippage:'Slippage heute',iteration:'Iteration',lastCycle:'Letzter Bot-Zyklus',asset:'Asset',amount:'Menge',investment:'Einsatz',entry:'Einstieg',noneOpen:'Keine offenen Trades',atrFilter:'ATR-Filter',sellVeto:'Hailo-SELL-Veto',hailoErrors:'Hailo-Fehler',holdings:'Holdings',lastEvent:'Letztes Journal-Ereignis',timeLocal:'Zeit (lokal)',action:'Aktion',netPnl:'Netto-PnL',noEvents:'Noch keine Journal-Ereignisse',pnlUnavailable:'Netto-PnL nicht verfügbar',updated:'Aktualisiert',portfolioAt:'Portfolio-Stand',unavailable:'nicht verfügbar',refreshIn:'Aktualisierung in',seconds:'s',dashboardUnavailable:'Dashboard-Daten nicht erreichbar',buy:'Kauf',sell:'Verkauf',language:'Sprache',localTime:'Lokale Uhrzeit'},
+      en:{readonly:'Read-only · no order controls',dailyPnl:'Net PnL by UTC day',openPositions:'Open positions',filtersFeed:'Filters and feed',recentEvents:'Recent paper events',cash:'Available cash',initialValue:'Starting value',todayPnl:'Net PnL today',weekPnl:'Net PnL · 7 days',weekSells:'Sell events · 7 days',fees:'Fees today',slippage:'Slippage today',iteration:'Iteration',lastCycle:'Last bot cycle',asset:'Asset',amount:'Amount',investment:'Invested',entry:'Entry',noneOpen:'No open trades',atrFilter:'ATR filter',sellVeto:'Hailo SELL veto',hailoErrors:'Hailo errors',holdings:'Holdings',lastEvent:'Last journal event',timeLocal:'Time (local)',action:'Action',netPnl:'Net PnL',noEvents:'No journal events yet',pnlUnavailable:'Net PnL unavailable',updated:'Updated',portfolioAt:'Portfolio as of',unavailable:'unavailable',refreshIn:'Next update in',seconds:'s',dashboardUnavailable:'Dashboard data unavailable',buy:'Buy',sell:'Sell',language:'Language',localTime:'Local time'}
     };
     let locale='de';
     try{const saved=localStorage.getItem('paper-dashboard-language');if(saved==='de'||saved==='en')locale=saved}catch(e){console.warn('Language preference could not be loaded',e)}
@@ -531,6 +561,7 @@ DASHBOARD_HTML = """<!doctype html>
       window.dashboardData=d;
       const c=d.portfolio.base_currency,a=d.activity;
       document.getElementById('metrics').innerHTML=[
+        metric(t('lastCycle'),d.last_bot_cycle?`${esc(localDateTime(d.last_bot_cycle.timestamp))} · #${d.last_bot_cycle.iteration}`:'—'),
         metric(t('cash'),fmt(d.portfolio.cash,c)),
         metric(t('initialValue'),fmt(d.portfolio.initial_value,c)),
         metric(t('todayPnl'),fmt(a.today_net_pnl,c),cls(a.today_net_pnl)),

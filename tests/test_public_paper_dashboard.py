@@ -59,6 +59,8 @@ def client(monkeypatch, tmp_path):
     }), encoding="utf-8")
     (reports_dir / "latest.json").write_text('{"primary": {}}', encoding="utf-8")
     (data_dir / "trading_bot.log").write_text(
+        f"🕒 Iteration 7 - {(now - timedelta(minutes=2)).strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"🕒 Iteration 8 - {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"{now.strftime('%Y-%m-%d %H:%M:%S,%f')[:-3]} - INFO - "
         "⛔ Entry withheld: ATR(14)/price volatility proxy is unavailable\n"
         f"{now.strftime('%Y-%m-%d %H:%M:%S,%f')[:-3]} - INFO - "
@@ -100,6 +102,9 @@ def test_dashboard_requires_https_and_authentication(client):
     assert "new Intl.DateTimeFormat" in page.text
     assert "localDateTime(x.timestamp)" in page.text
     assert "timeUtc:" not in page.text
+    assert "lastCycle:'Letzter Bot-Zyklus'" in page.text
+    assert "lastCycle:'Last bot cycle'" in page.text
+    assert "d.last_bot_cycle.iteration" in page.text
     assert "setInterval(updateCountdown,1000)" in page.text
     assert "setTimeout(refresh,REFRESH_INTERVAL_MS)" in page.text
 
@@ -147,6 +152,19 @@ def test_dashboard_data_is_read_only_and_reports_paper_metrics(client):
     assert len(body["daily_net_pnl"]) == 14
     assert body["recent_events"][0]["action"] == "sell"
     assert body["recent_events"][0]["timestamp"].endswith("+00:00")
+    assert body["last_bot_cycle"]["iteration"] == 8
+    assert body["last_bot_cycle"]["timestamp"].endswith("+00:00")
+
+
+def test_dashboard_reports_no_last_bot_cycle_when_log_has_no_iteration(client):
+    log_path = Path(os.environ["DASHBOARD_LOG_FILE"])
+    log_path.write_text("No iteration has been logged yet\n", encoding="utf-8")
+    dashboard._snapshot_cache = None
+
+    response = client.get("/api/dashboard", auth=("viewer", "long-test-password"))
+
+    assert response.status_code == 200
+    assert response.json()["last_bot_cycle"] is None
 
 
 def test_dashboard_does_not_claim_net_pnl_for_legacy_cost_data(client, monkeypatch):
