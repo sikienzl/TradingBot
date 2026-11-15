@@ -1,0 +1,18 @@
+[Unit]
+Description=Restore-test the latest TradingBot analytics PostgreSQL backup
+After=network-online.target docker.service remote-fs.target
+Wants=network-online.target
+Requires=docker.service
+RequiresMountsFor=/nas-1/postgresql
+
+[Service]
+Type=oneshot
+User=trading
+Group=trading
+SupplementaryGroups=docker nas-access
+WorkingDirectory=/
+UMask=0077
+ExecStart=/usr/local/sbin/postgresql-analytics-restore-check
+
+[Install]
+WantedBy=multi-user.target

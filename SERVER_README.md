@@ -658,6 +658,34 @@ After an upgrade, keep `DRY_RUN=true` and verify:
      --file /opt/trading_2/trade_journal.csv
    ```
 
+### PostgreSQL analytics backups
+
+The PostgreSQL container keeps its own database process identity and owns its
+database files. The NAS backup and restore-check jobs run as the host account
+`trading`; they need Docker socket access and read/write access to the
+`nas-access` group mount at `/nas-1/postgresql`.
+
+Install the service units from `deploy/` and allow the `trading` group to
+execute the root-managed backup scripts:
+
+```sh
+sudo chown root:trading /usr/local/sbin/postgresql-analytics-backup \
+  /usr/local/sbin/postgresql-analytics-restore-check
+sudo chmod 0750 /usr/local/sbin/postgresql-analytics-backup \
+  /usr/local/sbin/postgresql-analytics-restore-check
+sudo cp deploy/postgresql-analytics-backup.service \
+  deploy/postgresql-analytics-restore-check.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl start postgresql-analytics-backup.service
+sudo systemctl start postgresql-analytics-restore-check.service
+```
+
+Both jobs require the expected NAS mount and fail rather than writing to an
+unmounted local directory. Check each run with
+`systemctl status postgresql-analytics-backup.service
+postgresql-analytics-restore-check.service` and inspect its journal before
+relying on the timers.
+
 The stale-journal diagnostic does not disable or bypass the recent-PnL guard.
 These metrics support review; they do not establish profitability.
 
