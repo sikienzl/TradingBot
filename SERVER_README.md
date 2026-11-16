@@ -507,7 +507,15 @@ only to `DASHBOARD_BIND_HOST`; the application independently checks the
 request's source IP against every configured CIDR. The container runs as the
 unprivileged `trading` UID/GID, drops all capabilities, uses a read-only root
 filesystem, and has only read-only mounts for paper data, reports, and TLS
-files. It does not mount the Docker socket inside the container. The host
+files. It also reads the public market recorder's `tickers.csv`,
+`candles_1m.csv`, and `metadata.json` from a read-only `/market-data` mount.
+The dashboard shows the last 24 hours where available, per-market freshness,
+bid/ask spread, observed price change, candle coverage and gaps. Large CSVs
+are read from a bounded recent tail and the UI reports when that limit applies.
+These public quotes and candles are not trade executions and do not establish
+profitability or executable fills. The recorder itself is neither restarted
+nor modified by dashboard deployment. It does not mount the Docker socket
+inside the container. The host
 service uses `sg docker` because systemd user managers may not inherit the
 account's supplementary Docker group; do not remove it unless the service
 manager's group access is verified.

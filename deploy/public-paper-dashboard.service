@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/sg docker -c "/usr/bin/docker run --rm --name trading-paper-dashboard --network host --cap-drop=ALL --security-opt=no-new-privileges --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m --pids-limit=64 --memory=256m --env-file %h/trading-paper-dashboard/dashboard.env --mount type=bind,src=%h/trading-hailo-public-paper/data,dst=/data,readonly --mount type=bind,src=%h/trading-hailo-public-paper/reports,dst=/reports,readonly --mount type=bind,src=%h/trading-paper-dashboard/tls,dst=/tls,readonly trading-paper-dashboard:local"
+ExecStart=/usr/bin/sg docker -c "/usr/bin/docker run --rm --name trading-paper-dashboard --network host --cap-drop=ALL --security-opt=no-new-privileges --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m --pids-limit=64 --memory=256m --env-file %h/trading-paper-dashboard/dashboard.env --env DASHBOARD_MARKET_DATA_DIR=/market-data --mount type=bind,src=%h/trading-hailo-public-paper/data,dst=/data,readonly --mount type=bind,src=%h/trading-hailo-public-paper/reports,dst=/reports,readonly --mount type=bind,src=%h/trading-market-recorder/data,dst=/market-data,readonly --mount type=bind,src=%h/trading-paper-dashboard/tls,dst=/tls,readonly trading-paper-dashboard:local"
 ExecStop=/usr/bin/sg docker -c "/usr/bin/docker stop --time 15 trading-paper-dashboard"
 Restart=on-failure
 RestartSec=5

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import hmac
+import io
 import ipaddress
 import json
 import logging
@@ -15,6 +16,7 @@ import time
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -26,6 +28,28 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 logger = logging.getLogger("public_paper_dashboard")
 security = HTTPBasic(auto_error=False)
+
+MARKET_TICKER_FIELDS = (
+    "observed_at_utc",
+    "exchange_timestamp_utc",
+    "symbol",
+    "bid",
+    "ask",
+    "last",
+    "base_volume",
+    "quote_volume",
+)
+MARKET_CANDLE_FIELDS = (
+    "timestamp_utc",
+    "symbol",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+)
+MARKET_DATA_READ_LIMIT = 16 * 1024 * 1024
+MARKET_DATA_WINDOW = timedelta(hours=24)
 
 
 class DashboardConfigurationError(RuntimeError):
@@ -108,10 +132,7 @@ def _load_journal(path: Path) -> list[dict[str, str]]:
             reader = csv.DictReader(journal)
             if not {"timestamp", "action"}.issubset(reader.fieldnames or []):
                 raise ValueError("journal is missing required columns")
-            return [
-                row for row in reader
-                if row.get("timestamp") and row.get("action")
-            ]
+            return [row for row in reader if row.get("timestamp") and row.get("action")]
     except HTTPException:
         raise
     except (OSError, UnicodeError, csv.Error, ValueError) as exc:
@@ -147,6 +168,313 @@ def _field_total(rows: list[dict[str, str]], field: str) -> float | None:
     return round(sum(value for value in values if value is not None), 8)
 
 
+def _read_csv_tail(
+    path: Path, fields: tuple[str, ...]
+) -> tuple[list[dict[str, str]], bool]:
+    size = path.stat().st_size
+    with path.open("rb") as source:
+        if size > MARKET_DATA_READ_LIMIT:
+            source.seek(-MARKET_DATA_READ_LIMIT, os.SEEK_END)
+            content = source.read(MARKET_DATA_READ_LIMIT)
+            first_newline = content.find(b"\n")
+            if first_newline < 0:
+                raise ValueError(f"{path.name} has no complete rows in its read window")
+            content = content[first_newline + 1 :]
+            truncated = True
+        else:
+            content = source.read()
+            truncated = False
+    if content and not content.endswith(b"\n"):
+        last_newline = content.rfind(b"\n")
+        content = content[: last_newline + 1] if last_newline >= 0 else b""
+    text = content.decode("utf-8")
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    if tuple(reader.fieldnames or ()) == fields:
+        return list(reader), truncated
+    if truncated:
+        reader = csv.DictReader(io.StringIO(",".join(fields) + "\n" + text, newline=""))
+        return list(reader), True
+    raise ValueError(f"{path.name} has an unexpected CSV header")
+
+
+def _market_unavailable(reason: str) -> dict[str, Any]:
+    return {
+        "available": False,
+        "reason": reason,
+        "window_hours": int(MARKET_DATA_WINDOW.total_seconds() // 3600),
+        "symbols": [],
+        "markets": [],
+        "selected_symbol": None,
+        "ticker_series": [],
+        "candle_series": [],
+        "read_window_truncated": False,
+    }
+
+
+def load_market_observations(selected_symbol: str | None = None) -> dict[str, Any]:
+    market_dir = Path(os.getenv("DASHBOARD_MARKET_DATA_DIR", "/market-data"))
+    metadata_path = market_dir / "metadata.json"
+    ticker_path = market_dir / "tickers.csv"
+    candle_path = market_dir / "candles_1m.csv"
+    if not market_dir.is_dir():
+        return _market_unavailable("Market recorder data directory is not mounted.")
+    if not all(path.is_file() for path in (metadata_path, ticker_path, candle_path)):
+        return _market_unavailable("Market recorder data files are not available yet.")
+    if any(
+        path.stat().st_size > 2 * 1024 * 1024 * 1024
+        for path in (ticker_path, candle_path)
+    ):
+        logger.error("Market recorder data exceeds the 2 GiB safety limit")
+        return _market_unavailable(
+            "Market recorder data exceeds the dashboard safety limit."
+        )
+
+    try:
+        if metadata_path.stat().st_size > 1024 * 1024:
+            raise ValueError("market recorder metadata exceeds the read limit")
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if not isinstance(metadata, dict):
+            raise TypeError("market recorder metadata has an invalid JSON shape")
+        symbols = metadata.get("symbols")
+        if (
+            metadata.get("exchange") != "kraken"
+            or not isinstance(symbols, list)
+            or not symbols
+            or any(
+                not isinstance(symbol, str)
+                or not re.fullmatch(r"[A-Z0-9]+/EUR", symbol)
+                for symbol in symbols
+            )
+        ):
+            raise ValueError(
+                "market recorder metadata has an invalid exchange or symbol list"
+            )
+        symbols = list(dict.fromkeys(symbols))
+        if selected_symbol is not None and selected_symbol not in symbols:
+            raise HTTPException(status_code=404, detail="Market is not recorded.")
+        tickers, ticker_truncated = _read_csv_tail(ticker_path, MARKET_TICKER_FIELDS)
+        candles, candle_truncated = _read_csv_tail(candle_path, MARKET_CANDLE_FIELDS)
+    except HTTPException:
+        raise
+    except (OSError, UnicodeError, csv.Error, TypeError, ValueError) as exc:
+        logger.error("Unable to read public market observations: %s", exc)
+        return _market_unavailable(
+            "Market recorder data is invalid or temporarily unavailable."
+        )
+
+    now = datetime.now(UTC)
+    window_start = now - MARKET_DATA_WINDOW
+
+    def valid_rows(
+        rows: list[dict[str, str]],
+        timestamp_field: str,
+    ) -> tuple[dict[str, list[tuple[datetime, dict[str, str]]]], int]:
+        grouped: dict[str, list[tuple[datetime, dict[str, str]]]] = defaultdict(list)
+        invalid = 0
+        for row in rows:
+            symbol = row.get("symbol", "")
+            timestamp = _parse_utc(row.get(timestamp_field))
+            if symbol not in symbols or timestamp is None:
+                invalid += 1
+                continue
+            numeric_fields = (
+                ("bid", "ask", "last")
+                if timestamp_field == "observed_at_utc"
+                else ("open", "high", "low", "close", "volume")
+            )
+            values = [_number(row.get(field)) for field in numeric_fields]
+            if any(value is None for value in values):
+                invalid += 1
+                continue
+            if timestamp_field == "observed_at_utc":
+                bid, ask = values[:2]
+                if bid <= 0 or ask < bid or values[2] <= 0:
+                    invalid += 1
+                    continue
+            else:
+                open_price, high, low, close, volume = values
+                if min(open_price, high, low, close) <= 0 or volume < 0 or high < low:
+                    invalid += 1
+                    continue
+            if timestamp <= now:
+                grouped[symbol].append((timestamp, row))
+        for entries in grouped.values():
+            entries.sort(key=lambda item: item[0])
+        return grouped, invalid
+
+    all_tickers_by_symbol, invalid_tickers = valid_rows(tickers, "observed_at_utc")
+    all_candles_by_symbol, invalid_candles = valid_rows(candles, "timestamp_utc")
+    ticker_by_symbol = {
+        symbol: [entry for entry in entries if entry[0] >= window_start]
+        for symbol, entries in all_tickers_by_symbol.items()
+    }
+    candle_by_symbol = {
+        symbol: [entry for entry in entries if entry[0] >= window_start]
+        for symbol, entries in all_candles_by_symbol.items()
+    }
+    summaries = []
+    for symbol in symbols:
+        ticker_rows = ticker_by_symbol.get(symbol, [])
+        candle_rows = candle_by_symbol.get(symbol, [])
+        all_ticker_rows = all_tickers_by_symbol.get(symbol, [])
+        all_candle_rows = all_candles_by_symbol.get(symbol, [])
+        first_ticker = ticker_rows[0] if ticker_rows else None
+        last_ticker = all_ticker_rows[-1] if all_ticker_rows else None
+        latest_candle = all_candle_rows[-1] if all_candle_rows else None
+        bid = _number(last_ticker[1].get("bid")) if last_ticker else None
+        ask = _number(last_ticker[1].get("ask")) if last_ticker else None
+        last = _number(last_ticker[1].get("last")) if last_ticker else None
+        spread_bps = (
+            round((ask - bid) / ((ask + bid) / 2) * 10_000, 2)
+            if bid is not None and ask is not None and ask >= bid and ask + bid > 0
+            else None
+        )
+        first_price = _number(first_ticker[1].get("last")) if first_ticker else None
+        change_pct = (
+            round((last / first_price - 1) * 100, 4)
+            if last is not None and first_price is not None and first_price > 0
+            else None
+        )
+        spreads = []
+        for _, row in ticker_rows:
+            row_bid = _number(row.get("bid"))
+            row_ask = _number(row.get("ask"))
+            if (
+                row_bid is not None
+                and row_ask is not None
+                and row_ask >= row_bid
+                and row_ask + row_bid > 0
+            ):
+                spreads.append((row_ask - row_bid) / ((row_ask + row_bid) / 2) * 10_000)
+        candle_times = [timestamp for timestamp, _ in candle_rows]
+        gap_count = 0
+        max_gap_minutes = 0
+        for earlier, later in pairwise(candle_times):
+            difference_minutes = int((later - earlier).total_seconds() // 60)
+            if difference_minutes > 1:
+                gap_count += difference_minutes - 1
+                max_gap_minutes = max(max_gap_minutes, difference_minutes - 1)
+        ticker_span_seconds = (
+            (ticker_rows[-1][0] - ticker_rows[0][0]).total_seconds()
+            if len(ticker_rows) > 1
+            else 0
+        )
+        expected_candles = (
+            int((candle_times[-1] - candle_times[0]).total_seconds() // 60) + 1
+            if len(candle_times) > 1
+            else len(candle_times)
+        )
+        summaries.append(
+            {
+                "symbol": symbol,
+                "latest_observed_at": last_ticker[0].isoformat()
+                if last_ticker
+                else None,
+                "ticker_samples_24h": len(ticker_rows),
+                "ticker_samples_per_hour": round(len(ticker_rows) / 24, 1),
+                "ticker_span_hours": round(ticker_span_seconds / 3600, 2),
+                "latest_bid": bid,
+                "latest_ask": ask,
+                "latest_last": last,
+                "latest_spread_bps": spread_bps,
+                "average_spread_bps": round(sum(spreads) / len(spreads), 2)
+                if spreads
+                else None,
+                "price_change_pct_observed": change_pct,
+                "first_ticker_at": first_ticker[0].isoformat()
+                if first_ticker
+                else None,
+                "candle_count_24h": len(candle_rows),
+                "expected_candles_in_observed_span": expected_candles,
+                "candle_coverage_pct": (
+                    round(len(candle_rows) / expected_candles * 100, 2)
+                    if expected_candles
+                    else None
+                ),
+                "candle_gap_minutes": gap_count,
+                "largest_candle_gap_minutes": max_gap_minutes,
+                "latest_candle_at": latest_candle[0].isoformat()
+                if latest_candle
+                else None,
+            }
+        )
+
+    selected = selected_symbol or symbols[0]
+    ticker_series = [
+        {
+            "timestamp": timestamp.isoformat(),
+            "bid": _number(row.get("bid")),
+            "ask": _number(row.get("ask")),
+            "last": _number(row.get("last")),
+        }
+        for timestamp, row in ticker_by_symbol.get(selected, [])
+    ]
+    candle_series = [
+        {
+            "timestamp": timestamp.isoformat(),
+            "close": _number(row.get("close")),
+        }
+        for timestamp, row in candle_by_symbol.get(selected, [])
+    ]
+
+    def downsample(points: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+        if len(points) <= limit:
+            return points
+        stride = (len(points) - 1) / (limit - 1)
+        return [points[round(index * stride)] for index in range(limit)]
+
+    ticker_stat = ticker_path.stat()
+    candle_stat = candle_path.stat()
+    newest_timestamps = [
+        timestamp
+        for market in summaries
+        for timestamp in (
+            _parse_utc(market["latest_observed_at"]),
+            _parse_utc(market["latest_candle_at"]),
+        )
+        if timestamp is not None
+    ]
+    newest = max(newest_timestamps, default=None)
+    return {
+        "available": True,
+        "reason": None,
+        "generated_at": now.isoformat(),
+        "window_hours": int(MARKET_DATA_WINDOW.total_seconds() // 3600),
+        "symbols": symbols,
+        "selected_symbol": selected,
+        "markets": summaries,
+        "ticker_series": downsample(ticker_series, 300),
+        "candle_series": downsample(candle_series, 360),
+        "latest_data_at": newest.isoformat() if newest else None,
+        "latest_data_age_seconds": round((now - newest).total_seconds(), 1)
+        if newest
+        else None,
+        "freshness_status": (
+            "unavailable"
+            if newest is None
+            else "stale"
+            if (now - newest).total_seconds() > 60
+            else "fresh"
+        ),
+        "ticker_file_bytes": ticker_stat.st_size,
+        "candle_file_bytes": candle_stat.st_size,
+        "read_window_truncated": ticker_truncated or candle_truncated,
+        "invalid_ticker_rows": invalid_tickers,
+        "invalid_candle_rows": invalid_candles,
+        "metadata": {
+            "created_at_utc": metadata.get("created_at_utc"),
+            "ticker_interval_seconds": metadata.get("ticker_interval_seconds"),
+            "candle_timeframe": metadata.get("candle_timeframe"),
+            "candle_backfill_limit": metadata.get("candle_backfill_limit"),
+        },
+        "limitations": [
+            "Public quotes and candles are observations, not executable fills.",
+            "Ticker sampling does not establish intrainterval price paths or order-book depth.",
+            "The 24-hour price change uses available first and last ticker observations.",
+        ],
+    }
+
+
 def _read_bot_log(
     path: Path, start: datetime
 ) -> tuple[dict[str, int | None], dict[str, str | int] | None]:
@@ -154,7 +482,11 @@ def _read_bot_log(
     last_cycle: tuple[datetime, int] | None = None
     try:
         if not path.exists():
-            return {"atr_guard": None, "tabular_sell_veto": None, "hailo_failures": None}, None
+            return {
+                "atr_guard": None,
+                "tabular_sell_veto": None,
+                "hailo_failures": None,
+            }, None
         if path.stat().st_size > 100 * 1024 * 1024:
             raise OSError("log file exceeds the dashboard read limit")
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -191,7 +523,11 @@ def _read_bot_log(
                 counts["hailo_failures"] += 1
     except (OSError, UnicodeError) as exc:
         logger.error("Unable to read paper bot log: %s", exc)
-        return {"atr_guard": None, "tabular_sell_veto": None, "hailo_failures": None}, None
+        return {
+            "atr_guard": None,
+            "tabular_sell_veto": None,
+            "hailo_failures": None,
+        }, None
     log_counts = {
         "atr_guard": counts["atr_guard"],
         "tabular_sell_veto": counts["tabular_sell_veto"],
@@ -248,13 +584,15 @@ def load_dashboard_data() -> dict[str, Any]:
     for coin, trade in open_trades.items():
         if not isinstance(trade, dict):
             continue
-        positions.append({
-            "coin": str(coin),
-            "amount_coin": _number(trade.get("amount_coin")),
-            "amount_base": _number(trade.get("amount_base")),
-            "buy_price": _number(trade.get("buy_price")),
-            "timestamp": str(trade.get("timestamp") or ""),
-        })
+        positions.append(
+            {
+                "coin": str(coin),
+                "amount_coin": _number(trade.get("amount_coin")),
+                "amount_base": _number(trade.get("amount_base")),
+                "buy_price": _number(trade.get("buy_price")),
+                "timestamp": str(trade.get("timestamp") or ""),
+            }
+        )
 
     holdings = state.get("holdings")
     if not isinstance(holdings, dict):
@@ -281,18 +619,20 @@ def load_dashboard_data() -> dict[str, Any]:
     state_timestamp = str(state.get("timestamp") or "")
     recent = []
     for stamp, row in reversed(parsed_rows[-20:]):
-        recent.append({
-            "timestamp": stamp.isoformat(),
-            "coin": str(row.get("coin") or ""),
-            "action": row.get("action", "").lower(),
-            "amount_base": _number(row.get("amount_base")),
-            "net_pnl_base": (
-                _number(row.get("net_pnl_base"))
-                if row.get("execution_cost_mode") == "net_costs"
-                and row.get("entry_cost_mode") == "net_costs"
-                else None
-            ),
-        })
+        recent.append(
+            {
+                "timestamp": stamp.isoformat(),
+                "coin": str(row.get("coin") or ""),
+                "action": row.get("action", "").lower(),
+                "amount_base": _number(row.get("amount_base")),
+                "net_pnl_base": (
+                    _number(row.get("net_pnl_base"))
+                    if row.get("execution_cost_mode") == "net_costs"
+                    and row.get("entry_cost_mode") == "net_costs"
+                    else None
+                ),
+            }
+        )
 
     currency = state.get("base_currency")
     if not isinstance(currency, str) or not currency.strip():
@@ -311,7 +651,9 @@ def load_dashboard_data() -> dict[str, Any]:
             "positions": positions,
         },
         "activity": {
-            "today_buys": sum(row.get("action", "").lower() == "buy" for row in today_rows),
+            "today_buys": sum(
+                row.get("action", "").lower() == "buy" for row in today_rows
+            ),
             "today_sell_events": len(today_sells),
             "today_net_pnl": _net_value(today_rows),
             "today_fees": _field_total(today_rows, "fee_base"),
@@ -401,7 +743,9 @@ app = FastAPI(
 app.add_middleware(SecurityHeadersMiddleware)
 
 _snapshot_lock = threading.Lock()
-_snapshot_cache: tuple[tuple[tuple[int, int] | None, ...], float, dict[str, Any]] | None = None
+_snapshot_cache: (
+    tuple[tuple[tuple[int, int] | None, ...], float, dict[str, Any]] | None
+) = None
 
 
 def _snapshot_signature() -> tuple[tuple[int, int] | None, ...]:
@@ -409,7 +753,12 @@ def _snapshot_signature() -> tuple[tuple[int, int] | None, ...]:
     report_file = Path(os.getenv("DASHBOARD_REPORT_FILE", "/reports/latest.json"))
     log_file = Path(os.getenv("DASHBOARD_LOG_FILE", str(data_dir / "trading_bot.log")))
     signature = []
-    for path in (data_dir / ".portfolio_state.json", data_dir / "trade_journal.csv", log_file, report_file):
+    for path in (
+        data_dir / ".portfolio_state.json",
+        data_dir / "trade_journal.csv",
+        log_file,
+        report_file,
+    ):
         try:
             stat = path.stat()
             signature.append((stat.st_mtime_ns, stat.st_size))
@@ -438,6 +787,14 @@ async def dashboard_data(
         data = load_dashboard_data()
         _snapshot_cache = (signature, now, data)
         return data
+
+
+@app.get("/api/market-observations")
+async def market_observations(
+    _: Annotated[str, Depends(require_dashboard_access)],
+    symbol: str | None = None,
+) -> dict[str, Any]:
+    return load_market_observations(symbol)
 
 
 def main() -> None:
@@ -486,6 +843,12 @@ DASHBOARD_HTML = """<!doctype html>
     .positive{color:#72db9d}.negative{color:#ff8585}.neutral{color:#e8edf5}
     .columns{display:grid;grid-template-columns:1.3fr 1fr;gap:14px;margin-bottom:14px}
     .chart{width:100%;height:220px}.chart text{fill:#90a0b7;font-size:11px}
+    .market-section{margin:14px 0}.market-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0}
+    select{background:#1b2b42;color:#e8edf5;border:1px solid #52647e;border-radius:6px;padding:8px;font:inherit}
+    .market-chart{width:100%;height:280px}.market-chart text{fill:#90a0b7;font-size:11px}
+    .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px}.legend span{font-size:.8rem;color:#c5d2e5}
+    .legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}
+    .notice{border-left:3px solid #e8b65c;padding:8px 12px;color:#c5d2e5;font-size:.82rem;margin:10px 0}
     table{width:100%;border-collapse:collapse;font-size:.86rem}th,td{text-align:left;padding:9px 6px;border-bottom:1px solid #26354d}
     th{color:#91a2ba;font-weight:500}td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
     .table-wrap{overflow:auto}.pills{display:flex;gap:8px;flex-wrap:wrap}
@@ -501,11 +864,22 @@ DASHBOARD_HTML = """<!doctype html>
     <section><h2 data-i18n="openPositions">Offene Positionen</h2><div id="positions" class="table-wrap"></div><h2 style="margin-top:20px" data-i18n="filtersFeed">Filter und Feed</h2><div id="filters" class="pills"></div></section>
   </div>
   <section><h2 data-i18n="recentEvents">Letzte Paper-Ereignisse</h2><div id="events" class="table-wrap"></div></section>
+  <section class="market-section">
+    <h2 data-i18n="marketTitle">Öffentliche Marktdaten · Kraken</h2>
+    <div class="muted" data-i18n="marketSubtitle">Read-only Beobachtung · letzte 24 Stunden, soweit aufgezeichnet</div>
+    <div class="market-controls"><label for="market-symbol" data-i18n="marketSelect">Markt</label><select id="market-symbol" aria-label="Markt"></select><span id="market-status" class="muted"></span></div>
+    <div id="market-metrics" class="grid"></div>
+    <div class="notice" data-i18n="marketNotice">Quotes und Kerzen sind öffentliche Beobachtungen, keine tatsächlichen Ausführungen. Spread, Kerzen und Kursänderungen belegen weder Orderbuchtiefe noch Profitabilität oder erzielbare Fills.</div>
+    <svg id="market-chart" class="market-chart" viewBox="0 0 900 280" role="img" aria-label="Öffentliche Marktbeobachtungen"></svg>
+    <div class="legend"><span><i style="background:#72db9d"></i><span data-i18n="tickerLast">Ticker: letzter Kurs</span></span><span><i style="background:#8daeff"></i><span data-i18n="candleClose">1-Minuten-Kerzenschluss</span></span><span><i style="background:#ffbf69"></i><span data-i18n="bidLine">Bid</span></span><span><i style="background:#f6df82"></i><span data-i18n="askLine">Ask</span></span></div>
+    <h2 style="margin-top:20px" data-i18n="marketTableTitle">Marktübersicht</h2><div id="market-table" class="table-wrap"></div>
+    <div id="market-footnote" class="muted"></div>
+  </section>
   <script>
     const REFRESH_INTERVAL_MS=15000;
     const translations={
-      de:{readonly:'Nur Anzeige · keine Order-Steuerung',dailyPnl:'Netto-PnL je UTC-Tag',openPositions:'Offene Positionen',filtersFeed:'Filter und Feed',recentEvents:'Letzte Paper-Ereignisse',cash:'Verfügbares Cash',initialValue:'Startwert',todayPnl:'Netto-PnL heute',weekPnl:'Netto-PnL · 7 Tage',weekSells:'Verkaufsereignisse · 7 Tage',fees:'Gebühren heute',slippage:'Slippage heute',iteration:'Iteration',lastCycle:'Letzter Bot-Zyklus',asset:'Asset',amount:'Menge',investment:'Einsatz',entry:'Einstieg',noneOpen:'Keine offenen Trades',atrFilter:'ATR-Filter',sellVeto:'Hailo-SELL-Veto',hailoErrors:'Hailo-Fehler',holdings:'Holdings',lastEvent:'Letztes Journal-Ereignis',timeLocal:'Zeit (lokal)',action:'Aktion',netPnl:'Netto-PnL',noEvents:'Noch keine Journal-Ereignisse',pnlUnavailable:'Netto-PnL nicht verfügbar',updated:'Aktualisiert',portfolioAt:'Portfolio-Stand',unavailable:'nicht verfügbar',refreshIn:'Aktualisierung in',seconds:'s',dashboardUnavailable:'Dashboard-Daten nicht erreichbar',buy:'Kauf',sell:'Verkauf',language:'Sprache',localTime:'Lokale Uhrzeit'},
-      en:{readonly:'Read-only · no order controls',dailyPnl:'Net PnL by UTC day',openPositions:'Open positions',filtersFeed:'Filters and feed',recentEvents:'Recent paper events',cash:'Available cash',initialValue:'Starting value',todayPnl:'Net PnL today',weekPnl:'Net PnL · 7 days',weekSells:'Sell events · 7 days',fees:'Fees today',slippage:'Slippage today',iteration:'Iteration',lastCycle:'Last bot cycle',asset:'Asset',amount:'Amount',investment:'Invested',entry:'Entry',noneOpen:'No open trades',atrFilter:'ATR filter',sellVeto:'Hailo SELL veto',hailoErrors:'Hailo errors',holdings:'Holdings',lastEvent:'Last journal event',timeLocal:'Time (local)',action:'Action',netPnl:'Net PnL',noEvents:'No journal events yet',pnlUnavailable:'Net PnL unavailable',updated:'Updated',portfolioAt:'Portfolio as of',unavailable:'unavailable',refreshIn:'Next update in',seconds:'s',dashboardUnavailable:'Dashboard data unavailable',buy:'Buy',sell:'Sell',language:'Language',localTime:'Local time'}
+      de:{readonly:'Nur Anzeige · keine Order-Steuerung',dailyPnl:'Netto-PnL je UTC-Tag',openPositions:'Offene Positionen',filtersFeed:'Filter und Feed',recentEvents:'Letzte Paper-Ereignisse',cash:'Verfügbares Cash',initialValue:'Startwert',todayPnl:'Netto-PnL heute',weekPnl:'Netto-PnL · 7 Tage',weekSells:'Verkaufsereignisse · 7 Tage',fees:'Gebühren heute',slippage:'Slippage heute',iteration:'Iteration',lastCycle:'Letzter Bot-Zyklus',asset:'Asset',amount:'Menge',investment:'Einsatz',entry:'Einstieg',noneOpen:'Keine offenen Trades',atrFilter:'ATR-Filter',sellVeto:'Hailo-SELL-Veto',hailoErrors:'Hailo-Fehler',holdings:'Holdings',lastEvent:'Letztes Journal-Ereignis',timeLocal:'Zeit (lokal)',action:'Aktion',netPnl:'Netto-PnL',noEvents:'Noch keine Journal-Ereignisse',pnlUnavailable:'Netto-PnL nicht verfügbar',updated:'Aktualisiert',portfolioAt:'Portfolio-Stand',unavailable:'nicht verfügbar',refreshIn:'Aktualisierung in',seconds:'s',dashboardUnavailable:'Dashboard-Daten nicht erreichbar',buy:'Kauf',sell:'Verkauf',language:'Sprache',localTime:'Lokale Uhrzeit',marketTitle:'Öffentliche Marktdaten · Kraken',marketSubtitle:'Read-only Beobachtung · letzte 24 Stunden, soweit aufgezeichnet',marketSelect:'Markt',marketNotice:'Quotes und Kerzen sind öffentliche Beobachtungen, keine tatsächlichen Ausführungen. Spread, Kerzen und Kursänderungen belegen weder Orderbuchtiefe noch Profitabilität oder erzielbare Fills.',tickerLast:'Ticker: letzter Kurs',candleClose:'1-Minuten-Kerzenschluss',bidLine:'Bid',askLine:'Ask',marketTableTitle:'Marktübersicht',latest:'Letzter Kurs',bidAsk:'Bid / Ask',spreadBps:'Spread (bps)',change:'Änderung im Beobachtungszeitraum',samples:'Ticker (24 h)',candles:'Kerzen (24 h)',coverage:'Kerzenabdeckung',gaps:'Datenlücken',lastSeen:'Zuletzt beobachtet',marketUnavailable:'Marktdaten nicht verfügbar',noMarketData:'Noch keine Marktdaten aufgezeichnet oder Recorder-Dateien fehlen.',fresh:'Aktuell',stale:'Veraltet',marketLimited:'Die Auswertung ist auf die letzten 24 Stunden begrenzt; sehr große Dateien werden aus dem jüngsten Dateiausschnitt gelesen.',marketInvalidRows:'Ungültige Zeilen übersprungen',spreadAverage:'Ø Spread (bps)'},
+      en:{readonly:'Read-only · no order controls',dailyPnl:'Net PnL by UTC day',openPositions:'Open positions',filtersFeed:'Filters and feed',recentEvents:'Recent paper events',cash:'Available cash',initialValue:'Starting value',todayPnl:'Net PnL today',weekPnl:'Net PnL · 7 days',weekSells:'Sell events · 7 days',fees:'Fees today',slippage:'Slippage today',iteration:'Iteration',lastCycle:'Last bot cycle',asset:'Asset',amount:'Amount',investment:'Invested',entry:'Entry',noneOpen:'No open trades',atrFilter:'ATR filter',sellVeto:'Hailo SELL veto',hailoErrors:'Hailo errors',holdings:'Holdings',lastEvent:'Last journal event',timeLocal:'Time (local)',action:'Action',netPnl:'Net PnL',noEvents:'No journal events yet',pnlUnavailable:'Net PnL unavailable',updated:'Updated',portfolioAt:'Portfolio as of',unavailable:'unavailable',refreshIn:'Next update in',seconds:'s',dashboardUnavailable:'Dashboard data unavailable',buy:'Buy',sell:'Sell',language:'Language',localTime:'Local time',marketTitle:'Public market data · Kraken',marketSubtitle:'Read-only observations · last 24 hours where recorded',marketSelect:'Market',marketNotice:'Quotes and candles are public observations, not actual executions. Spread, candles and price changes do not establish order-book depth, profitability or executable fills.',tickerLast:'Ticker: last price',candleClose:'1-minute candle close',bidLine:'Bid',askLine:'Ask',marketTableTitle:'Market overview',latest:'Latest price',bidAsk:'Bid / ask',spreadBps:'Spread (bps)',change:'Change over observed period',samples:'Ticker samples (24h)',candles:'Candles (24h)',coverage:'Candle coverage',gaps:'Data gaps',lastSeen:'Last observed',marketUnavailable:'Market data unavailable',noMarketData:'No market data recorded yet or recorder files are missing.',fresh:'Fresh',stale:'Stale',marketLimited:'Analysis is limited to the last 24 hours; very large files are read from their newest tail.',marketInvalidRows:'Invalid rows skipped',spreadAverage:'Average spread (bps)'}
     };
     let locale='de';
     try{const saved=localStorage.getItem('paper-dashboard-language');if(saved==='de'||saved==='en')locale=saved}catch(e){console.warn('Language preference could not be loaded',e)}
@@ -538,6 +912,7 @@ DASHBOARD_HTML = """<!doctype html>
       document.getElementById('language-de').setAttribute('aria-pressed',String(locale==='de'));
       document.getElementById('language-en').setAttribute('aria-pressed',String(locale==='en'));
       document.querySelector('.language-switch').setAttribute('aria-label',t('language'));
+      document.getElementById('market-symbol').setAttribute('aria-label',t('marketSelect'));
       if(!window.dashboardData)document.getElementById('updated').textContent=`${t('updated')}: —`;
       updateClock();updateCountdown();
     }
@@ -556,6 +931,73 @@ DASHBOARD_HTML = """<!doctype html>
       const bars=points.map((x,i)=>{const v=x.net_pnl;if(v===null)return '';const yy=y(v),top=Math.min(yy,zero),height=Math.max(2,Math.abs(zero-yy));return `<rect x="${p+i*step-8}" y="${top}" width="16" height="${height}" rx="3" fill="${v<0?'#ff8585':'#72db9d'}"><title>${esc(x.date)}: ${fmt(v)}</title></rect>`}).join('');
       const labels=points.filter((_,i)=>i%3===0).map(x=>{const i=points.indexOf(x);return `<text x="${p+i*step}" y="${h-7}" text-anchor="middle">${esc(x.date.slice(5))}</text>`}).join('');
       svg.innerHTML=`<line x1="${p}" y1="${zero}" x2="${w-p}" y2="${zero}" stroke="#52647e"/>${bars}${labels}`;
+    }
+    function drawMarketChart(data){
+      const svg=document.getElementById('market-chart'),w=900,h=280,p=42;
+      const series=[
+        {points:data.ticker_series.map(x=>({timestamp:x.timestamp,value:x.last})),color:'#72db9d'},
+        {points:data.candle_series.map(x=>({timestamp:x.timestamp,value:x.close})),color:'#8daeff'},
+        {points:data.ticker_series.map(x=>({timestamp:x.timestamp,value:x.bid})),color:'#ffbf69'},
+        {points:data.ticker_series.map(x=>({timestamp:x.timestamp,value:x.ask})),color:'#f6df82'}
+      ];
+      const values=series.flatMap(x=>x.points.map(y=>y.value)).filter(x=>Number.isFinite(x));
+      if(!values.length){svg.innerHTML=`<text x="20" y="35">${t('noMarketData')}</text>`;return}
+      const min=Math.min(...values),max=Math.max(...values),span=max-min||Math.max(Math.abs(max)*.001,1);
+      const times=series.flatMap(x=>x.points.map(y=>Date.parse(y.timestamp))).filter(Number.isFinite);
+      const firstTime=Math.min(...times),timeSpan=Math.max(1,Math.max(...times)-firstTime);
+      const y=value=>p+(max-value)/span*(h-p*2);
+      const paths=series.map(item=>{
+        const points=item.points.filter(x=>Number.isFinite(x.value));
+        if(!points.length)return '';
+        const d=points.map((x,i)=>`${i?'L':'M'} ${p+(Date.parse(x.timestamp)-firstTime)/timeSpan*(w-p*2)} ${y(x.value)}`).join(' ');
+        return `<path d="${d}" fill="none" stroke="${item.color}" stroke-width="2"/>`;
+      }).join('');
+      svg.innerHTML=`<line x1="${p}" y1="${p}" x2="${w-p}" y2="${p}" stroke="#26354d"/><line x1="${p}" y1="${h-p}" x2="${w-p}" y2="${h-p}" stroke="#26354d"/><text x="4" y="${p+4}">${esc(fmt(max))}</text><text x="4" y="${h-p}">${esc(fmt(min))}</text>${paths}`;
+    }
+    function renderMarket(data){
+      const select=document.getElementById('market-symbol');
+      if(data.symbols?.length){
+        const current=select.value||data.selected_symbol;
+        select.innerHTML=data.symbols.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');
+        select.value=data.symbols.includes(current)?current:data.selected_symbol;
+      }
+      if(!data.available){
+        document.getElementById('market-status').textContent=`${t('marketUnavailable')}: ${esc(data.reason||t('noMarketData'))}`;
+        document.getElementById('market-metrics').innerHTML='';
+        document.getElementById('market-table').innerHTML=`<div class="muted">${esc(data.reason||t('noMarketData'))}</div>`;
+        document.getElementById('market-chart').innerHTML=`<text x="20" y="35">${esc(data.reason||t('noMarketData'))}</text>`;
+        return;
+      }
+      const market=data.markets.find(x=>x.symbol===data.selected_symbol);
+      if(!market)return;
+      document.getElementById('market-status').textContent=`${t(data.freshness_status)} · ${data.latest_data_at?esc(localDateTime(data.latest_data_at)):'—'} · ${data.latest_data_age_seconds===null?'—':Math.round(data.latest_data_age_seconds)+'s'}`;
+      document.getElementById('market-metrics').innerHTML=[
+        metric(t('latest'),fmt(market.latest_last)),
+        metric(t('bidAsk'),`${fmt(market.latest_bid)} / ${fmt(market.latest_ask)}`),
+        metric(t('spreadBps'),market.latest_spread_bps===null?'—':market.latest_spread_bps),
+        metric(t('spreadAverage'),market.average_spread_bps===null?'—':market.average_spread_bps),
+        metric(t('change'),market.price_change_pct_observed===null?'—':`${market.price_change_pct_observed.toFixed(2)}%`,cls(market.price_change_pct_observed)),
+        metric(t('samples'),`${market.ticker_samples_24h} · ${market.ticker_samples_per_hour}/h`),
+        metric(t('candles'),market.candle_count_24h),
+        metric(t('coverage'),market.candle_coverage_pct===null?'—':`${market.candle_coverage_pct}%`),
+        metric(t('gaps'),`${market.candle_gap_minutes} min · max ${market.largest_candle_gap_minutes} min`)
+      ].join('');
+      document.getElementById('market-chart').setAttribute('aria-label',`${data.selected_symbol}: ${t('tickerLast')} / ${t('candleClose')}`);
+      drawMarketChart(data);
+      document.getElementById('market-table').innerHTML=`<table><thead><tr><th>${t('marketSelect')}</th><th class="num">${t('latest')}</th><th class="num">${t('spreadBps')}</th><th class="num">${t('change')}</th><th class="num">${t('samples')}</th><th class="num">${t('candles')}</th><th class="num">${t('gaps')}</th><th>${t('lastSeen')}</th></tr></thead><tbody>${data.markets.map(x=>`<tr><td>${esc(x.symbol)}</td><td class="num">${fmt(x.latest_last)}</td><td class="num">${x.latest_spread_bps??'—'}</td><td class="num ${cls(x.price_change_pct_observed)}">${x.price_change_pct_observed===null?'—':x.price_change_pct_observed.toFixed(2)+'%'}</td><td class="num">${x.ticker_samples_24h}</td><td class="num">${x.candle_count_24h} · ${x.candle_coverage_pct===null?'—':x.candle_coverage_pct+'%'}</td><td class="num">${x.candle_gap_minutes}</td><td>${esc(localDateTime(x.latest_observed_at))}</td></tr>`).join('')}</tbody></table>`;
+      const flags=[];
+      if(data.read_window_truncated)flags.push(t('marketLimited'));
+      if(data.invalid_ticker_rows||data.invalid_candle_rows)flags.push(`${t('marketInvalidRows')}: ${data.invalid_ticker_rows+data.invalid_candle_rows}`);
+      document.getElementById('market-footnote').textContent=flags.join(' · ');
+    }
+    async function refreshMarket(){
+      try{
+        const symbol=document.getElementById('market-symbol').value;
+        const query=symbol?`?symbol=${encodeURIComponent(symbol)}`:'';
+        const response=await fetch(`/api/market-observations${query}`,{cache:'no-store'});
+        if(!response.ok)throw new Error(`Market API HTTP ${response.status}`);
+        renderMarket(await response.json());
+      }catch(error){document.getElementById('market-status').textContent=t('marketUnavailable');console.error(error)}
     }
     function render(d){
       window.dashboardData=d;
@@ -581,10 +1023,12 @@ DASHBOARD_HTML = """<!doctype html>
         `${t('holdings')}: ${d.portfolio.holdings.length}`,`${t('lastEvent')}: ${esc(localDateTime(d.last_journal_event))}`
       ].map(x=>`<span class="pill">${x}</span>`).join('');
       document.getElementById('events').innerHTML=d.recent_events.length?`<table><thead><tr><th>${t('timeLocal')}</th><th>${t('asset')}</th><th>${t('action')}</th><th class="num">${t('amount')}</th><th class="num">${t('netPnl')}</th></tr></thead><tbody>${d.recent_events.map(x=>`<tr><td>${esc(localDateTime(x.timestamp))}</td><td>${esc(x.coin)}</td><td>${x.action==='buy'?t('buy'):x.action==='sell'?t('sell'):esc(x.action)}</td><td class="num">${fmt(x.amount_base,c)}</td><td class="num ${cls(x.net_pnl_base)}">${fmt(x.net_pnl_base,c)}</td></tr>`).join('')}</tbody></table>`:`<div class="muted">${t('noEvents')}</div>`;
+      refreshMarket();
     }
     async function refresh(){try{const r=await fetch('/api/dashboard',{cache:'no-store'});if(!r.ok)throw new Error(`HTTP ${r.status}`);render(await r.json());document.getElementById('updated').textContent=`${t('updated')}: ${new Date().toLocaleTimeString(locale==='de'?'de-DE':'en-US')}`}catch(e){document.getElementById('updated').textContent=t('dashboardUnavailable');console.error(e)}finally{nextRefreshAt=Date.now()+REFRESH_INTERVAL_MS;updateCountdown();setTimeout(refresh,REFRESH_INTERVAL_MS)}}
     document.getElementById('language-de').addEventListener('click',()=>setLanguage('de'));
     document.getElementById('language-en').addEventListener('click',()=>setLanguage('en'));
+    document.getElementById('market-symbol').addEventListener('change',refreshMarket);
     updateLanguage();updateClock();updateCountdown();setInterval(updateClock,1000);setInterval(updateCountdown,1000);refresh();
   </script>
 </body>

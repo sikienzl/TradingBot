@@ -19,44 +19,58 @@ def client(monkeypatch, tmp_path):
     reports_dir.mkdir()
     journal = data_dir / "trade_journal.csv"
     fields = [
-        "timestamp", "coin", "action", "amount_base", "net_pnl_base",
-        "fee_base", "slippage_base", "execution_cost_mode", "entry_cost_mode",
+        "timestamp",
+        "coin",
+        "action",
+        "amount_base",
+        "net_pnl_base",
+        "fee_base",
+        "slippage_base",
+        "execution_cost_mode",
+        "entry_cost_mode",
     ]
     with journal.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=fields)
         writer.writeheader()
-        writer.writerows([
+        writer.writerows(
+            [
+                {
+                    "timestamp": (now - timedelta(hours=2)).isoformat(),
+                    "coin": "BTC",
+                    "action": "buy",
+                    "amount_base": "10",
+                    "fee_base": "0.1",
+                    "slippage_base": "0.02",
+                    "execution_cost_mode": "net_costs",
+                    "entry_cost_mode": "net_costs",
+                },
+                {
+                    "timestamp": (now - timedelta(hours=1)).isoformat(),
+                    "coin": "BTC",
+                    "action": "sell",
+                    "amount_base": "10",
+                    "net_pnl_base": "-0.5",
+                    "fee_base": "0.1",
+                    "slippage_base": "0.02",
+                    "execution_cost_mode": "net_costs",
+                    "entry_cost_mode": "net_costs",
+                },
+            ]
+        )
+    (data_dir / ".portfolio_state.json").write_text(
+        json.dumps(
             {
-                "timestamp": (now - timedelta(hours=2)).isoformat(),
-                "coin": "BTC",
-                "action": "buy",
-                "amount_base": "10",
-                "fee_base": "0.1",
-                "slippage_base": "0.02",
-                "execution_cost_mode": "net_costs",
-                "entry_cost_mode": "net_costs",
-            },
-            {
-                "timestamp": (now - timedelta(hours=1)).isoformat(),
-                "coin": "BTC",
-                "action": "sell",
-                "amount_base": "10",
-                "net_pnl_base": "-0.5",
-                "fee_base": "0.1",
-                "slippage_base": "0.02",
-                "execution_cost_mode": "net_costs",
-                "entry_cost_mode": "net_costs",
-            },
-        ])
-    (data_dir / ".portfolio_state.json").write_text(json.dumps({
-        "cash": 19.5,
-        "holdings": {},
-        "open_trades": {},
-        "base_currency": "EUR",
-        "initial_portfolio_value": 20,
-        "simulation_iteration": 8,
-        "timestamp": now.isoformat(),
-    }), encoding="utf-8")
+                "cash": 19.5,
+                "holdings": {},
+                "open_trades": {},
+                "base_currency": "EUR",
+                "initial_portfolio_value": 20,
+                "simulation_iteration": 8,
+                "timestamp": now.isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
     (reports_dir / "latest.json").write_text('{"primary": {}}', encoding="utf-8")
     (data_dir / "trading_bot.log").write_text(
         f"🕒 Iteration 7 - {(now - timedelta(minutes=2)).strftime('%Y-%m-%d %H:%M:%S')}\n"
@@ -73,6 +87,7 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setenv("DASHBOARD_DATA_DIR", str(data_dir))
     monkeypatch.setenv("DASHBOARD_REPORT_FILE", str(reports_dir / "latest.json"))
     monkeypatch.setenv("DASHBOARD_LOG_FILE", str(data_dir / "trading_bot.log"))
+    monkeypatch.setenv("DASHBOARD_MARKET_DATA_DIR", str(tmp_path / "market-data"))
     dashboard._snapshot_cache = None
     with TestClient(
         dashboard.app,
@@ -105,6 +120,9 @@ def test_dashboard_requires_https_and_authentication(client):
     assert "lastCycle:'Letzter Bot-Zyklus'" in page.text
     assert "lastCycle:'Last bot cycle'" in page.text
     assert "d.last_bot_cycle.iteration" in page.text
+    assert 'id="market-chart"' in page.text
+    assert "api/market-observations" in page.text
+    assert "marketNotice" in page.text
     assert "setInterval(updateCountdown,1000)" in page.text
     assert "setTimeout(refresh,REFRESH_INTERVAL_MS)" in page.text
 
@@ -154,6 +172,119 @@ def test_dashboard_data_is_read_only_and_reports_paper_metrics(client):
     assert body["recent_events"][0]["timestamp"].endswith("+00:00")
     assert body["last_bot_cycle"]["iteration"] == 8
     assert body["last_bot_cycle"]["timestamp"].endswith("+00:00")
+
+
+def test_market_observations_api_is_authenticated_and_reports_missing_files(client):
+    response = client.get("/api/market-observations")
+    assert response.status_code == 401
+
+    response = client.get(
+        "/api/market-observations",
+        auth=("viewer", "long-test-password"),
+    )
+    assert response.status_code == 200
+    assert response.json()["available"] is False
+    assert "not mounted" in response.json()["reason"]
+
+
+def test_market_observations_api_summarizes_public_ticker_and_candles(client):
+    market_dir = Path(os.environ["DASHBOARD_MARKET_DATA_DIR"])
+    market_dir.mkdir()
+    (market_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "exchange": "kraken",
+                "symbols": ["ADA/EUR", "ETH/EUR"],
+                "ticker_interval_seconds": 10,
+                "candle_timeframe": "1m",
+                "candle_backfill_limit": 720,
+                "created_at_utc": datetime.now(UTC).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    now = datetime.now(UTC)
+    ticker_rows = [
+        {
+            "observed_at_utc": (now - timedelta(minutes=10)).isoformat(),
+            "exchange_timestamp_utc": "",
+            "symbol": "ADA/EUR",
+            "bid": "99.9",
+            "ask": "100.1",
+            "last": "100",
+            "base_volume": "",
+            "quote_volume": "",
+        },
+        {
+            "observed_at_utc": now.isoformat(),
+            "exchange_timestamp_utc": "",
+            "symbol": "ADA/EUR",
+            "bid": "100.9",
+            "ask": "101.1",
+            "last": "101",
+            "base_volume": "",
+            "quote_volume": "",
+        },
+    ]
+    with (market_dir / "tickers.csv").open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=dashboard.MARKET_TICKER_FIELDS)
+        writer.writeheader()
+        writer.writerows(ticker_rows)
+    candle_end = now.replace(second=0, microsecond=0)
+    candle_rows = [
+        {
+            "timestamp_utc": (candle_end - timedelta(minutes=1)).isoformat(),
+            "symbol": "ADA/EUR",
+            "open": "100",
+            "high": "101",
+            "low": "99",
+            "close": "100",
+            "volume": "5",
+        },
+        {
+            "timestamp_utc": candle_end.isoformat(),
+            "symbol": "ADA/EUR",
+            "open": "100",
+            "high": "102",
+            "low": "100",
+            "close": "101",
+            "volume": "6",
+        },
+    ]
+    with (market_dir / "candles_1m.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as file:
+        writer = csv.DictWriter(file, fieldnames=dashboard.MARKET_CANDLE_FIELDS)
+        writer.writeheader()
+        writer.writerows(candle_rows)
+
+    response = client.get(
+        "/api/market-observations?symbol=ADA%2FEUR",
+        auth=("viewer", "long-test-password"),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["available"] is True
+    assert body["selected_symbol"] == "ADA/EUR"
+    assert body["freshness_status"] == "fresh"
+    market = body["markets"][0]
+    assert market["latest_last"] == 101
+    assert market["latest_spread_bps"] == pytest.approx(19.8, abs=0.1)
+    assert market["price_change_pct_observed"] == 1
+    assert market["ticker_samples_24h"] == 2
+    assert market["candle_count_24h"] == 2
+    assert market["candle_coverage_pct"] == 100
+    assert market["candle_gap_minutes"] == 0
+    assert len(body["ticker_series"]) == 2
+    assert len(body["candle_series"]) == 2
+    assert (
+        client.get(
+            "/api/market-observations?symbol=../../etc/passwd",
+            auth=("viewer", "long-test-password"),
+        ).status_code
+        == 404
+    )
 
 
 def test_dashboard_reports_no_last_bot_cycle_when_log_has_no_iteration(client):
