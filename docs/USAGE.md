@@ -147,6 +147,9 @@ If the training CSV contains all six `research_*` feature columns, they are used
 ```sh
 python3 -m src.trading_bot
 ```
+- Docker's `SIGTERM` is handled through the bot's normal shutdown path so its
+  analytics writer can close. Allow a sufficient grace period for
+  `docker stop --time 30`; forced `SIGKILL` cannot run shutdown cleanup.
 - Set `DRY_RUN=true` (default) to simulate trades without spending real funds.
 - Set `SIMULATE_DATA=true` to use synthetic market data. For an offline run,
   also disable network-dependent features, including

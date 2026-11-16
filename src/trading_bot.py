@@ -8,9 +8,10 @@ import math
 import os
 import re
 import shutil
+import signal
 import stat
-import tempfile
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -30,6 +31,14 @@ else:
     from strategy_rules import rule_recommendation as get_rule_recommendation
 
 logger = logging.getLogger(__name__)
+
+
+def _handle_sigterm(_signum: int, _frame: Any) -> None:
+    raise KeyboardInterrupt
+
+
+def _install_sigterm_handler() -> None:
+    signal.signal(signal.SIGTERM, _handle_sigterm)
 
 
 _SAFE_IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
@@ -5868,6 +5877,7 @@ if __name__ == "__main__":
             f"   OHLCV limit (for indicators): {config.ohlcv_limit} candles")
 
         bot = CryptoTradingBot(config)
+        _install_sigterm_handler()
         bot.run()
     except (ImportError, OSError, TypeError, ValueError, KeyError) as e:
         logger.critical(f"Initialisation error: {e}", exc_info=True)

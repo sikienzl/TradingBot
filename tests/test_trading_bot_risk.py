@@ -1,9 +1,32 @@
 import logging
+import signal
 from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 
-from src.trading_bot import BotConfig, CryptoTradingBot, _order_fill_details
+from src.trading_bot import (
+    BotConfig,
+    CryptoTradingBot,
+    _install_sigterm_handler,
+    _order_fill_details,
+)
+
+
+def test_sigterm_uses_bot_shutdown_handler(monkeypatch):
+    installed = {}
+    monkeypatch.setattr(
+        "src.trading_bot.signal.signal",
+        lambda signum, handler: installed.update({signum: handler}),
+    )
+
+    _install_sigterm_handler()
+
+    assert signal.SIGTERM in installed
+    try:
+        installed[signal.SIGTERM](signal.SIGTERM, None)
+    except KeyboardInterrupt:
+        return
+    raise AssertionError("SIGTERM should use the bot's graceful shutdown path.")
 
 
 def _make_test_bot(monkeypatch):
