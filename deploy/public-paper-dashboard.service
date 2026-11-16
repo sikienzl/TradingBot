@@ -2,10 +2,13 @@
 Description=Read-only authenticated paper trading dashboard
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/sg docker -c "/usr/bin/docker run --rm --name trading-paper-dashboard --network host --cap-drop=ALL --security-opt=no-new-privileges --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m --pids-limit=64 --memory=256m --env-file %h/trading-paper-dashboard/dashboard.env --env DASHBOARD_MARKET_DATA_DIR=/market-data --mount type=bind,src=%h/trading-hailo-public-paper/data,dst=/data,readonly --mount type=bind,src=%h/trading-hailo-public-paper/reports,dst=/reports,readonly --mount type=bind,src=%h/trading-market-recorder/data,dst=/market-data,readonly --mount type=bind,src=%h/trading-paper-dashboard/tls,dst=/tls,readonly trading-paper-dashboard:local"
+EnvironmentFile=%h/trading-market-recorder/storage.env
+ExecStartPre=/bin/sh -c 'test -n "$$MARKET_RECORDER_FS_UUID" && test "$$(/usr/bin/findmnt -rn -M /mnt/nvme_data -o UUID)" = "$$MARKET_RECORDER_FS_UUID" && test -d /mnt/nvme_data/trading-market-recorder/data'
+ExecStart=/usr/bin/sg docker -c "/usr/bin/docker run --rm --name trading-paper-dashboard --network host --cap-drop=ALL --security-opt=no-new-privileges --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m --pids-limit=64 --memory=256m --env-file %h/trading-paper-dashboard/dashboard.env --env DASHBOARD_MARKET_DATA_DIR=/market-data --mount type=bind,src=%h/trading-hailo-public-paper/data,dst=/data,readonly --mount type=bind,src=%h/trading-hailo-public-paper/reports,dst=/reports,readonly --mount type=bind,src=/mnt/nvme_data/trading-market-recorder/data,dst=/market-data,readonly --mount type=bind,src=%h/trading-paper-dashboard/tls,dst=/tls,readonly trading-paper-dashboard:local"
 ExecStop=/usr/bin/sg docker -c "/usr/bin/docker stop --time 15 trading-paper-dashboard"
 Restart=on-failure
 RestartSec=5

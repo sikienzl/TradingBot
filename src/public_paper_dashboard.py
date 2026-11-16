@@ -14,6 +14,7 @@ import re
 import threading
 import time
 from collections import Counter, defaultdict
+from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from itertools import pairwise
@@ -170,9 +171,12 @@ def _field_total(rows: list[dict[str, str]], field: str) -> float | None:
 
 def _read_csv_tail(
     path: Path, fields: tuple[str, ...]
-) -> tuple[list[dict[str, str]], bool]:
-    size = path.stat().st_size
+) -> tuple[Iterator[dict[str, str]], bool]:
     with path.open("rb") as source:
+        size = os.fstat(source.fileno()).st_size
+        header = source.readline(4096).decode("utf-8")
+        if tuple(next(csv.reader([header]), [])) != fields:
+            raise ValueError(f"{path.name} has an unexpected CSV header")
         if size > MARKET_DATA_READ_LIMIT:
             source.seek(-MARKET_DATA_READ_LIMIT, os.SEEK_END)
             content = source.read(MARKET_DATA_READ_LIMIT)
@@ -182,7 +186,8 @@ def _read_csv_tail(
             content = content[first_newline + 1 :]
             truncated = True
         else:
-            content = source.read()
+            source.seek(0)
+            content = source.read(MARKET_DATA_READ_LIMIT)
             truncated = False
     if content and not content.endswith(b"\n"):
         last_newline = content.rfind(b"\n")
@@ -190,10 +195,10 @@ def _read_csv_tail(
     text = content.decode("utf-8")
     reader = csv.DictReader(io.StringIO(text, newline=""))
     if tuple(reader.fieldnames or ()) == fields:
-        return list(reader), truncated
+        return reader, truncated
     if truncated:
         reader = csv.DictReader(io.StringIO(",".join(fields) + "\n" + text, newline=""))
-        return list(reader), True
+        return reader, True
     raise ValueError(f"{path.name} has an unexpected CSV header")
 
 
@@ -220,15 +225,6 @@ def load_market_observations(selected_symbol: str | None = None) -> dict[str, An
         return _market_unavailable("Market recorder data directory is not mounted.")
     if not all(path.is_file() for path in (metadata_path, ticker_path, candle_path)):
         return _market_unavailable("Market recorder data files are not available yet.")
-    if any(
-        path.stat().st_size > 2 * 1024 * 1024 * 1024
-        for path in (ticker_path, candle_path)
-    ):
-        logger.error("Market recorder data exceeds the 2 GiB safety limit")
-        return _market_unavailable(
-            "Market recorder data exceeds the dashboard safety limit."
-        )
-
     try:
         if metadata_path.stat().st_size > 1024 * 1024:
             raise ValueError("market recorder metadata exceeds the read limit")
@@ -266,10 +262,11 @@ def load_market_observations(selected_symbol: str | None = None) -> dict[str, An
     window_start = now - MARKET_DATA_WINDOW
 
     def valid_rows(
-        rows: list[dict[str, str]],
+        rows: Iterator[dict[str, str]],
         timestamp_field: str,
     ) -> tuple[dict[str, list[tuple[datetime, dict[str, str]]]], int]:
         grouped: dict[str, list[tuple[datetime, dict[str, str]]]] = defaultdict(list)
+        older_latest: dict[str, tuple[datetime, dict[str, str]]] = {}
         invalid = 0
         for row in rows:
             symbol = row.get("symbol", "")
@@ -296,14 +293,29 @@ def load_market_observations(selected_symbol: str | None = None) -> dict[str, An
                 if min(open_price, high, low, close) <= 0 or volume < 0 or high < low:
                     invalid += 1
                     continue
-            if timestamp <= now:
+            if window_start <= timestamp <= now:
                 grouped[symbol].append((timestamp, row))
+            elif timestamp < window_start and (
+                symbol not in older_latest or timestamp > older_latest[symbol][0]
+            ):
+                older_latest[symbol] = (timestamp, row)
+        for symbol, entry in older_latest.items():
+            if not grouped[symbol]:
+                grouped[symbol].append(entry)
         for entries in grouped.values():
             entries.sort(key=lambda item: item[0])
         return grouped, invalid
 
-    all_tickers_by_symbol, invalid_tickers = valid_rows(tickers, "observed_at_utc")
-    all_candles_by_symbol, invalid_candles = valid_rows(candles, "timestamp_utc")
+    try:
+        all_tickers_by_symbol, invalid_tickers = valid_rows(tickers, "observed_at_utc")
+        del tickers
+        all_candles_by_symbol, invalid_candles = valid_rows(candles, "timestamp_utc")
+        del candles
+    except csv.Error as exc:
+        logger.error("Unable to parse public market observations: %s", exc)
+        return _market_unavailable(
+            "Market recorder data is invalid or temporarily unavailable."
+        )
     ticker_by_symbol = {
         symbol: [entry for entry in entries if entry[0] >= window_start]
         for symbol, entries in all_tickers_by_symbol.items()

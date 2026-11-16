@@ -325,29 +325,47 @@ backfills up to 720 one-minute candles on first start, then records completed
 one-minute candles. Keep this process separate from the paper bot; its data
 directory is not a bot state or journal directory.
 
-Build the image from the repository root, then create a private persistent
-directory and start the recorder without passing any bot environment file:
+On the current host the recorder stores its files on the SSD at
+`/mnt/nvme_data/trading-market-recorder/data`. The SSD must be mounted there
+before the service starts. An administrator must create the private parent
+directory, owned by the `trading` user and group, and the trading user must
+create `data` inside it with mode `0700`. Do not use a directory under the
+mountpoint on the root filesystem as a fallback.
+
+The recorder and dashboard user services require
+`~/trading-market-recorder/storage.env`, mode `0600`, containing
+`MARKET_RECORDER_FS_UUID=<expected filesystem UUID>`. Obtain the UUID using
+`findmnt -rn -M /mnt/nvme_data -o UUID` while the intended SSD is mounted;
+verify it independently before saving it. Both services check this UUID and
+the data directory before starting, retry on failure, and do not silently use
+the root filesystem. Keep Docker's restart policy disabled for this recorder:
+systemd performs the mount check on every service start. The dashboard will
+also be unavailable while the SSD check fails. The files are retained without
+automatic deletion; monitor both SSD space and Docker/system logs separately.
+
+Build the image from the repository root and install the user service, without
+passing any bot environment file:
 
 ```sh
 rtk proxy docker build \
   --build-arg TRADING_UID="$(id -u)" \
   --build-arg TRADING_GID="$(id -g)" \
   -f docker/hailo-shadow.Dockerfile -t trading-market-recorder:local .
-rtk proxy mkdir -p ~/trading-market-recorder/data
-rtk proxy chmod 700 ~/trading-market-recorder ~/trading-market-recorder/data
-rtk proxy docker run -d --name trading-market-recorder \
-  --restart unless-stopped --network host \
-  --memory 256m --cpus 0.25 --read-only \
-  --tmpfs /tmp:rw,noexec,nosuid,size=16m \
-  --cap-drop ALL --security-opt no-new-privileges \
-  --mount type=bind,src="$HOME/trading-market-recorder/data",dst=/data \
-  --env PYTHONDONTWRITEBYTECODE=1 \
-  --entrypoint python3 trading-market-recorder:local \
-  -m src.public_market_recorder --data-dir /data \
-  --symbols ADA/EUR,ETH/EUR,LINK/EUR,NEAR/EUR,SOL/EUR,SUI/EUR
+rtk proxy mkdir -m 700 /mnt/nvme_data/trading-market-recorder/data
+rtk proxy mkdir -p ~/.config/systemd/user
+rtk proxy cp deploy/public-market-recorder.service ~/.config/systemd/user/
+rtk proxy systemctl --user daemon-reload
+rtk proxy systemctl --user enable --now public-market-recorder.service
 ```
 
-Verify with `docker logs --tail 30 trading-market-recorder`; output files are
+When migrating existing data, stop the old recorder first, preserve the
+original directory as a rollback backup, copy all files to the SSD and verify
+their checksums before starting the new service. Never run two writers against
+different copies. Update and restart the dashboard service so it mounts the
+same SSD directory read-only.
+
+Verify with `systemctl --user status public-market-recorder.service` and
+`docker logs --tail 30 trading-market-recorder`; output files are
 `tickers.csv`, `candles_1m.csv`, and `metadata.json`. The recorder exits
 explicitly if another writer holds the directory, the saved schema/settings
 do not match, or a requested Kraken market is inactive. It appends to existing
@@ -512,6 +530,8 @@ files. It also reads the public market recorder's `tickers.csv`,
 The dashboard shows the last 24 hours where available, per-market freshness,
 bid/ask spread, observed price change, candle coverage and gaps. Large CSVs
 are read from a bounded recent tail and the UI reports when that limit applies.
+Only the most recent 24 hours are shown; the original retained files are not
+deleted or shortened by the dashboard.
 These public quotes and candles are not trade executions and do not establish
 profitability or executable fills. The recorder itself is neither restarted
 nor modified by dashboard deployment. It does not mount the Docker socket

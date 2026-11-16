@@ -187,6 +187,36 @@ def test_market_observations_api_is_authenticated_and_reports_missing_files(clie
     assert "not mounted" in response.json()["reason"]
 
 
+def test_market_csv_tail_is_bounded_and_validates_original_header(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "tickers.csv"
+    fields = dashboard.MARKET_TICKER_FIELDS
+    with path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fields)
+        writer.writeheader()
+        for index in range(10):
+            writer.writerow(
+                {
+                    "observed_at_utc": f"2026-01-01T00:00:{index:02}+00:00",
+                    "symbol": "ADA/EUR",
+                    "bid": 1,
+                    "ask": 2,
+                    "last": 1,
+                }
+            )
+    monkeypatch.setattr(dashboard, "MARKET_DATA_READ_LIMIT", 150)
+    row_iterator, truncated = dashboard._read_csv_tail(path, fields)
+    rows = list(row_iterator)
+    assert truncated
+    assert rows[-1]["observed_at_utc"] == "2026-01-01T00:00:09+00:00"
+    assert len(rows) < 10
+    original = path.read_text(encoding="utf-8")
+    path.write_text("invalid,header\n" + original.split("\n", 1)[1], encoding="utf-8")
+    with pytest.raises(ValueError, match="unexpected CSV header"):
+        dashboard._read_csv_tail(path, fields)
+
+
 def test_market_observations_api_summarizes_public_ticker_and_candles(client):
     market_dir = Path(os.environ["DASHBOARD_MARKET_DATA_DIR"])
     market_dir.mkdir()
