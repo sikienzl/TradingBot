@@ -289,6 +289,28 @@ tiers, or exchange-specific fills. Small samples are
 descriptive only; this replay is not a profitability forecast or a live-trading
 recommendation.
 
+For finer, continuing public-market observations, start the read-only recorder
+in a dedicated data directory:
+
+```sh
+python3 -m src.public_market_recorder \
+  --data-dir data/market_observations \
+  --symbols ADA/EUR,ETH/EUR,LINK/EUR,NEAR/EUR,SOL/EUR,SUI/EUR
+```
+
+The recorder uses Kraken's public ticker and OHLCV endpoints only; it does not
+load `.env`, use API credentials, read portfolio state, or submit orders. It
+backfills up to 720 one-minute candles per market, then appends newly completed
+candles and bid/ask/last ticker snapshots every 10 seconds. The output
+directory holds `tickers.csv`, `candles_1m.csv`, and a `metadata.json` file
+that records the schema and sampling settings. Existing data is never
+overwritten; a configuration/schema mismatch or a second writer fails
+explicitly. Run the recorder continuously for at least 30 days before using
+the data for a forward evaluation. Ticker snapshots and OHLCV remain
+observations of public quotes/candles, not proof of executable fills. The
+recorder's host deployment and isolated replay procedure are in the
+[server runbook](../SERVER_README.md).
+
 Trade-journal confidence-threshold analysis selects a candidate on the first
 70% of chronological trades and reports its result on the final 30% holdout.
 The report also warns when journal events are older than 24 hours, since stale

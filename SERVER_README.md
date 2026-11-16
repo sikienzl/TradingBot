@@ -316,6 +316,50 @@ simulated, with the specified fees and slippage on each side. The current
 account balance is not refreshed after initialization. This experiment neither
 places orders nor establishes real profitability.
 
+#### Continuous public-market recorder (read-only)
+
+The recorder independently observes the six EUR markets in the stopped public
+paper run. It uses no `.env`, exchange credentials, account endpoints, or
+portfolio/journal files. It samples public bid/ask/last every 10 seconds,
+backfills up to 720 one-minute candles on first start, then records completed
+one-minute candles. Keep this process separate from the paper bot; its data
+directory is not a bot state or journal directory.
+
+Build the image from the repository root, then create a private persistent
+directory and start the recorder without passing any bot environment file:
+
+```sh
+rtk proxy docker build \
+  --build-arg TRADING_UID="$(id -u)" \
+  --build-arg TRADING_GID="$(id -g)" \
+  -f docker/hailo-shadow.Dockerfile -t trading-market-recorder:local .
+rtk proxy mkdir -p ~/trading-market-recorder/data
+rtk proxy chmod 700 ~/trading-market-recorder ~/trading-market-recorder/data
+rtk proxy docker run -d --name trading-market-recorder \
+  --restart unless-stopped --network host \
+  --memory 128m --cpus 0.25 --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --mount type=bind,src="$HOME/trading-market-recorder/data",dst=/data \
+  --env PYTHONDONTWRITEBYTECODE=1 \
+  --entrypoint python3 trading-market-recorder:local \
+  -m src.public_market_recorder --data-dir /data \
+  --symbols ADA/EUR,ETH/EUR,LINK/EUR,NEAR/EUR,SOL/EUR,SUI/EUR
+```
+
+Verify
+`docker logs --tail 30 trading-market-recorder`; output files are
+`tickers.csv`, `candles_1m.csv`, and `metadata.json`. The recorder exits
+explicitly if another writer holds the directory, the saved schema/settings
+do not match, or a requested Kraken market is inactive. It appends to existing
+data rather than replacing it. Restart it with the same image settings and
+directory so candle timestamps are deduplicated and
+missed candles are fetched where Kraken's OHLCV history allows. Log any
+reported gaps; the service cannot recreate candles outside Kraken's available
+history. Keep it running for at least 30 days before treating the captures as
+a forward sample. The observations are public quotes and candles, not actual
+fills or a profitability guarantee.
+
 #### Daily paper observation (read-only)
 
 The report uses only the isolated paper journal and bot logs; it does not
