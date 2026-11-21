@@ -1,5 +1,6 @@
 import csv
 
+import ccxt
 import pytest
 
 from src.trading_bot import BotConfig, CryptoTradingBot
@@ -72,6 +73,7 @@ def test_net_round_trip_and_journal(monkeypatch, tmp_path):
     assert sell["entry_cost_mode"] == "net_costs"
     assert float(buy["fee_base"]) == pytest.approx(quantity * 100.1 * 0.002)
     assert float(sell["slippage_base"]) == pytest.approx(quantity * 0.1)
+    assert float(sell["fee_base"]) == pytest.approx(quantity * 99.9 * 0.002)
     assert float(sell["amount_base"]) == pytest.approx(proceeds)
     assert float(sell["pnl_pct"]) == pytest.approx(proceeds - 100)
     assert float(sell["gross_pnl_base"]) == 0
@@ -246,6 +248,100 @@ def test_live_trade_does_not_apply_costs(monkeypatch, tmp_path):
     assert bot.portfolio.open_trades["BTC"]["amount_coin"] == 1
     assert bot.portfolio.open_trades["BTC"]["amount_base"] == 100
     assert rows(tmp_path)[0]["execution_cost_mode"] == "live_exchange"
+
+
+def test_live_buy_accounts_only_confirmed_partial_fill(monkeypatch, tmp_path):
+    bot = make_bot(monkeypatch, tmp_path, dry_run=False)
+
+    class Exchange:
+        def market(self, symbol):
+            return {"limits": {"amount": {"min": 0}}}
+
+        def create_market_buy_order(self, symbol, amount):
+            assert symbol == "BTC/EUR"
+            assert amount == 1
+            return {
+                "id": "partial-buy",
+                "status": "closed",
+                "amount": amount,
+                "filled": 0.4,
+                "average": 102.0,
+                "cost": 40.8,
+            }
+
+    bot.exchange = Exchange()
+    monkeypatch.setattr(bot, "_update_portfolio_balance", lambda: None)
+
+    assert bot._execute_trade("BTC", "buy", 100, 100)
+
+    trade = bot.portfolio.open_trades["BTC"]
+    assert trade["amount_coin"] == pytest.approx(0.4)
+    assert trade["amount_base"] == pytest.approx(40.8)
+    row = rows(tmp_path)[0]
+    assert float(row["amount_coin"]) == pytest.approx(0.4)
+    assert float(row["amount_base"]) == pytest.approx(40.8)
+
+
+def test_live_buy_network_failure_does_not_mutate_portfolio(monkeypatch, tmp_path):
+    bot = make_bot(monkeypatch, tmp_path, dry_run=False)
+
+    class Exchange:
+        def market(self, symbol):
+            return {"limits": {"amount": {"min": 0}}}
+
+        def create_market_buy_order(self, symbol, amount):
+            raise ccxt.NetworkError("exchange unavailable")
+
+    bot.exchange = Exchange()
+    monkeypatch.setattr(
+        bot,
+        "_update_portfolio_balance",
+        lambda: pytest.fail("balance must not be refreshed after a failed order"),
+    )
+
+    assert not bot._execute_trade("BTC", "buy", 100, 100)
+    assert bot.portfolio.cash == pytest.approx(100)
+    assert bot.portfolio.holdings == {}
+    assert bot.portfolio.open_trades == {}
+    assert bot.performance["buys"] == 0
+    assert rows(tmp_path) == []
+
+
+def test_live_buy_fetch_order_outage_does_not_account_unconfirmed_fill(
+    monkeypatch, tmp_path
+):
+    bot = make_bot(monkeypatch, tmp_path, dry_run=False)
+    calls = []
+
+    class Exchange:
+        def market(self, symbol):
+            return {"limits": {"amount": {"min": 0}}}
+
+        def create_market_buy_order(self, symbol, amount):
+            return {"id": "unknown-buy", "status": "open", "amount": amount}
+
+        def cancel_order(self, order_id, symbol):
+            calls.append("cancel")
+            raise ccxt.NetworkError("cancel unavailable")
+
+        def fetch_order(self, order_id, symbol):
+            calls.append("fetch")
+            raise ccxt.NetworkError("order status unavailable")
+
+    bot.exchange = Exchange()
+    monkeypatch.setattr(
+        bot,
+        "_update_portfolio_balance",
+        lambda: pytest.fail("balance must not be refreshed for an unknown fill"),
+    )
+
+    assert not bot._execute_trade("BTC", "buy", 100, 100)
+    assert calls == ["cancel", "fetch"]
+    assert bot.portfolio.cash == pytest.approx(100)
+    assert bot.portfolio.holdings == {}
+    assert bot.portfolio.open_trades == {}
+    assert bot.performance["buys"] == 0
+    assert rows(tmp_path) == []
 
 
 def test_legacy_journal_migration_preserves_rows(monkeypatch, tmp_path):

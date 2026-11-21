@@ -49,6 +49,7 @@ auto_tune_state*.json
 # Testing
 .pytest_cache/
 .coverage
+/coverage.xml
 
 # IDE
 .vscode/

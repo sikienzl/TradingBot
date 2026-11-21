@@ -121,6 +121,34 @@ def test_corrupt_state_does_not_fetch_balance(monkeypatch, tmp_path):
         bot._update_portfolio_balance()
 
 
+@pytest.mark.parametrize(
+    "cash,holdings",
+    [
+        (-1.0, {}),
+        (10.0, {"BTC": -0.25}),
+        (float("nan"), {}),
+    ],
+)
+def test_invalid_persisted_balances_fail_closed_without_exchange_access(
+    monkeypatch, tmp_path, cash, holdings
+):
+    state = {
+        "base_currency": "EUR",
+        "cash": cash,
+        "holdings": holdings,
+        "open_trades": {},
+        "simulation_iteration": 0,
+    }
+    (tmp_path / "portfolio.json").write_text(json.dumps(state))
+    monkeypatch.setattr(
+        ccxt, "kraken", lambda config: pytest.fail("unexpected API access")
+    )
+    bot = make_bot(monkeypatch, tmp_path)
+
+    with pytest.raises(RuntimeError, match="Cannot restore"):
+        bot._update_portfolio_balance()
+
+
 def test_persistence_failure_preserves_previous_file(monkeypatch, tmp_path):
     state = tmp_path / "portfolio.json"
     state.write_text("original")

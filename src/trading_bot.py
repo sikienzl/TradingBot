@@ -3067,7 +3067,10 @@ class CryptoTradingBot:
 
         if self.config.simulate_data or self.exchange is None:
             needs_initialization = (
-                self.portfolio.cash == 0.0 and not self.portfolio.holdings
+                self.portfolio.last_update is None
+                and self.portfolio.initial_portfolio_value is None
+                and math.isclose(self.portfolio.cash, 0.0, abs_tol=1e-12)
+                and not self.portfolio.holdings
             )
             if needs_initialization and not self.portfolio.load_state():
                 self.portfolio.cash = 1000.0

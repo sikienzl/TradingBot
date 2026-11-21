@@ -97,7 +97,7 @@ def journal_report(path: str, start: datetime, end: datetime) -> dict:
     }
 
 
-LOG_TIMESTAMP = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d[,.]\d+)\s+-\s+\w+\s+-\s+(.*)$")
+LOG_TIMESTAMP = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d[,.]\d++)\s++-\s++\w++\s++-\s++(.*)$")
 DECISION = re.compile(r"HAILO for (\S+): (KAUFEN|HALTEN|VERKAUFEN)\b")
 
 

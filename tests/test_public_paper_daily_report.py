@@ -79,6 +79,35 @@ def test_logs_count_individual_decisions_and_not_summary_duplicates():
     assert result["hailo_other_events"] == {"prediction_failed": 1}
 
 
+@pytest.mark.parametrize(
+    "line,timestamp,message",
+    [
+        ("2026-06-06 02:00:00,000 - INFO - Hello", "2026-06-06 02:00:00,000", "Hello"),
+        ("2026-06-06 02:00:00.123456\t-\tWARNING\t-\t📊 HAILO", "2026-06-06 02:00:00.123456", "📊 HAILO"),
+        ("2026-06-06 02:00:00,0 - INFO -   ", "2026-06-06 02:00:00,0", ""),
+    ],
+)
+def test_log_timestamp_accepts_valid_formats(line, timestamp, message):
+    match = report.LOG_TIMESTAMP.match(line)
+    assert match is not None
+    assert match.groups() == (timestamp, message)
+
+
+def test_log_timestamp_handles_long_malformed_line_without_excessive_backtracking():
+    code = (
+        "from scripts.public_paper_daily_report import LOG_TIMESTAMP\n"
+        "line = '2026-06-06 02:00:00,000 - INFO - ' + ' ' * 100000 + 'x\\ny'\n"
+        "assert LOG_TIMESTAMP.match(line) is None\n"
+    )
+    subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env={**os.environ, "PYTHONPATH": str(ROOT / "scripts")},
+        check=True,
+        timeout=5,
+    )
+
+
 def test_comparison_cli_reports_non_comparable_and_redacts_secrets(tmp_path):
     journal = tmp_path / "journal.csv"
     write_journal(journal, [])

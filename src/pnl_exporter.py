@@ -18,6 +18,11 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+if __package__:
+    from .export_pnl_metrics import read_latest_portfolio_snapshot
+else:
+    from export_pnl_metrics import read_latest_portfolio_snapshot
+
 JOURNAL_PATH = '/opt/trading_2/trade_journal.csv'
 BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
 ENV_PATH = '/opt/trading_2/.env'
@@ -34,15 +39,6 @@ AI_SPEND_CACHE = {
 }
 AI_SPEND_CACHE_TTL_SECONDS = 300
 AI_SPEND_API_TIMEOUT_SECONDS = 2
-CURRENT_PRICE_RE = re.compile(
-    r'📊\s+([A-Z0-9]+):\s+Buy\s+[0-9.]+\s+→\s+Current\s+([0-9.]+)'
-)
-OPEN_TRADE_AMOUNT_BASE_RE = re.compile(
-    r"'([A-Z0-9]+)'\s*:\s*\{[^}]*'amount_base'\s*:\s*([0-9.eE+-]+)"
-)
-OPEN_TRADE_AMOUNT_COIN_RE = re.compile(
-    r"'([A-Z0-9]+)'\s*:\s*\{[^}]*'amount_coin'\s*:\s*([0-9.eE+-]+)"
-)
 SHADOW_SUGGESTION_META_RE = re.compile(
     r'^([a-z]+),\s+confidence=([0-9.]+),\s+reason='
 )
@@ -277,124 +273,20 @@ class MetricsHandler(BaseHTTPRequestHandler):
 
     def read_latest_portfolio_snapshot(self):
         """Read latest portfolio value and cash from bot log."""
-        snapshot = {
-            'portfolio_value_eur': 0.0,
-            'portfolio_cash_eur': 0.0,
-            'holdings_amount_coin': {},
-            'holdings_value_eur': {},
-            'holdings_cost_basis_eur': {},
-            'holdings_unrealized_pnl_eur': {},
-            'open_positions_count': 0,
-            'portfolio_snapshot_timestamp_unixtime': 0.0,
-            'portfolio_snapshot_age_seconds': 0.0,
-            'metrics_generated_unixtime': datetime.now(UTC).timestamp(),
-        }
+        generated_at = datetime.now(UTC).timestamp()
+        timestamp = 0.0
 
-        if not os.path.exists(BOT_LOG_PATH):
-            return snapshot
+        def capture_timestamp(line):
+            nonlocal timestamp
+            line_ts = self._extract_log_line_timestamp(line)
+            if line_ts is not None:
+                timestamp = line_ts.timestamp()
 
-        try:
-            with open(BOT_LOG_PATH, 'r', encoding='utf-8', errors='ignore') as f:
-                tail_lines = list(deque(f, maxlen=800))
-
-            current_prices = {}
-            open_trade_amount_base = {}
-            open_trade_amount_coin = {}
-
-            for line in reversed(tail_lines):
-                if snapshot['portfolio_value_eur'] == 0.0 and 'Portfolio value:' in line:
-                    try:
-                        value_part = line.split(
-                            'Portfolio value:', 1)[1].strip()
-                        snapshot['portfolio_value_eur'] = float(
-                            value_part.split(' ')[0])
-                        line_ts = self._extract_log_line_timestamp(line)
-                        if line_ts is not None:
-                            snapshot['portfolio_snapshot_timestamp_unixtime'] = line_ts.timestamp(
-                            )
-                    except (IndexError, ValueError):
-                        pass
-
-                if snapshot['portfolio_cash_eur'] == 0.0 and '  - Cash:' in line:
-                    try:
-                        cash_part = line.split('Cash:', 1)[1].strip()
-                        snapshot['portfolio_cash_eur'] = float(
-                            cash_part.split(' ')[0])
-                    except (IndexError, ValueError):
-                        pass
-
-                if not snapshot['holdings_amount_coin'] and '  - Holdings:' in line:
-                    try:
-                        holdings_part = line.split('Holdings:', 1)[1].strip()
-                        parsed = ast.literal_eval(holdings_part)
-                        if isinstance(parsed, dict):
-                            snapshot['holdings_amount_coin'] = {
-                                str(coin).upper(): float(amount)
-                                for coin, amount in parsed.items()
-                                if float(amount) > 0.0
-                            }
-                    except (SyntaxError, TypeError, ValueError):
-                        pass
-
-                if '  - Open trades details:' in line:
-                    for coin, amount_coin in OPEN_TRADE_AMOUNT_COIN_RE.findall(line):
-                        current_coin = coin.upper()
-                        if current_coin not in open_trade_amount_coin:
-                            try:
-                                open_trade_amount_coin[current_coin] = float(
-                                    amount_coin)
-                            except ValueError:
-                                pass
-                    for coin, amount_base in OPEN_TRADE_AMOUNT_BASE_RE.findall(line):
-                        current_coin = coin.upper()
-                        if current_coin not in open_trade_amount_base:
-                            try:
-                                open_trade_amount_base[current_coin] = float(
-                                    amount_base)
-                            except ValueError:
-                                pass
-
-                if '→ Current ' in line:
-                    match = CURRENT_PRICE_RE.search(line)
-                    if match:
-                        coin, current_price = match.groups()
-                        current_coin = coin.upper()
-                        if current_coin not in current_prices:
-                            try:
-                                current_prices[current_coin] = float(
-                                    current_price)
-                            except ValueError:
-                                pass
-
-                if snapshot['portfolio_value_eur'] != 0.0 and snapshot['portfolio_cash_eur'] != 0.0:
-                    if not snapshot['holdings_amount_coin']:
-                        break
-                    if all(
-                        coin in current_prices or coin in open_trade_amount_base
-                        for coin in snapshot['holdings_amount_coin']
-                    ):
-                        break
-        except (OSError, UnicodeError):
-            return snapshot
-
-        for coin, amount_coin in snapshot['holdings_amount_coin'].items():
-            if coin in current_prices:
-                snapshot['holdings_value_eur'][coin] = amount_coin * \
-                    current_prices[coin]
-            elif coin in open_trade_amount_base:
-                snapshot['holdings_value_eur'][coin] = open_trade_amount_base[coin]
-            if coin in open_trade_amount_base:
-                snapshot['holdings_cost_basis_eur'][coin] = open_trade_amount_base[coin]
-
-        for coin, amount_coin in open_trade_amount_coin.items():
-            snapshot['holdings_amount_coin'].setdefault(coin, amount_coin)
-        for coin, amount_base in open_trade_amount_base.items():
-            snapshot['holdings_cost_basis_eur'].setdefault(coin, amount_base)
-        for coin, current_value in snapshot['holdings_value_eur'].items():
-            cost_basis = snapshot['holdings_cost_basis_eur'].get(coin, 0.0)
-            snapshot['holdings_unrealized_pnl_eur'][coin] = current_value - cost_basis
-        snapshot['open_positions_count'] = len(
-            snapshot['holdings_amount_coin'])
+        snapshot = read_latest_portfolio_snapshot(
+            BOT_LOG_PATH, on_portfolio_value=capture_timestamp)
+        snapshot['portfolio_snapshot_timestamp_unixtime'] = timestamp
+        snapshot['portfolio_snapshot_age_seconds'] = 0.0
+        snapshot['metrics_generated_unixtime'] = generated_at
         if snapshot['portfolio_snapshot_timestamp_unixtime'] > 0.0:
             snapshot['portfolio_snapshot_age_seconds'] = max(
                 0.0,

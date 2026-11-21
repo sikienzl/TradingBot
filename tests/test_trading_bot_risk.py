@@ -2,7 +2,9 @@ import logging
 import signal
 from datetime import UTC, datetime, timedelta
 
+import ccxt
 import pandas as pd
+import pytest
 
 from src.trading_bot import (
     BotConfig,
@@ -73,6 +75,30 @@ def test_order_fill_details_reject_unconfirmed_fill():
         raise AssertionError("An unconfirmed order fill must be rejected.")
 
 
+@pytest.mark.parametrize(
+    "invalid_fields",
+    [
+        {"filled": 0},
+        {"filled": -0.1},
+        {"filled": 1.01},
+        {"filled": float("nan")},
+        {"average": float("inf")},
+        {"cost": -1},
+    ],
+)
+def test_order_fill_details_rejects_invalid_exchange_values(invalid_fields):
+    order = {
+        "status": "closed",
+        "filled": 0.5,
+        "average": 100.0,
+        "cost": 50.0,
+        **invalid_fields,
+    }
+
+    with pytest.raises(ValueError, match="invalid fill details"):
+        _order_fill_details(order, requested_amount=1.0, fallback_price=100.0)
+
+
 def test_confirm_order_fill_refreshes_incomplete_exchange_response(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.exchange = type(
@@ -97,6 +123,40 @@ def test_confirm_order_fill_refreshes_incomplete_exchange_response(monkeypatch):
     )
 
     assert details == (0.75, 101.0, 75.75)
+
+
+def test_confirm_order_fill_uses_final_status_after_cancel_error(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    calls = []
+
+    class ExchangeStub:
+        def cancel_order(self, order_id, symbol):
+            calls.append(("cancel", order_id, symbol))
+            raise ccxt.NetworkError("cancel response lost")
+
+        def fetch_order(self, order_id, symbol):
+            calls.append(("fetch", order_id, symbol))
+            return {
+                "id": order_id,
+                "status": "closed",
+                "filled": 0.25,
+                "average": 101.0,
+                "cost": 25.25,
+            }
+
+    bot.exchange = ExchangeStub()
+    details = bot._confirm_order_fill(
+        {"id": "order-cancel-timeout", "status": "open", "amount": 1.0},
+        "BTC/EUR",
+        requested_amount=1.0,
+        fallback_price=100.0,
+    )
+
+    assert details == (0.25, 101.0, 25.25)
+    assert calls == [
+        ("cancel", "order-cancel-timeout", "BTC/EUR"),
+        ("fetch", "order-cancel-timeout", "BTC/EUR"),
+    ]
 
 
 def test_confirm_order_fill_rejects_order_that_remains_open(monkeypatch):

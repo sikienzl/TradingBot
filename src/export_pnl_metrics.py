@@ -216,7 +216,7 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
     }
 
 
-def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
+def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH, *, on_portfolio_value=None):
     """Read latest portfolio value and cash from bot log."""
     snapshot = {
         'portfolio_value_eur': 0.0,
@@ -238,23 +238,29 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
         current_prices = {}
         open_trade_amount_base = {}
         open_trade_amount_coin = {}
+        portfolio_value_found = False
+        portfolio_cash_found = False
 
         for line in reversed(tail_lines):
-            if snapshot['portfolio_value_eur'] == 0.0 and 'Portfolio value:' in line:
+            if not portfolio_value_found and 'Portfolio value:' in line:
                 try:
                     value_part = line.split('Portfolio value:', 1)[1].strip()
                     snapshot['portfolio_value_eur'] = float(
                         value_part.split(' ')[0])
-                except (IndexError, ValueError):
-                    pass
+                    portfolio_value_found = True
+                    if on_portfolio_value is not None:
+                        on_portfolio_value(line)
+                except (IndexError, ValueError) as e:
+                    print(f"Error parsing portfolio value: {e}", file=sys.stderr)
 
-            if snapshot['portfolio_cash_eur'] == 0.0 and '  - Cash:' in line:
+            if not portfolio_cash_found and '  - Cash:' in line:
                 try:
                     cash_part = line.split('Cash:', 1)[1].strip()
                     snapshot['portfolio_cash_eur'] = float(
                         cash_part.split(' ')[0])
-                except (IndexError, ValueError):
-                    pass
+                    portfolio_cash_found = True
+                except (IndexError, ValueError) as e:
+                    print(f"Error parsing portfolio cash: {e}", file=sys.stderr)
 
             if not snapshot['holdings_amount_coin'] and '  - Holdings:' in line:
                 try:
@@ -298,7 +304,7 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
                         except ValueError:
                             pass
 
-            if snapshot['portfolio_value_eur'] != 0.0 and snapshot['portfolio_cash_eur'] != 0.0:
+            if portfolio_value_found and portfolio_cash_found:
                 if not snapshot['holdings_amount_coin']:
                     break
                 if all(
