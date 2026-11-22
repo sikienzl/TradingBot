@@ -72,6 +72,26 @@ dev = [
     "httpx>=0.27",
 ]
 
+# ---------------------------------------------------------------------------
+# Linting – single source of truth so local `ruff check .` matches CI.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+exclude = [
+    "build",
+    ".venv",
+    "results",
+    "catboost_info",
+]
+
+[tool.ruff.lint]
+# Default rules (E4/E7/E9/F) plus cyclomatic-complexity enforcement.
+extend-select = ["C901"]
+
+[tool.ruff.lint.mccabe]
+# Freeze current complexity: existing hotspots carry `# noqa: C901`, new code
+# must stay at or below this threshold.
+max-complexity = 25
+
 [tool.coverage.run]
 relative_files = true
 

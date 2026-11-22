@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 class BotConfig:
     """Configuration class for the trading bot."""
 
-    def __init__(self):
+    def __init__(self):  # noqa: C901
         load_dotenv()
 
         def _env_bool(name: str, default: bool) -> bool:

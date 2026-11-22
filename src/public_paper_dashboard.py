@@ -216,7 +216,7 @@ def _market_unavailable(reason: str) -> dict[str, Any]:
     }
 
 
-def load_market_observations(selected_symbol: str | None = None) -> dict[str, Any]:
+def load_market_observations(selected_symbol: str | None = None) -> dict[str, Any]:  # noqa: C901
     market_dir = Path(os.getenv("DASHBOARD_MARKET_DATA_DIR", "/market-data"))
     metadata_path = market_dir / "metadata.json"
     ticker_path = market_dir / "tickers.csv"

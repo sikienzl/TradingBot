@@ -9,7 +9,6 @@ import subprocess
 import zipfile
 from pathlib import Path, PurePosixPath
 
-
 ROOT = Path(__file__).resolve().parents[2]
 STARTER = "cluster-starter/"
 REQUIRED = {

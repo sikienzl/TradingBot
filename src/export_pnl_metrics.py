@@ -216,7 +216,7 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
     }
 
 
-def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH, *, on_portfolio_value=None):
+def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH, *, on_portfolio_value=None):  # noqa: C901
     """Read latest portfolio value and cash from bot log."""
     snapshot = {
         'portfolio_value_eur': 0.0,

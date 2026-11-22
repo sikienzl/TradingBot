@@ -66,12 +66,7 @@ jobs:
         run: |
           set -o pipefail
           set +e
-          ruff check . \
-            --exclude build \
-            --exclude .venv \
-            --exclude results \
-            --exclude catboost_info \
-            --output-format=github | tee ruff-report.txt
+          ruff check . --output-format=github | tee ruff-report.txt
           echo "ruff_exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Ruff summary
@@ -129,7 +124,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest numpy pandas scikit-learn catboost ccxt python-dotenv pydantic fastapi uvicorn httpx
+          pip install pytest pytest-cov numpy pandas scikit-learn catboost ccxt python-dotenv pydantic fastapi uvicorn httpx
 
       - name: Verify module imports
         env:
@@ -146,7 +141,8 @@ jobs:
         run: |
           set -o pipefail
           set +e
-          pytest tests/ -v --maxfail=1 --junitxml=pytest-report.xml | tee pytest-output.txt
+          pytest tests/ -v --junitxml=pytest-report.xml \
+            --cov=src --cov-report=term-missing --cov-report=xml | tee pytest-output.txt
           echo "pytest_exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Upload test artifacts

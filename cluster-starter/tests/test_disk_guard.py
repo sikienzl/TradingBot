@@ -7,7 +7,6 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-
 path = pathlib.Path(__file__).resolve().parents[1] / "roles/storage/files/inspect_disk.py"
 spec = importlib.util.spec_from_file_location("inspect_disk", path)
 guard = importlib.util.module_from_spec(spec)
@@ -54,9 +53,9 @@ class DiskGuardTest(unittest.TestCase):
             ("fstype", "ext4"),
             ("type", "part"),
         ]:
-            with self.subTest(field=field), patch.dict(self.disk, {field: value}):
-                with self.assertRaises(ValueError):
-                    self.run_guard()
+            with self.subTest(field=field), patch.dict(self.disk, {field: value}), \
+                    self.assertRaises(ValueError):
+                self.run_guard()
 
     def test_rejects_hidden_signatures(self):
         with self.assertRaises(ValueError):

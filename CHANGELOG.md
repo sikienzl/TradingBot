@@ -48,6 +48,15 @@ prepared; this file intentionally remains under **Unreleased** until then.
   `_log_portfolio_status`).
 - Remove the stale `train_trading_model_backup.py` and ignore `.scannerwork/`
   and `.github/copilot-instructions.md`.
+- Centralize Ruff configuration in `pyproject.toml` (excludes plus a
+  cyclomatic-complexity gate at `max-complexity = 25`) so local `ruff check .`
+  matches CI; existing hotspots carry `# noqa: C901` to freeze current
+  complexity while preventing regressions.
+- Fix the previously failing lint gate: sort imports, mark shebang scripts
+  executable, and collapse nested `with` blocks in the cluster-starter and
+  release scripts.
+- Make CI tests more informative: drop `--maxfail=1` and report `src/`
+  coverage (`--cov=src`, term-missing and XML).
 
 ### Safety and rollout
 

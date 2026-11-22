@@ -6,7 +6,6 @@ import uuid
 import zipfile
 from unittest.mock import patch
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 spec = importlib.util.spec_from_file_location(
     "cluster_starter_release", ROOT / ".github/scripts/cluster_starter_release.py"
@@ -66,9 +65,9 @@ class ReleaseTest(unittest.TestCase):
         names = [f"cluster-starter/{name}" for name in release.REQUIRED]
         names.append("cluster-starter/inventory/private/hosts.yml")
         tracked = ("\0".join(names) + "\0").encode()
-        with patch.object(release.subprocess, "check_output", return_value=tracked):
-            with self.assertRaisesRegex(ValueError, "Unexpected starter path"):
-                release.build("v1.2.3", ROOT)
+        with patch.object(release.subprocess, "check_output", return_value=tracked), \
+                self.assertRaisesRegex(ValueError, "Unexpected starter path"):
+            release.build("v1.2.3", ROOT)
 
 
 if __name__ == "__main__":

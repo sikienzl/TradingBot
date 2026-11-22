@@ -1809,7 +1809,7 @@ class CryptoTradingBot:
                 self.all_symbols = [
                     f'{coin}/{self.config.base_currency}' for coin in self.all_coins]
 
-    def _update_portfolio_balance(self):
+    def _update_portfolio_balance(self):  # noqa: C901
         """Updates the portfolio with current balances from the exchange."""
         def _currency_aliases(currency: str) -> list[str]:
             base = currency.upper().strip()
@@ -2719,7 +2719,7 @@ class CryptoTradingBot:
         """Returns True for trades opened via the guarded downtrend reversal path."""
         return str(trade_info.get('recommendation', '')) == 'HOLD (Down-Trend)'
 
-    def _analyze_coin(self, coin: str, current_price: float) -> dict | None:
+    def _analyze_coin(self, coin: str, current_price: float) -> dict | None:  # noqa: C901
         """Performs a detailed analysis for a single coin."""
         symbol = f"{coin}/{self.config.base_currency}"
         ohlcv_df = self._fetch_ohlcv_data(
@@ -3191,7 +3191,7 @@ class CryptoTradingBot:
             reason=reason,
         )
 
-    def _execute_dry_run_trade(
+    def _execute_dry_run_trade(  # noqa: C901
         self,
         coin: str,
         action: str,
@@ -3539,7 +3539,7 @@ class CryptoTradingBot:
             logger.error(f"Exchange error executing trade ({action} {coin}): {e}")
             return False
 
-    def _manage_open_trades(self, current_market_data: dict[str, dict], market_analysis: dict | None = None):
+    def _manage_open_trades(self, current_market_data: dict[str, dict], market_analysis: dict | None = None):  # noqa: C901
         """Monitors open trades for stop-loss, take-profit, time and signal exits."""
         trades_to_remove = []
         excursions_updated = False
@@ -3859,7 +3859,7 @@ class CryptoTradingBot:
             self.portfolio.save_state()
 
 
-    def run(self):
+    def run(self):  # noqa: C901
         """Main loop of the bot."""
         logger.info(
             "🚀 Crypto trading bot started - analysing markets for trading opportunities.")
