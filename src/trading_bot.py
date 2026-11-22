@@ -3251,7 +3251,7 @@ class CryptoTradingBot:
             reason=reason,
         )
 
-    def _execute_dry_run_trade(  # noqa: C901
+    def _execute_dry_run_trade(
         self,
         coin: str,
         action: str,
@@ -3271,6 +3271,42 @@ class CryptoTradingBot:
             action == 'sell' and isinstance(tracked_entry, dict)
             and tracked_entry.get('execution_cost_mode') == 'net_costs'
         )
+        plan = self._plan_dry_run_fill(
+            coin, action, price, amount_in_base_currency,
+            costs_enabled, net_tracked)
+        if plan is None:
+            return False
+        fill_price, amount_coin = plan
+        logger.info(
+            "💰 DRY-RUN: %s %.8f %s reference=%.8f fill=%.8f %s "
+            "requested_base=%.8f cost_mode=%s",
+            action.upper(), amount_coin, coin, price, fill_price,
+            self.config.base_currency, amount_in_base_currency,
+            'net_costs' if costs_enabled else 'gross_legacy')
+        if action == "buy":
+            return self._dry_run_buy(
+                coin, price, amount_in_base_currency, amount_coin,
+                fill_price, costs_enabled, signal_source,
+                signal_confidence, recommendation, reason)
+        if action == "sell":
+            return self._dry_run_sell(
+                coin, price, amount_coin, fill_price, costs_enabled,
+                net_tracked, tracked_entry, reason, partial_take_profit)
+        return True
+
+    def _plan_dry_run_fill(
+        self,
+        coin: str,
+        action: str,
+        price: float,
+        amount_in_base_currency: float,
+        costs_enabled: bool,
+        net_tracked: bool,
+    ) -> tuple[float, float] | None:
+        """Validate a dry-run request and compute (fill_price, amount_coin).
+
+        Returns None when the request is invalid or the calculation breaks down.
+        """
         if (costs_enabled or net_tracked) and (
             action not in ('buy', 'sell')
             or not math.isfinite(price) or price <= 0
@@ -3278,7 +3314,7 @@ class CryptoTradingBot:
             or amount_in_base_currency <= 0
         ):
             logger.warning("Invalid DRY-RUN trade request for %s", coin)
-            return False
+            return None
         amount_coin = amount_in_base_currency / price
         if costs_enabled and action == 'buy':
             fill_price = price * (1.0 + self.config.dry_run_slippage_rate)
@@ -3293,176 +3329,199 @@ class CryptoTradingBot:
             or not math.isfinite(amount_coin) or amount_coin <= 0
         ):
             logger.warning("DRY-RUN trade calculation invalid for %s", coin)
-            return False
-        logger.info(
-            "💰 DRY-RUN: %s %.8f %s reference=%.8f fill=%.8f %s "
-            "requested_base=%.8f cost_mode=%s",
-            action.upper(), amount_coin, coin, price, fill_price,
-            self.config.base_currency, amount_in_base_currency,
-            'net_costs' if costs_enabled else 'gross_legacy')
-        if action == "buy":
-            if costs_enabled and (
-                coin in self.portfolio.open_trades
-                or self.portfolio.holdings.get(coin, 0.0) > 1e-12
-            ):
-                logger.warning("DRY-RUN buy skipped for existing %s position", coin)
-                return False
-            if self.portfolio.cash < amount_in_base_currency:
-                logger.warning(
-                    f"Insufficient cash for DRY-RUN buy of {coin}: {self.portfolio.cash:.2f} < {amount_in_base_currency:.2f} {self.config.base_currency}")
-                return False
-            self.portfolio.cash -= amount_in_base_currency
-            self.portfolio.holdings[coin] = self.portfolio.holdings.get(
-                coin, 0.0) + amount_coin
-            self.portfolio.add_trade(
-                coin,
-                fill_price,
-                amount_coin,
-                amount_in_base_currency,
-                signal_source=signal_source,
-                signal_confidence=signal_confidence,
-                recommendation=recommendation,
-            )
-            if costs_enabled:
-                self.portfolio.open_trades[coin]['execution_cost_mode'] = 'net_costs'
-                self.portfolio.open_trades[coin]['entry_reference_price'] = price
-            self.performance['buys'] += 1
-            self.performance['by_source'][signal_source]['buys'] += 1
-            self._register_buy_timestamp()
-            journal_row = {
-                'coin': coin,
-                'action': 'buy',
-                'price': fill_price,
-                'amount_coin': amount_coin,
-                'amount_base': amount_in_base_currency,
-                'signal_source': signal_source,
-                'signal_confidence': signal_confidence,
-                'recommendation': recommendation,
-                'reason': reason,
-                'dry_run': True,
-                'execution_cost_mode': 'net_costs' if costs_enabled else 'gross_legacy',
-                'reference_price': price,
-                'fee_base': amount_coin * fill_price * self.config.dry_run_fee_rate if costs_enabled else 0.0,
-                'slippage_base': amount_coin * (fill_price - price) if costs_enabled else 0.0,
-            }
-            # Persist portfolio state after successful dry-run buy
-            if self._public_paper_mode():
-                self._commit_paper_trade(journal_row)
-            else:
-                self._append_trade_journal(journal_row)
-                self.portfolio.save_state()
-        elif action == "sell":
-            held = self.portfolio.holdings.get(coin, 0.0)
-            sell_amount = min(amount_coin, held)
-            entry_trade = tracked_entry
-            if costs_enabled and (not isinstance(entry_trade, dict) or not entry_trade):
-                logger.warning("DRY-RUN sell skipped for %s: no tracked entry cost basis", coin)
-                return False
-            entry_cost_mode = entry_trade.get('execution_cost_mode', 'gross_legacy')
-            entry_basis = None
-            if costs_enabled or net_tracked:
-                try:
-                    entry_quantity = float(entry_trade.get('amount_coin'))
-                    entry_price = float(entry_trade.get('buy_price'))
-                    if (not math.isfinite(entry_quantity) or entry_quantity <= 0
-                            or not math.isfinite(entry_price) or entry_price <= 0
-                            or not math.isfinite(held) or held <= 0):
-                        raise ValueError("Invalid entry price, quantity or holdings")
-                    entry_basis = self._entry_cost_basis(entry_trade, entry_price, entry_quantity)
-                except (TypeError, ValueError, OverflowError) as exc:
-                    logger.warning("DRY-RUN sell skipped for %s: invalid entry cost basis or position: %s", coin, exc)
-                    return False
-                sell_amount = min(sell_amount, entry_quantity)
-            if sell_amount <= 0:
-                logger.warning(
-                    f"DRY-RUN sell skipped, no holdings for {coin}.")
-                return False
-            gross_proceeds = sell_amount * fill_price
-            fee_base = gross_proceeds * self.config.dry_run_fee_rate if costs_enabled else 0.0
-            proceeds = gross_proceeds - fee_base
-            if (costs_enabled or net_tracked) and (not math.isfinite(proceeds) or proceeds <= 0):
-                logger.warning("DRY-RUN proceeds invalid for %s", coin)
-                return False
-            self.portfolio.cash += proceeds
-            remaining = held - sell_amount
-            if remaining > 1e-12:
-                self.portfolio.holdings[coin] = remaining
-            elif coin in self.portfolio.holdings:
-                del self.portfolio.holdings[coin]
+            return None
+        return fill_price, amount_coin
 
-            original_amount_coin = float(
-                entry_trade.get('amount_coin', sell_amount))
-            remaining_open_amount = max(
-                0.0, original_amount_coin - sell_amount)
-            remaining_ratio = (
-                remaining_open_amount / original_amount_coin
-                if original_amount_coin > 0 else 0.0
-            )
+    def _dry_run_buy(
+        self,
+        coin: str,
+        price: float,
+        amount_in_base_currency: float,
+        amount_coin: float,
+        fill_price: float,
+        costs_enabled: bool,
+        signal_source: str,
+        signal_confidence: float | None,
+        recommendation: str,
+        reason: str,
+    ) -> bool:
+        """Dry-run buy branch of _execute_dry_run_trade."""
+        if costs_enabled and (
+            coin in self.portfolio.open_trades
+            or self.portfolio.holdings.get(coin, 0.0) > 1e-12
+        ):
+            logger.warning("DRY-RUN buy skipped for existing %s position", coin)
+            return False
+        if self.portfolio.cash < amount_in_base_currency:
+            logger.warning(
+                f"Insufficient cash for DRY-RUN buy of {coin}: {self.portfolio.cash:.2f} < {amount_in_base_currency:.2f} {self.config.base_currency}")
+            return False
+        self.portfolio.cash -= amount_in_base_currency
+        self.portfolio.holdings[coin] = self.portfolio.holdings.get(
+            coin, 0.0) + amount_coin
+        self.portfolio.add_trade(
+            coin,
+            fill_price,
+            amount_coin,
+            amount_in_base_currency,
+            signal_source=signal_source,
+            signal_confidence=signal_confidence,
+            recommendation=recommendation,
+        )
+        if costs_enabled:
+            self.portfolio.open_trades[coin]['execution_cost_mode'] = 'net_costs'
+            self.portfolio.open_trades[coin]['entry_reference_price'] = price
+        self.performance['buys'] += 1
+        self.performance['by_source'][signal_source]['buys'] += 1
+        self._register_buy_timestamp()
+        journal_row = {
+            'coin': coin,
+            'action': 'buy',
+            'price': fill_price,
+            'amount_coin': amount_coin,
+            'amount_base': amount_in_base_currency,
+            'signal_source': signal_source,
+            'signal_confidence': signal_confidence,
+            'recommendation': recommendation,
+            'reason': reason,
+            'dry_run': True,
+            'execution_cost_mode': 'net_costs' if costs_enabled else 'gross_legacy',
+            'reference_price': price,
+            'fee_base': amount_coin * fill_price * self.config.dry_run_fee_rate if costs_enabled else 0.0,
+            'slippage_base': amount_coin * (fill_price - price) if costs_enabled else 0.0,
+        }
+        # Persist portfolio state after successful dry-run buy
+        if self._public_paper_mode():
+            self._commit_paper_trade(journal_row)
+        else:
+            self._append_trade_journal(journal_row)
+            self.portfolio.save_state()
+        return True
+
+    def _dry_run_sell(
+        self,
+        coin: str,
+        price: float,
+        amount_coin: float,
+        fill_price: float,
+        costs_enabled: bool,
+        net_tracked: bool,
+        tracked_entry: dict,
+        reason: str,
+        partial_take_profit: bool,
+    ) -> bool:
+        """Dry-run sell branch of _execute_dry_run_trade."""
+        held = self.portfolio.holdings.get(coin, 0.0)
+        sell_amount = min(amount_coin, held)
+        entry_trade = tracked_entry
+        if costs_enabled and (not isinstance(entry_trade, dict) or not entry_trade):
+            logger.warning("DRY-RUN sell skipped for %s: no tracked entry cost basis", coin)
+            return False
+        entry_cost_mode = entry_trade.get('execution_cost_mode', 'gross_legacy')
+        entry_basis = None
+        if costs_enabled or net_tracked:
+            try:
+                entry_quantity = float(entry_trade.get('amount_coin'))
+                entry_price = float(entry_trade.get('buy_price'))
+                if (not math.isfinite(entry_quantity) or entry_quantity <= 0
+                        or not math.isfinite(entry_price) or entry_price <= 0
+                        or not math.isfinite(held) or held <= 0):
+                    raise ValueError("Invalid entry price, quantity or holdings")
+                entry_basis = self._entry_cost_basis(entry_trade, entry_price, entry_quantity)
+            except (TypeError, ValueError, OverflowError) as exc:
+                logger.warning("DRY-RUN sell skipped for %s: invalid entry cost basis or position: %s", coin, exc)
+                return False
+            sell_amount = min(sell_amount, entry_quantity)
+        if sell_amount <= 0:
+            logger.warning(
+                f"DRY-RUN sell skipped, no holdings for {coin}.")
+            return False
+        gross_proceeds = sell_amount * fill_price
+        fee_base = gross_proceeds * self.config.dry_run_fee_rate if costs_enabled else 0.0
+        proceeds = gross_proceeds - fee_base
+        if (costs_enabled or net_tracked) and (not math.isfinite(proceeds) or proceeds <= 0):
+            logger.warning("DRY-RUN proceeds invalid for %s", coin)
+            return False
+        self.portfolio.cash += proceeds
+        remaining = held - sell_amount
+        if remaining > 1e-12:
+            self.portfolio.holdings[coin] = remaining
+        elif coin in self.portfolio.holdings:
+            del self.portfolio.holdings[coin]
+
+        original_amount_coin = float(
+            entry_trade.get('amount_coin', sell_amount))
+        remaining_open_amount = max(
+            0.0, original_amount_coin - sell_amount)
+        remaining_ratio = (
+            remaining_open_amount / original_amount_coin
+            if original_amount_coin > 0 else 0.0
+        )
+        if costs_enabled or entry_cost_mode == 'net_costs':
+            pnl_base, pnl_pct, hold_seconds = self._record_close_performance(
+                entry_trade, fill_price, sell_amount, net_proceeds=proceeds,
+                entry_basis=entry_basis)
+        else:
+            pnl_base, pnl_pct, hold_seconds = self._record_close_performance(
+                entry_trade, fill_price, sell_amount)
+        gross_pnl_base = ''
+        net_pnl_base = ''
+        if entry_cost_mode == 'net_costs':
+            try:
+                entry_reference = float(entry_trade.get('entry_reference_price'))
+            except (TypeError, ValueError):
+                entry_reference = 0.0
+            if (math.isfinite(entry_reference) and entry_reference > 0
+                    and math.isfinite(price) and price > 0):
+                gross_pnl = sell_amount * (price - entry_reference)
+                if math.isfinite(gross_pnl) and math.isfinite(pnl_base):
+                    gross_pnl_base = gross_pnl
+                    net_pnl_base = pnl_base
+        mfe_pct, mae_pct = self._trade_excursion_metrics(entry_trade)
+        journal_row = {
+            'coin': coin,
+            'action': 'sell',
+            'price': fill_price,
+            'amount_coin': sell_amount,
+            'amount_base': proceeds,
+            'pnl_base': pnl_base,
+            'pnl_pct': pnl_pct,
+            'hold_seconds': hold_seconds,
+            'mfe_pct': mfe_pct,
+            'mae_pct': mae_pct,
+            'signal_source': entry_trade.get('signal_source', 'rules'),
+            'signal_confidence': entry_trade.get('signal_confidence', ''),
+            'recommendation': entry_trade.get('recommendation', ''),
+            'reason': reason,
+            'dry_run': True,
+            'execution_cost_mode': 'net_costs' if costs_enabled else 'gross_legacy',
+            'entry_cost_mode': entry_cost_mode,
+            'reference_price': price,
+            'fee_base': fee_base,
+            'slippage_base': sell_amount * (price - fill_price) if costs_enabled else 0.0,
+            'gross_pnl_base': gross_pnl_base,
+            'net_pnl_base': net_pnl_base,
+        }
+        if not self._public_paper_mode():
+            self._append_trade_journal(journal_row)
+        self._register_sell_timestamp(coin)
+        if remaining_open_amount > 1e-12 and coin in self.portfolio.open_trades:
             if costs_enabled or entry_cost_mode == 'net_costs':
-                pnl_base, pnl_pct, hold_seconds = self._record_close_performance(
-                    entry_trade, fill_price, sell_amount, net_proceeds=proceeds,
-                    entry_basis=entry_basis)
+                remaining_basis = entry_basis * remaining_ratio
             else:
-                pnl_base, pnl_pct, hold_seconds = self._record_close_performance(
-                    entry_trade, fill_price, sell_amount)
-            gross_pnl_base = ''
-            net_pnl_base = ''
-            if entry_cost_mode == 'net_costs':
-                try:
-                    entry_reference = float(entry_trade.get('entry_reference_price'))
-                except (TypeError, ValueError):
-                    entry_reference = 0.0
-                if (math.isfinite(entry_reference) and entry_reference > 0
-                        and math.isfinite(price) and price > 0):
-                    gross_pnl = sell_amount * (price - entry_reference)
-                    if math.isfinite(gross_pnl) and math.isfinite(pnl_base):
-                        gross_pnl_base = gross_pnl
-                        net_pnl_base = pnl_base
-            mfe_pct, mae_pct = self._trade_excursion_metrics(entry_trade)
-            journal_row = {
-                'coin': coin,
-                'action': 'sell',
-                'price': fill_price,
-                'amount_coin': sell_amount,
-                'amount_base': proceeds,
-                'pnl_base': pnl_base,
-                'pnl_pct': pnl_pct,
-                'hold_seconds': hold_seconds,
-                'mfe_pct': mfe_pct,
-                'mae_pct': mae_pct,
-                'signal_source': entry_trade.get('signal_source', 'rules'),
-                'signal_confidence': entry_trade.get('signal_confidence', ''),
-                'recommendation': entry_trade.get('recommendation', ''),
-                'reason': reason,
-                'dry_run': True,
-                'execution_cost_mode': 'net_costs' if costs_enabled else 'gross_legacy',
-                'entry_cost_mode': entry_cost_mode,
-                'reference_price': price,
-                'fee_base': fee_base,
-                'slippage_base': sell_amount * (price - fill_price) if costs_enabled else 0.0,
-                'gross_pnl_base': gross_pnl_base,
-                'net_pnl_base': net_pnl_base,
-            }
-            if not self._public_paper_mode():
-                self._append_trade_journal(journal_row)
-            self._register_sell_timestamp(coin)
-            if remaining_open_amount > 1e-12 and coin in self.portfolio.open_trades:
-                if costs_enabled or entry_cost_mode == 'net_costs':
-                    remaining_basis = entry_basis * remaining_ratio
-                else:
-                    remaining_basis = float(entry_trade.get('amount_base', 0.0)) * remaining_ratio
-                self.portfolio.open_trades[coin]['amount_coin'] = remaining_open_amount
-                self.portfolio.open_trades[coin]['amount_base'] = remaining_basis
-                if self._public_paper_mode() and partial_take_profit:
-                    self.portfolio.open_trades[coin]['partial_tp_taken'] = True
-                    self.portfolio.open_trades[coin]['partial_tp_timestamp'] = datetime.now()
-            else:
-                self.portfolio.remove_trade(coin)
-            # Persist portfolio state after successful dry-run sell
-            if self._public_paper_mode():
-                self._commit_paper_trade(journal_row)
-            else:
-                self.portfolio.save_state()
+                remaining_basis = float(entry_trade.get('amount_base', 0.0)) * remaining_ratio
+            self.portfolio.open_trades[coin]['amount_coin'] = remaining_open_amount
+            self.portfolio.open_trades[coin]['amount_base'] = remaining_basis
+            if self._public_paper_mode() and partial_take_profit:
+                self.portfolio.open_trades[coin]['partial_tp_taken'] = True
+                self.portfolio.open_trades[coin]['partial_tp_timestamp'] = datetime.now()
+        else:
+            self.portfolio.remove_trade(coin)
+        # Persist portfolio state after successful dry-run sell
+        if self._public_paper_mode():
+            self._commit_paper_trade(journal_row)
+        else:
+            self.portfolio.save_state()
         return True
 
     def _execute_real_trade(

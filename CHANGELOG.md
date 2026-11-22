@@ -68,6 +68,11 @@ prepared; this file intentionally remains under **Unreleased** until then.
   `_initialize_simulated_portfolio`, `_initialize_dry_run_portfolio`,
   `_refresh_live_portfolio_balance`); the nested balance-parsing helpers became
   module-level `_currency_aliases` / `_extract_cash_and_holdings`.
+- Split `_execute_dry_run_trade` (complexity 28 → 4, `# noqa: C901` removed)
+  into a dispatcher plus `_plan_dry_run_fill` (request validation and
+  slippage/fee fill calculation), `_dry_run_buy` and `_dry_run_sell`; the
+  journal-row construction and paper-trade commit logic stay inside their
+  branch so behaviour is unchanged.
 - Remove the stale `train_trading_model_backup.py` and ignore `.scannerwork/`
   and `.github/copilot-instructions.md`.
 - Centralize Ruff configuration in `pyproject.toml` (excludes plus a
