@@ -38,6 +38,16 @@ prepared; this file intentionally remains under **Unreleased** until then.
   of trades and report on the final 30% holdout.
 - Make the example backtester use next-bar execution, chronological multi-coin
   prices, and configurable fee/slippage assumptions.
+- Consolidate duplicated PnL metric code: `pnl_exporter.py` now delegates
+  metric computation to `export_pnl_metrics.py`, with the shared
+  `format_prometheus_metrics` emitting snapshot metrics only when present so
+  both the HTTP exporter and the one-shot script keep their exact output.
+- Split oversized `CryptoTradingBot` methods to cut cyclomatic complexity:
+  `_execute_trade` into dry-run/real branches, and `run()` into reusable
+  helpers (`_entry_pair_allowed`, `_entry_guards_allow`,
+  `_log_portfolio_status`).
+- Remove the stale `train_trading_model_backup.py` and ignore `.scannerwork/`
+  and `.github/copilot-instructions.md`.
 
 ### Safety and rollout
 
@@ -47,5 +57,8 @@ prepared; this file intentionally remains under **Unreleased** until then.
   service is deployed, and the backend is not enabled by default.
 - The historical replay is offline-only and does not change live trading
   behavior; its holdout results are not a profitability guarantee.
+- The PnL consolidation and method splits are behavior-preserving refactors:
+  exported metric values and trading decisions are unchanged, verified by the
+  existing test suite.
 - Run in dry-run/simulation first and compare results by `run_id` and
   `config_hash`; these reports do not guarantee profitability.
