@@ -50,10 +50,11 @@ prepared; this file intentionally remains under **Unreleased** until then.
   (`_maybe_partial_take_profit`, `_partial_tp_remainder_exit_reason`,
   `_downtrend_reversal_exit_reason`, `_uptrend_rules_exit_reason`,
   `_core_exit_reason`), each below the complexity gate.
-- Extract `_build_tabular_features` from `_analyze_coin` (complexity 27 → 24,
-  now under the gate so its `# noqa: C901` is removed): the tabular model's
-  indicator/feature-row construction is a pure helper returning the feature
-  row and MACD histogram.
+- Extract `_build_tabular_features` and `_apply_ml_signal` from `_analyze_coin`
+  (complexity 27 → 15, now under the gate so its `# noqa: C901` is removed):
+  the tabular indicator/feature-row construction is a pure helper returning the
+  feature row and MACD histogram, and the optional ML/LLM ensemble signal is a
+  separate helper returning the updated recommendation, score and signal source.
 - Remove the stale `train_trading_model_backup.py` and ignore `.scannerwork/`
   and `.github/copilot-instructions.md`.
 - Centralize Ruff configuration in `pyproject.toml` (excludes plus a

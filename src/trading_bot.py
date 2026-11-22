@@ -2821,6 +2821,62 @@ class CryptoTradingBot:
 
         return row_data, macd_hist
 
+    def _apply_ml_signal(
+        self,
+        coin: str,
+        ohlcv_df,
+        current_price: float,
+        rsi: float,
+        recommendation: str,
+        score: int,
+        signal_source: str,
+        signal_confidence,
+    ) -> tuple[str, int, str, Any]:
+        """Run the optional ML predictor and weave its signal into the rule result."""
+        if self.ml_predictor is None:
+            return recommendation, score, signal_source, signal_confidence
+        try:
+            macd = self._calculate_macd(ohlcv_df['close'])
+            row_data = pd.DataFrame([{
+                'coin': coin,
+                'timestamp': int(ohlcv_df['timestamp'].iloc[-1].timestamp() * 1000),
+                'open': float(ohlcv_df['open'].iloc[-1]),
+                'high': float(ohlcv_df['high'].iloc[-1]),
+                'low': float(ohlcv_df['low'].iloc[-1]),
+                'close': float(current_price),
+                'volume': float(ohlcv_df['volume'].iloc[-1]),
+                'rsi': float(rsi) if not np.isnan(rsi) else 50.0,
+                'macd': float(macd) if not np.isnan(macd) else 0.0,
+            }])
+            ml_result = self.ml_predictor.predict(row_data)
+            ml_decision = ml_result['decision']
+            ml_confidence = ml_result['confidence']
+            logger.info(
+                f"  🤖 ML for {coin}: {ml_decision.upper()} "
+                f"(Confidence: {ml_confidence*100:.0f}%, "
+                f"Votes: {ml_result.get('llm_votes', {})}, "
+                f"Rule: {ml_result.get('rule', '-')})")
+
+            # Ensemble: weave ML signal into score/recommendation
+            if ml_confidence >= self.config.ml_min_confidence:
+                signal_source = 'llm'
+                signal_confidence = ml_confidence
+                if ml_decision == 'kaufen':
+                    if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'HOLD (Down-Trend)']:
+                        recommendation = 'BUY'
+                        score = max(score, 70)
+                    elif recommendation in ['BUY', 'STRONG BUY']:
+                        score = min(score + int(ml_confidence * 15), 95)
+                elif ml_decision == 'verkaufen':
+                    if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'BUY', 'STRONG BUY']:
+                        recommendation = 'WEAK SELL'
+                        score = min(score, 30)
+                    elif recommendation in ['SELL', 'WEAK SELL']:
+                        score = max(score - int(ml_confidence * 10), 5)
+        except (IndexError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
+            logger.warning(f"ML prediction for {coin} failed: {e}")
+        return recommendation, score, signal_source, signal_confidence
+
     def _analyze_coin(self, coin: str, current_price: float) -> dict | None:
         """Performs a detailed analysis for a single coin."""
         symbol = f"{coin}/{self.config.base_currency}"
@@ -2868,47 +2924,12 @@ class CryptoTradingBot:
         rule_score = score
 
         # ML model analysis (optional, only if loaded and data is valid)
-        if self.ml_predictor is not None:
-            try:
-                macd = self._calculate_macd(ohlcv_df['close'])
-                row_data = pd.DataFrame([{
-                    'coin': coin,
-                    'timestamp': int(ohlcv_df['timestamp'].iloc[-1].timestamp() * 1000),
-                    'open': float(ohlcv_df['open'].iloc[-1]),
-                    'high': float(ohlcv_df['high'].iloc[-1]),
-                    'low': float(ohlcv_df['low'].iloc[-1]),
-                    'close': float(current_price),
-                    'volume': float(ohlcv_df['volume'].iloc[-1]),
-                    'rsi': float(rsi) if not np.isnan(rsi) else 50.0,
-                    'macd': float(macd) if not np.isnan(macd) else 0.0,
-                }])
-                ml_result = self.ml_predictor.predict(row_data)
-                ml_decision = ml_result['decision']
-                ml_confidence = ml_result['confidence']
-                logger.info(
-                    f"  🤖 ML for {coin}: {ml_decision.upper()} "
-                    f"(Confidence: {ml_confidence*100:.0f}%, "
-                    f"Votes: {ml_result.get('llm_votes', {})}, "
-                    f"Rule: {ml_result.get('rule', '-')})")
-
-                # Ensemble: weave ML signal into score/recommendation
-                if ml_confidence >= self.config.ml_min_confidence:
-                    signal_source = 'llm'
-                    signal_confidence = ml_confidence
-                    if ml_decision == 'kaufen':
-                        if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'HOLD (Down-Trend)']:
-                            recommendation = 'BUY'
-                            score = max(score, 70)
-                        elif recommendation in ['BUY', 'STRONG BUY']:
-                            score = min(score + int(ml_confidence * 15), 95)
-                    elif ml_decision == 'verkaufen':
-                        if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'BUY', 'STRONG BUY']:
-                            recommendation = 'WEAK SELL'
-                            score = min(score, 30)
-                        elif recommendation in ['SELL', 'WEAK SELL']:
-                            score = max(score - int(ml_confidence * 10), 5)
-            except (IndexError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
-                logger.warning(f"ML prediction for {coin} failed: {e}")
+        recommendation, score, signal_source, signal_confidence = (
+            self._apply_ml_signal(
+                coin, ohlcv_df, current_price, rsi, recommendation, score,
+                signal_source, signal_confidence,
+            )
+        )
 
         # Fast tabular model analysis (optional)
         if self.tabular_predictor is not None:
