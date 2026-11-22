@@ -83,6 +83,11 @@ prepared; this file intentionally remains under **Unreleased** until then.
   `_build_market_summary` (per-symbol quality summary, replacing the
   per-symbol loop with a list comprehension) and `_downsample` (point-series
   thinning).
+- Split `CryptoTradingBot.run` (complexity 47 → 8, the last `# noqa: C901` in
+  `src/` removed) into the startup banner `_log_startup_banner`, the entry
+  candidate ranking/slot-filling `_select_entry_candidates`, the signal-exit
+  pass `_execute_signal_exits` and the position-opening pass
+  `_open_new_positions`; the main loop now just orchestrates these phases.
 - Remove the stale `train_trading_model_backup.py` and ignore `.scannerwork/`
   and `.github/copilot-instructions.md`.
 - Centralize Ruff configuration in `pyproject.toml` (excludes plus a

@@ -4064,8 +4064,8 @@ class CryptoTradingBot:
             self.portfolio.save_state()
 
 
-    def run(self):  # noqa: C901
-        """Main loop of the bot."""
+    def _log_startup_banner(self) -> None:
+        """Log the masked configuration and active-mode warnings at startup."""
         logger.info(
             "🚀 Crypto trading bot started - analysing markets for trading opportunities.")
         safe_config = vars(self.config).copy()
@@ -4095,6 +4095,448 @@ class CryptoTradingBot:
                 "an isolated previously initialized portfolio; no Kraken credentials."
             )
 
+
+    def _select_entry_candidates(
+        self, market_analysis: dict[str, Any]
+    ) -> list[str]:
+        """Rank entry candidates and fill trade slots (strict, fallback, force-fill)."""
+        occupied_positions = set(self.portfolio.open_trades.keys()) | set(
+            self.portfolio.holdings.keys())
+        available_trade_slots = max(
+            0, self.config.max_open_trades - len(self.portfolio.open_trades))
+        dynamic_excluded_entry_pairs = self._dynamic_excluded_entry_pairs()
+        if dynamic_excluded_entry_pairs:
+            logger.info(
+                "Dynamically excluded lossmaker entry pairs: %s",
+                ', '.join(sorted(
+                    f"{coin}/{source}" for coin, source in dynamic_excluded_entry_pairs)),
+            )
+        degraded_entry_sources = self._degraded_entry_sources()
+        if degraded_entry_sources:
+            logger.info(
+                "Dynamically degraded entry sources (fallback/force-fill blocked): %s",
+                ', '.join(sorted(degraded_entry_sources)),
+            )
+        recent_pnl_guard = self._recent_pnl_guard_state()
+        recent_pnl_guard_active = bool(
+            recent_pnl_guard.get('active', False))
+        self._log_recent_pnl_guard_status(recent_pnl_guard)
+
+
+        entry_guard_results: dict[str, bool] = {}
+
+
+        downtrend_filter_results = {
+            coin: self._passes_downtrend_reversal_filter(data)
+            for coin, data in market_analysis.items()
+        }
+        uptrend_filter_results = {
+            coin: self._passes_uptrend_entry_filter(data)
+            for coin, data in market_analysis.items()
+        }
+        entry_market_mode = self._entry_market_mode(market_analysis)
+
+        # Only suggest coins not yet held.
+        strict_buy_candidates_before_guard = [
+            coin for coin, data in market_analysis.items()
+            if coin not in occupied_positions
+            and data.get('recommendation') in ['STRONG BUY', 'BUY']
+            and data.get('score', 0) >= self.config.min_entry_score
+            and self._entry_pair_allowed(coin, data, dynamic_excluded_entry_pairs)
+            and self._entry_guards_allow(coin, data, entry_guard_results)
+        ]
+        if recent_pnl_guard_active:
+            blocked_by_recent_guard = [
+                coin for coin in strict_buy_candidates_before_guard
+                if str(market_analysis[coin].get(
+                    'signal_source', 'rules')).strip().lower() != 'catboost'
+            ]
+            log_blocked_candidates = (
+                logger.warning if blocked_by_recent_guard else logger.info
+            )
+            log_blocked_candidates(
+                "Recent PnL guard withheld %d strict BUY candidates: %s",
+                len(blocked_by_recent_guard),
+                ', '.join(blocked_by_recent_guard[:10]) or "none",
+            )
+        strict_buy_candidates = [
+            coin for coin in strict_buy_candidates_before_guard
+            if not recent_pnl_guard_active
+            or str(market_analysis[coin].get(
+                'signal_source', 'rules')).strip().lower() == 'catboost'
+        ]
+        top_buy_recommendations = strict_buy_candidates[:min(
+            self.config.top_n_for_analysis, available_trade_slots)]
+
+        # Fallback: fill remaining slots with solid non-SELL candidates.
+        # If exit_on_downtrend is active, exclude down-trend coins from entries.
+        _excluded_signals_fallback = ['SELL', 'WEAK SELL']
+        if self.config.exit_on_downtrend:
+            _excluded_signals_fallback.append('HOLD (Down-Trend)')
+        fallback_base_candidates = [
+            coin for coin, data in market_analysis.items()
+            if coin not in occupied_positions
+            and coin not in top_buy_recommendations
+            if data.get('score', 0) >= self.config.fallback_min_score
+            and self._entry_guards_allow(coin, data, entry_guard_results)
+            and str(data.get('signal_source', 'rules')).strip().lower() not in degraded_entry_sources
+            and self._allows_entry_signal(
+                str(data.get('recommendation', '')),
+                downtrend_filter_results.get(
+                    coin, (False, 'not_evaluated'))[0],
+                set(_excluded_signals_fallback),
+            )
+            and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+            and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+            and self._entry_pair_allowed(coin, data, dynamic_excluded_entry_pairs)
+        ]
+        fallback_filter_results = {
+            coin: self._passes_fallback_entry_filter(
+                coin, market_analysis.get(coin, {}))
+            for coin in fallback_base_candidates
+        }
+        fallback_candidates = []
+        fallback_allowed = (
+            self.config.enable_fallback_entry
+            and not recent_pnl_guard_active
+            and available_trade_slots > len(top_buy_recommendations)
+            and (
+                not self.config.defensive_entry_mode_enabled
+                or entry_market_mode != 'defensive'
+            )
+        )
+        fallback_suppression_reason = 'allowed'
+        if not self.config.enable_fallback_entry:
+            fallback_suppression_reason = 'fallback_disabled'
+        elif available_trade_slots <= len(top_buy_recommendations):
+            fallback_suppression_reason = 'no_free_slots'
+        elif self.config.defensive_entry_mode_enabled and entry_market_mode == 'defensive':
+            fallback_suppression_reason = 'entry_mode_defensive'
+        if fallback_allowed:
+            fallback_candidates = [
+                coin for coin in fallback_base_candidates
+                if fallback_filter_results.get(coin, (False, 'not_evaluated'))[0]
+            ]
+            if fallback_candidates:
+                missing_slots = available_trade_slots - \
+                    len(top_buy_recommendations)
+                top_buy_recommendations.extend(
+                    fallback_candidates[:missing_slots])
+                best_coin = top_buy_recommendations[0]
+                best_data = market_analysis.get(best_coin, {})
+                logger.info(
+                    f"ℹ️ Fallback entry activated (slots filled): lead candidate {best_coin} ({best_data.get('recommendation', 'n/a')}, score {best_data.get('score', 0)}).")
+
+        # Optional more aggressive slot filling: use neutral candidates even without RSI filter,
+        # down-trend coins are also excluded when exit_on_downtrend is active.
+        force_fill_candidates = []
+        force_fill_allowed = (
+            self.config.force_fill_slots
+            and not recent_pnl_guard_active
+            and available_trade_slots > len(top_buy_recommendations)
+            and (
+                not self.config.defensive_entry_mode_enabled
+                or entry_market_mode == 'normal'
+            )
+        )
+        if force_fill_allowed:
+            force_fill_candidates = [
+                coin for coin, data in market_analysis.items()
+                if coin not in occupied_positions
+                and coin not in top_buy_recommendations
+                and data.get('score', 0) >= self.config.force_fill_min_score
+                and self._entry_guards_allow(coin, data, entry_guard_results)
+                and str(data.get('signal_source', 'rules')).strip().lower() not in degraded_entry_sources
+                and self._allows_entry_signal(
+                    str(data.get('recommendation', '')),
+                    downtrend_filter_results.get(
+                        coin, (False, 'not_evaluated'))[0],
+                    set(_excluded_signals_fallback),
+                )
+                and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+                and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+                and self._entry_pair_allowed(coin, data, dynamic_excluded_entry_pairs)
+            ]
+            if force_fill_candidates:
+                missing_slots = available_trade_slots - \
+                    len(top_buy_recommendations)
+                top_buy_recommendations.extend(
+                    force_fill_candidates[:missing_slots])
+                logger.info(
+                    f"⚙️ Force-fill active: {min(len(force_fill_candidates), missing_slots)} additional candidates added (min score {self.config.force_fill_min_score}).")
+
+        logger.info(
+            f"🔍 Market analysis complete. Top {len(top_buy_recommendations)} buy recommendations:")
+
+        if not top_buy_recommendations and market_analysis:
+            recommendation_mix = dict(Counter(
+                data.get('recommendation', 'UNKNOWN')
+                for data in market_analysis.values()
+            ))
+            downtrend_reversal_eligible = sum(
+                1
+                for coin, data in market_analysis.items()
+                if data.get('recommendation') == 'HOLD (Down-Trend)'
+                and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+            )
+            logger.info(
+                "ℹ️ No entry candidates this round: strict=%d, fallback=%d, force_fill=%d, downtrend_reversal_eligible=%d, entry_mode=%s, recommendation_mix=%s",
+                len(strict_buy_candidates),
+                len(fallback_candidates),
+                len(force_fill_candidates),
+                downtrend_reversal_eligible,
+                entry_market_mode,
+                recommendation_mix,
+            )
+            self._log_blocked_uptrend_candidates(
+                market_analysis,
+                uptrend_filter_results,
+            )
+            self._log_blocked_downtrend_reversal_candidates(
+                market_analysis,
+                downtrend_filter_results,
+            )
+            self._log_fallback_entry_diagnostics(
+                market_analysis,
+                fallback_base_candidates,
+                fallback_filter_results,
+                fallback_allowed,
+                fallback_suppression_reason,
+                entry_market_mode,
+            )
+            for coin, data in list(market_analysis.items())[:5]:
+                signal_confidence = data.get('signal_confidence')
+                confidence_text = ''
+                if signal_confidence is not None:
+                    confidence_text = f", confidence={float(signal_confidence) * 100:.0f}%"
+                logger.info(
+                    "  - %s: rec=%s, rule=%s, score=%s, rule_score=%s, RSI=%.2f, source=%s%s",
+                    coin,
+                    data.get('recommendation', 'n/a'),
+                    data.get('rule_recommendation', 'n/a'),
+                    data.get('score', 0),
+                    data.get('rule_score', 0),
+                    float(data.get('rsi', np.nan)),
+                    data.get('signal_source', 'n/a'),
+                    confidence_text,
+                )
+
+        for i, coin in enumerate(top_buy_recommendations):
+            data = market_analysis.get(coin, {})
+            logger.info(f"  {i+1}. {coin}: {data.get('recommendation', 'HOLD')} "
+                        f"(Price: {data.get('price', 0):.4f} {self.config.base_currency}, "
+                        f"Score: {data.get('score', 0)}%, "
+                        f"Volumen: {data.get('volume', 0):,.0f} {self.config.base_currency}, "
+                        f"RSI: {data.get('rsi', np.nan):.2f})")
+        return top_buy_recommendations
+
+
+    def _execute_signal_exits(
+        self,
+        current_market_data: dict[str, Any],
+        market_analysis: dict[str, Any],
+    ) -> None:
+        """Close open positions that received a SELL or WEAK SELL signal."""
+        # Step 4: Exit logic - close positions on SELL signals
+        if self.config.enable_signal_exits and self.portfolio.open_trades:
+            sell_signal_coins = []
+            for coin in list(self.portfolio.open_trades.keys()):
+                signal = market_analysis.get(
+                    coin, {}).get('recommendation')
+                if signal in ['SELL', 'WEAK SELL']:
+                    sell_signal_coins.append(coin)
+
+            if sell_signal_coins:
+                logger.info(
+                    f"📉 Exit signals detected for {len(sell_signal_coins)} coins: {sell_signal_coins}")
+                for coin in sell_signal_coins:
+                    price_data = current_market_data.get(coin)
+                    trade_info = self.portfolio.open_trades.get(coin)
+                    if not price_data or not trade_info:
+                        continue
+                    current_price = price_data['price']
+                    amount_coin = trade_info['amount_coin']
+                    self._execute_trade(
+                        coin,
+                        "sell",
+                        current_price,
+                        amount_coin * current_price,
+                        reason='📉 SIGNAL-EXIT'
+                    )
+
+
+    def _open_new_positions(
+        self,
+        current_market_data: dict[str, Any],
+        market_analysis: dict[str, Any],
+        top_buy_recommendations: list[str],
+        portfolio_value_live: float,
+    ) -> None:
+        """Open new positions for the selected buy candidates within risk limits."""
+        # Step 5: Trade logic - open new positions
+        current_open_trades_count = len(self.portfolio.open_trades)
+        available_funds_for_trade = self.portfolio.cash
+        effective_trade_amount = self._effective_trade_amount(
+            portfolio_value_live)
+        effective_max_open_trades = self._effective_max_open_trades(
+            portfolio_value_live)
+        min_required_cash = self.config.min_trade_amount if self.config.allow_partial_trades else effective_trade_amount
+        can_open_positions, block_reason = self._can_open_new_positions(
+            portfolio_value_live)
+
+        if not can_open_positions:
+            logger.warning(
+                f"⛔ Risk guardrail blocking new positions: {block_reason}")
+        elif available_funds_for_trade >= min_required_cash and current_open_trades_count < effective_max_open_trades:
+            logger.info(
+                f"Attempting to open new positions. Available: {available_funds_for_trade:.2f} {self.config.base_currency}, Open trades: {current_open_trades_count}/{effective_max_open_trades}, Min amount: {min_required_cash:.2f} {self.config.base_currency}, Effective trade amount: {effective_trade_amount:.2f} {self.config.base_currency}.")
+            blocked_buy_attempts: list[dict[str, Any]] = []
+            successful_buy_count = 0
+            for coin in top_buy_recommendations:
+                # Only trade if no position is already open
+                if coin not in self.portfolio.open_trades and coin not in self.portfolio.holdings:
+                    coin_data = market_analysis.get(coin, {})
+                    attempt_meta = {
+                        'coin': coin,
+                        'signal_source': coin_data.get('signal_source', 'rules'),
+                        'score': coin_data.get('score', 0),
+                        'recommendation': coin_data.get('recommendation', 'HOLD'),
+                        'position_size_text': 'n/a',
+                        'cash_text': f"{self.portfolio.cash:.2f}",
+                        'cooldown_text': 'n/a',
+                    }
+                    price_data = current_market_data.get(coin)
+                    if price_data:
+                        current_price = price_data['price']
+                        atr = self._get_atr_for_coin(coin, period=14)
+                        target_position_size = self._calculate_position_size(
+                            coin,
+                            current_price,
+                            atr,
+                            portfolio_value=portfolio_value_live,
+                            trade_amount_cap=effective_trade_amount,
+                        )
+                        reserved_cash = self.portfolio.cash * self.config.cash_reserve_pct
+                        max_affordable = max(
+                            self.portfolio.cash - reserved_cash, 0.0)
+                        position_size = min(
+                            target_position_size, max_affordable)
+                        attempt_meta['position_size_text'] = f"{position_size:.2f}"
+                        attempt_meta['cash_text'] = f"{self.portfolio.cash:.2f}"
+
+                        # Very small ATR risk amounts should not completely block entries
+                        # as long as the minimum trade is still affordable with the cash reserve.
+                        if position_size < self.config.min_trade_amount and max_affordable >= self.config.min_trade_amount:
+                            position_size = self.config.min_trade_amount
+                            attempt_meta['position_size_text'] = f"{position_size:.2f}"
+
+                        if position_size < self.config.min_trade_amount:
+                            logger.info(
+                                f"Skipping {coin}: effective trade amount {position_size:.2f} {self.config.base_currency} is below MIN_TRADE_AMOUNT {self.config.min_trade_amount:.2f}.")
+                            blocked_buy_attempts.append({
+                                **attempt_meta,
+                                'reason': (
+                                    'below_min_trade_amount '
+                                    f'({position_size:.2f} < {self.config.min_trade_amount:.2f})'
+                                ),
+                            })
+                            continue
+
+                        if self.portfolio.cash >= position_size:
+                            logger.info(
+                                f"ℹ️ Attempting to buy {coin}...")
+                            signal_source = coin_data.get(
+                                'signal_source', 'rules')
+                            signal_confidence = coin_data.get(
+                                'signal_confidence')
+                            passes_filter, filter_reason = self._passes_entry_momentum_filter(
+                                coin_data)
+                            if not passes_filter:
+                                logger.info(
+                                    f"⛔ Momentum filter blocked entry for {coin}: {filter_reason}")
+                                blocked_buy_attempts.append({
+                                    **attempt_meta,
+                                    'reason': filter_reason,
+                                })
+                                continue
+                            effective_cooldown, cooldown_mode = self._resolve_reentry_cooldown_seconds(
+                                current_price, atr)
+                            in_cooldown, cooldown_remaining = self._is_coin_in_reentry_cooldown(
+                                coin, cooldown_seconds=effective_cooldown)
+                            if in_cooldown:
+                                cooldown_text = (
+                                    f"{cooldown_remaining}s remaining "
+                                    f"(effective={effective_cooldown}s, {cooldown_mode})"
+                                )
+                                logger.info(
+                                    f"⛔ Re-entry cooldown active for {coin}: {cooldown_remaining}s remaining "
+                                    f"(effective={effective_cooldown}s, base={self.config.reentry_cooldown_seconds}s, {cooldown_mode})")
+                                blocked_buy_attempts.append({
+                                    **attempt_meta,
+                                    'reason': 'reentry_cooldown_active',
+                                    'cooldown_text': cooldown_text,
+                                })
+                                continue
+                            if self._execute_trade(
+                                coin,
+                                "buy",
+                                current_price,
+                                position_size,
+                                atr=atr,
+                                signal_source=signal_source,
+                                signal_confidence=signal_confidence,
+                                recommendation=coin_data.get(
+                                    'recommendation', 'HOLD'),
+                                reason='ENTRY',
+                            ):
+                                successful_buy_count += 1
+                                # Update available capital
+                                available_funds_for_trade = self.portfolio.cash
+                                current_open_trades_count = len(
+                                    self.portfolio.open_trades)
+                                if current_open_trades_count >= effective_max_open_trades:
+                                    logger.info(
+                                        "Maximum number of open trades reached, stopping further buys.")
+                                    break
+                            else:
+                                blocked_buy_attempts.append({
+                                    **attempt_meta,
+                                    'reason': 'execute_trade_failed',
+                                })
+                        else:
+                            logger.warning(
+                                f"Insufficient available funds ({self.portfolio.cash:.2f} {self.config.base_currency}) for a trade of {position_size:.2f} {self.config.base_currency} for {coin}.")
+                            blocked_buy_attempts.append({
+                                **attempt_meta,
+                                'reason': (
+                                    'insufficient_available_funds '
+                                    f'({self.portfolio.cash:.2f} < {position_size:.2f})'
+                                ),
+                            })
+                    else:
+                        logger.warning(
+                            f"Price data for {coin} not found, cannot buy.")
+                        blocked_buy_attempts.append({
+                            **attempt_meta,
+                            'reason': 'missing_price_data',
+                        })
+                else:
+                    logger.debug(
+                        f"{coin} already in portfolio or open position.")
+            if top_buy_recommendations and successful_buy_count == 0:
+                self._log_blocked_buy_attempt_candidates(
+                    blocked_buy_attempts)
+        elif current_open_trades_count >= effective_max_open_trades:
+            logger.info(
+                f"Maximum number of open trades ({effective_max_open_trades}) reached. No new buys.")
+        else:
+            logger.info(
+                f"Insufficient available funds ({available_funds_for_trade:.2f} {self.config.base_currency}) for minimum trade ({min_required_cash:.2f} {self.config.base_currency}).")
+
+
+    def run(self):
+        """Main loop of the bot."""
+        self._log_startup_banner()
         try:
             while True:
                 self.iteration += 1
@@ -4126,422 +4568,19 @@ class CryptoTradingBot:
                     extra_coins=list(self.portfolio.open_trades.keys())
                 )
 
-                occupied_positions = set(self.portfolio.open_trades.keys()) | set(
-                    self.portfolio.holdings.keys())
-                available_trade_slots = max(
-                    0, self.config.max_open_trades - len(self.portfolio.open_trades))
-                dynamic_excluded_entry_pairs = self._dynamic_excluded_entry_pairs()
-                if dynamic_excluded_entry_pairs:
-                    logger.info(
-                        "Dynamically excluded lossmaker entry pairs: %s",
-                        ', '.join(sorted(
-                            f"{coin}/{source}" for coin, source in dynamic_excluded_entry_pairs)),
-                    )
-                degraded_entry_sources = self._degraded_entry_sources()
-                if degraded_entry_sources:
-                    logger.info(
-                        "Dynamically degraded entry sources (fallback/force-fill blocked): %s",
-                        ', '.join(sorted(degraded_entry_sources)),
-                    )
-                recent_pnl_guard = self._recent_pnl_guard_state()
-                recent_pnl_guard_active = bool(
-                    recent_pnl_guard.get('active', False))
-                self._log_recent_pnl_guard_status(recent_pnl_guard)
-
-
-                entry_guard_results: dict[str, bool] = {}
-
-
-                downtrend_filter_results = {
-                    coin: self._passes_downtrend_reversal_filter(data)
-                    for coin, data in market_analysis.items()
-                }
-                uptrend_filter_results = {
-                    coin: self._passes_uptrend_entry_filter(data)
-                    for coin, data in market_analysis.items()
-                }
-                entry_market_mode = self._entry_market_mode(market_analysis)
-
-                # Only suggest coins not yet held.
-                strict_buy_candidates_before_guard = [
-                    coin for coin, data in market_analysis.items()
-                    if coin not in occupied_positions
-                    and data.get('recommendation') in ['STRONG BUY', 'BUY']
-                    and data.get('score', 0) >= self.config.min_entry_score
-                    and self._entry_pair_allowed(coin, data, dynamic_excluded_entry_pairs)
-                    and self._entry_guards_allow(coin, data, entry_guard_results)
-                ]
-                if recent_pnl_guard_active:
-                    blocked_by_recent_guard = [
-                        coin for coin in strict_buy_candidates_before_guard
-                        if str(market_analysis[coin].get(
-                            'signal_source', 'rules')).strip().lower() != 'catboost'
-                    ]
-                    log_blocked_candidates = (
-                        logger.warning if blocked_by_recent_guard else logger.info
-                    )
-                    log_blocked_candidates(
-                        "Recent PnL guard withheld %d strict BUY candidates: %s",
-                        len(blocked_by_recent_guard),
-                        ', '.join(blocked_by_recent_guard[:10]) or "none",
-                    )
-                strict_buy_candidates = [
-                    coin for coin in strict_buy_candidates_before_guard
-                    if not recent_pnl_guard_active
-                    or str(market_analysis[coin].get(
-                        'signal_source', 'rules')).strip().lower() == 'catboost'
-                ]
-                top_buy_recommendations = strict_buy_candidates[:min(
-                    self.config.top_n_for_analysis, available_trade_slots)]
-
-                # Fallback: fill remaining slots with solid non-SELL candidates.
-                # If exit_on_downtrend is active, exclude down-trend coins from entries.
-                _excluded_signals_fallback = ['SELL', 'WEAK SELL']
-                if self.config.exit_on_downtrend:
-                    _excluded_signals_fallback.append('HOLD (Down-Trend)')
-                fallback_base_candidates = [
-                    coin for coin, data in market_analysis.items()
-                    if coin not in occupied_positions
-                    and coin not in top_buy_recommendations
-                    if data.get('score', 0) >= self.config.fallback_min_score
-                    and self._entry_guards_allow(coin, data, entry_guard_results)
-                    and str(data.get('signal_source', 'rules')).strip().lower() not in degraded_entry_sources
-                    and self._allows_entry_signal(
-                        str(data.get('recommendation', '')),
-                        downtrend_filter_results.get(
-                            coin, (False, 'not_evaluated'))[0],
-                        set(_excluded_signals_fallback),
-                    )
-                    and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                    and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                    and self._entry_pair_allowed(coin, data, dynamic_excluded_entry_pairs)
-                ]
-                fallback_filter_results = {
-                    coin: self._passes_fallback_entry_filter(
-                        coin, market_analysis.get(coin, {}))
-                    for coin in fallback_base_candidates
-                }
-                fallback_candidates = []
-                fallback_allowed = (
-                    self.config.enable_fallback_entry
-                    and not recent_pnl_guard_active
-                    and available_trade_slots > len(top_buy_recommendations)
-                    and (
-                        not self.config.defensive_entry_mode_enabled
-                        or entry_market_mode != 'defensive'
-                    )
-                )
-                fallback_suppression_reason = 'allowed'
-                if not self.config.enable_fallback_entry:
-                    fallback_suppression_reason = 'fallback_disabled'
-                elif available_trade_slots <= len(top_buy_recommendations):
-                    fallback_suppression_reason = 'no_free_slots'
-                elif self.config.defensive_entry_mode_enabled and entry_market_mode == 'defensive':
-                    fallback_suppression_reason = 'entry_mode_defensive'
-                if fallback_allowed:
-                    fallback_candidates = [
-                        coin for coin in fallback_base_candidates
-                        if fallback_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                    ]
-                    if fallback_candidates:
-                        missing_slots = available_trade_slots - \
-                            len(top_buy_recommendations)
-                        top_buy_recommendations.extend(
-                            fallback_candidates[:missing_slots])
-                        best_coin = top_buy_recommendations[0]
-                        best_data = market_analysis.get(best_coin, {})
-                        logger.info(
-                            f"ℹ️ Fallback entry activated (slots filled): lead candidate {best_coin} ({best_data.get('recommendation', 'n/a')}, score {best_data.get('score', 0)}).")
-
-                # Optional more aggressive slot filling: use neutral candidates even without RSI filter,
-                # down-trend coins are also excluded when exit_on_downtrend is active.
-                force_fill_candidates = []
-                force_fill_allowed = (
-                    self.config.force_fill_slots
-                    and not recent_pnl_guard_active
-                    and available_trade_slots > len(top_buy_recommendations)
-                    and (
-                        not self.config.defensive_entry_mode_enabled
-                        or entry_market_mode == 'normal'
-                    )
-                )
-                if force_fill_allowed:
-                    force_fill_candidates = [
-                        coin for coin, data in market_analysis.items()
-                        if coin not in occupied_positions
-                        and coin not in top_buy_recommendations
-                        and data.get('score', 0) >= self.config.force_fill_min_score
-                        and self._entry_guards_allow(coin, data, entry_guard_results)
-                        and str(data.get('signal_source', 'rules')).strip().lower() not in degraded_entry_sources
-                        and self._allows_entry_signal(
-                            str(data.get('recommendation', '')),
-                            downtrend_filter_results.get(
-                                coin, (False, 'not_evaluated'))[0],
-                            set(_excluded_signals_fallback),
-                        )
-                        and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                        and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                        and self._entry_pair_allowed(coin, data, dynamic_excluded_entry_pairs)
-                    ]
-                    if force_fill_candidates:
-                        missing_slots = available_trade_slots - \
-                            len(top_buy_recommendations)
-                        top_buy_recommendations.extend(
-                            force_fill_candidates[:missing_slots])
-                        logger.info(
-                            f"⚙️ Force-fill active: {min(len(force_fill_candidates), missing_slots)} additional candidates added (min score {self.config.force_fill_min_score}).")
-
-                logger.info(
-                    f"🔍 Market analysis complete. Top {len(top_buy_recommendations)} buy recommendations:")
-
-                if not top_buy_recommendations and market_analysis:
-                    recommendation_mix = dict(Counter(
-                        data.get('recommendation', 'UNKNOWN')
-                        for data in market_analysis.values()
-                    ))
-                    downtrend_reversal_eligible = sum(
-                        1
-                        for coin, data in market_analysis.items()
-                        if data.get('recommendation') == 'HOLD (Down-Trend)'
-                        and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                    )
-                    logger.info(
-                        "ℹ️ No entry candidates this round: strict=%d, fallback=%d, force_fill=%d, downtrend_reversal_eligible=%d, entry_mode=%s, recommendation_mix=%s",
-                        len(strict_buy_candidates),
-                        len(fallback_candidates),
-                        len(force_fill_candidates),
-                        downtrend_reversal_eligible,
-                        entry_market_mode,
-                        recommendation_mix,
-                    )
-                    self._log_blocked_uptrend_candidates(
-                        market_analysis,
-                        uptrend_filter_results,
-                    )
-                    self._log_blocked_downtrend_reversal_candidates(
-                        market_analysis,
-                        downtrend_filter_results,
-                    )
-                    self._log_fallback_entry_diagnostics(
-                        market_analysis,
-                        fallback_base_candidates,
-                        fallback_filter_results,
-                        fallback_allowed,
-                        fallback_suppression_reason,
-                        entry_market_mode,
-                    )
-                    for coin, data in list(market_analysis.items())[:5]:
-                        signal_confidence = data.get('signal_confidence')
-                        confidence_text = ''
-                        if signal_confidence is not None:
-                            confidence_text = f", confidence={float(signal_confidence) * 100:.0f}%"
-                        logger.info(
-                            "  - %s: rec=%s, rule=%s, score=%s, rule_score=%s, RSI=%.2f, source=%s%s",
-                            coin,
-                            data.get('recommendation', 'n/a'),
-                            data.get('rule_recommendation', 'n/a'),
-                            data.get('score', 0),
-                            data.get('rule_score', 0),
-                            float(data.get('rsi', np.nan)),
-                            data.get('signal_source', 'n/a'),
-                            confidence_text,
-                        )
-
-                for i, coin in enumerate(top_buy_recommendations):
-                    data = market_analysis.get(coin, {})
-                    logger.info(f"  {i+1}. {coin}: {data.get('recommendation', 'HOLD')} "
-                                f"(Price: {data.get('price', 0):.4f} {self.config.base_currency}, "
-                                f"Score: {data.get('score', 0)}%, "
-                                f"Volumen: {data.get('volume', 0):,.0f} {self.config.base_currency}, "
-                                f"RSI: {data.get('rsi', np.nan):.2f})")
+                top_buy_recommendations = self._select_entry_candidates(
+                    market_analysis)
 
                 # Step 4: Exit logic - close positions on SELL signals
-                if self.config.enable_signal_exits and self.portfolio.open_trades:
-                    sell_signal_coins = []
-                    for coin in list(self.portfolio.open_trades.keys()):
-                        signal = market_analysis.get(
-                            coin, {}).get('recommendation')
-                        if signal in ['SELL', 'WEAK SELL']:
-                            sell_signal_coins.append(coin)
-
-                    if sell_signal_coins:
-                        logger.info(
-                            f"📉 Exit signals detected for {len(sell_signal_coins)} coins: {sell_signal_coins}")
-                        for coin in sell_signal_coins:
-                            price_data = current_market_data.get(coin)
-                            trade_info = self.portfolio.open_trades.get(coin)
-                            if not price_data or not trade_info:
-                                continue
-                            current_price = price_data['price']
-                            amount_coin = trade_info['amount_coin']
-                            self._execute_trade(
-                                coin,
-                                "sell",
-                                current_price,
-                                amount_coin * current_price,
-                                reason='📉 SIGNAL-EXIT'
-                            )
+                self._execute_signal_exits(current_market_data, market_analysis)
 
                 # Step 5: Trade logic - open new positions
-                current_open_trades_count = len(self.portfolio.open_trades)
-                available_funds_for_trade = self.portfolio.cash
-                effective_trade_amount = self._effective_trade_amount(
-                    portfolio_value_live)
-                effective_max_open_trades = self._effective_max_open_trades(
-                    portfolio_value_live)
-                min_required_cash = self.config.min_trade_amount if self.config.allow_partial_trades else effective_trade_amount
-                can_open_positions, block_reason = self._can_open_new_positions(
-                    portfolio_value_live)
-
-                if not can_open_positions:
-                    logger.warning(
-                        f"⛔ Risk guardrail blocking new positions: {block_reason}")
-                elif available_funds_for_trade >= min_required_cash and current_open_trades_count < effective_max_open_trades:
-                    logger.info(
-                        f"Attempting to open new positions. Available: {available_funds_for_trade:.2f} {self.config.base_currency}, Open trades: {current_open_trades_count}/{effective_max_open_trades}, Min amount: {min_required_cash:.2f} {self.config.base_currency}, Effective trade amount: {effective_trade_amount:.2f} {self.config.base_currency}.")
-                    blocked_buy_attempts: list[dict[str, Any]] = []
-                    successful_buy_count = 0
-                    for coin in top_buy_recommendations:
-                        # Only trade if no position is already open
-                        if coin not in self.portfolio.open_trades and coin not in self.portfolio.holdings:
-                            coin_data = market_analysis.get(coin, {})
-                            attempt_meta = {
-                                'coin': coin,
-                                'signal_source': coin_data.get('signal_source', 'rules'),
-                                'score': coin_data.get('score', 0),
-                                'recommendation': coin_data.get('recommendation', 'HOLD'),
-                                'position_size_text': 'n/a',
-                                'cash_text': f"{self.portfolio.cash:.2f}",
-                                'cooldown_text': 'n/a',
-                            }
-                            price_data = current_market_data.get(coin)
-                            if price_data:
-                                current_price = price_data['price']
-                                atr = self._get_atr_for_coin(coin, period=14)
-                                target_position_size = self._calculate_position_size(
-                                    coin,
-                                    current_price,
-                                    atr,
-                                    portfolio_value=portfolio_value_live,
-                                    trade_amount_cap=effective_trade_amount,
-                                )
-                                reserved_cash = self.portfolio.cash * self.config.cash_reserve_pct
-                                max_affordable = max(
-                                    self.portfolio.cash - reserved_cash, 0.0)
-                                position_size = min(
-                                    target_position_size, max_affordable)
-                                attempt_meta['position_size_text'] = f"{position_size:.2f}"
-                                attempt_meta['cash_text'] = f"{self.portfolio.cash:.2f}"
-
-                                # Very small ATR risk amounts should not completely block entries
-                                # as long as the minimum trade is still affordable with the cash reserve.
-                                if position_size < self.config.min_trade_amount and max_affordable >= self.config.min_trade_amount:
-                                    position_size = self.config.min_trade_amount
-                                    attempt_meta['position_size_text'] = f"{position_size:.2f}"
-
-                                if position_size < self.config.min_trade_amount:
-                                    logger.info(
-                                        f"Skipping {coin}: effective trade amount {position_size:.2f} {self.config.base_currency} is below MIN_TRADE_AMOUNT {self.config.min_trade_amount:.2f}.")
-                                    blocked_buy_attempts.append({
-                                        **attempt_meta,
-                                        'reason': (
-                                            'below_min_trade_amount '
-                                            f'({position_size:.2f} < {self.config.min_trade_amount:.2f})'
-                                        ),
-                                    })
-                                    continue
-
-                                if self.portfolio.cash >= position_size:
-                                    logger.info(
-                                        f"ℹ️ Attempting to buy {coin}...")
-                                    signal_source = coin_data.get(
-                                        'signal_source', 'rules')
-                                    signal_confidence = coin_data.get(
-                                        'signal_confidence')
-                                    passes_filter, filter_reason = self._passes_entry_momentum_filter(
-                                        coin_data)
-                                    if not passes_filter:
-                                        logger.info(
-                                            f"⛔ Momentum filter blocked entry for {coin}: {filter_reason}")
-                                        blocked_buy_attempts.append({
-                                            **attempt_meta,
-                                            'reason': filter_reason,
-                                        })
-                                        continue
-                                    effective_cooldown, cooldown_mode = self._resolve_reentry_cooldown_seconds(
-                                        current_price, atr)
-                                    in_cooldown, cooldown_remaining = self._is_coin_in_reentry_cooldown(
-                                        coin, cooldown_seconds=effective_cooldown)
-                                    if in_cooldown:
-                                        cooldown_text = (
-                                            f"{cooldown_remaining}s remaining "
-                                            f"(effective={effective_cooldown}s, {cooldown_mode})"
-                                        )
-                                        logger.info(
-                                            f"⛔ Re-entry cooldown active for {coin}: {cooldown_remaining}s remaining "
-                                            f"(effective={effective_cooldown}s, base={self.config.reentry_cooldown_seconds}s, {cooldown_mode})")
-                                        blocked_buy_attempts.append({
-                                            **attempt_meta,
-                                            'reason': 'reentry_cooldown_active',
-                                            'cooldown_text': cooldown_text,
-                                        })
-                                        continue
-                                    if self._execute_trade(
-                                        coin,
-                                        "buy",
-                                        current_price,
-                                        position_size,
-                                        atr=atr,
-                                        signal_source=signal_source,
-                                        signal_confidence=signal_confidence,
-                                        recommendation=coin_data.get(
-                                            'recommendation', 'HOLD'),
-                                        reason='ENTRY',
-                                    ):
-                                        successful_buy_count += 1
-                                        # Update available capital
-                                        available_funds_for_trade = self.portfolio.cash
-                                        current_open_trades_count = len(
-                                            self.portfolio.open_trades)
-                                        if current_open_trades_count >= effective_max_open_trades:
-                                            logger.info(
-                                                "Maximum number of open trades reached, stopping further buys.")
-                                            break
-                                    else:
-                                        blocked_buy_attempts.append({
-                                            **attempt_meta,
-                                            'reason': 'execute_trade_failed',
-                                        })
-                                else:
-                                    logger.warning(
-                                        f"Insufficient available funds ({self.portfolio.cash:.2f} {self.config.base_currency}) for a trade of {position_size:.2f} {self.config.base_currency} for {coin}.")
-                                    blocked_buy_attempts.append({
-                                        **attempt_meta,
-                                        'reason': (
-                                            'insufficient_available_funds '
-                                            f'({self.portfolio.cash:.2f} < {position_size:.2f})'
-                                        ),
-                                    })
-                            else:
-                                logger.warning(
-                                    f"Price data for {coin} not found, cannot buy.")
-                                blocked_buy_attempts.append({
-                                    **attempt_meta,
-                                    'reason': 'missing_price_data',
-                                })
-                        else:
-                            logger.debug(
-                                f"{coin} already in portfolio or open position.")
-                    if top_buy_recommendations and successful_buy_count == 0:
-                        self._log_blocked_buy_attempt_candidates(
-                            blocked_buy_attempts)
-                elif current_open_trades_count >= effective_max_open_trades:
-                    logger.info(
-                        f"Maximum number of open trades ({effective_max_open_trades}) reached. No new buys.")
-                else:
-                    logger.info(
-                        f"Insufficient available funds ({available_funds_for_trade:.2f} {self.config.base_currency}) for minimum trade ({min_required_cash:.2f} {self.config.base_currency}).")
-
+                self._open_new_positions(
+                    current_market_data,
+                    market_analysis,
+                    top_buy_recommendations,
+                    portfolio_value_live,
+                )
                 # Step 6: Monitor open trades (stop-loss, take-profit, time, signals)
                 if self.portfolio.open_trades:
                     logger.info(
