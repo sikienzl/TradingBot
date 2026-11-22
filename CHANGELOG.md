@@ -108,6 +108,11 @@ prepared; this file intentionally remains under **Unreleased** until then.
   `_dry_run_sell_gross_net_pnl` and `_update_open_trades_after_dry_run_sell`;
   the journal row and commit/persist flow stay in the dispatcher so the
   sell behaviour is unchanged.
+- Split `HistoricalRuleBacktester.run` (complexity 19 → 6) into
+  `_select_replay_window`, `_close_signal_exits`, `_rank_entry_candidates`,
+  `_open_backtest_positions`, `_apply_intrabar_exits` and
+  `_close_remaining_positions`; cash flows through each phase explicitly so
+  the replay order and next-bar execution semantics are unchanged.
 - Remove the stale `train_trading_model_backup.py` and ignore `.scannerwork/`
   and `.github/copilot-instructions.md`.
 - Centralize Ruff configuration in `pyproject.toml` (excludes plus a

@@ -171,15 +171,8 @@ class HistoricalRuleBacktester:
         equity_curve = [settings.initial_cash]
         closed_pnls = list(prior_closed_pnls or [])
         latest_closes: dict[str, float] = {}
-        times = sorted(self.rows_by_time)
-        replay_times = [
-            timestamp for timestamp in times
-            if end_time is None or timestamp <= end_time
-        ]
-        eligible_times = [
-            timestamp for timestamp in replay_times
-            if start_time is None or timestamp >= start_time
-        ]
+        replay_times, eligible_times = self._select_replay_window(
+            start_time, end_time)
         if not eligible_times:
             raise ValueError("No candles fall within the requested replay window")
 
@@ -195,92 +188,21 @@ class HistoricalRuleBacktester:
             prior_signals = previous_signals
 
             if active:
-                for coin in list(positions):
-                    row = market.get(coin)
-                    if row is None:
-                        continue
-                    position = positions[coin]
-                    reason = self._open_exit_reason(
-                        position, row, prior_signals.get(coin, ("HOLD", 50))[0], timestamp
-                    )
-                    if reason:
-                        exit_price = self._exit_price(position, row, reason)
-                        cash += self._close_position(
-                            positions, trades, closed_pnls, coin, timestamp, exit_price, reason
-                        )
+                cash = self._close_signal_exits(
+                    positions, market, prior_signals, timestamp, trades,
+                    closed_pnls, cash)
 
-                ranked_market = sorted(
-                    (
-                        (coin, row)
-                        for coin, row in market.items()
-                        if coin not in settings.excluded_coins
-                        and previous_quote_volumes.get(coin, 0.0) >= settings.min_volume_base
-                    ),
-                    key=lambda item: previous_quote_volumes.get(item[0], 0.0),
-                    reverse=True,
-                )[:settings.top_n]
-                candidates = [
-                    (coin, row, prior_signals[coin][1])
-                    for coin, row in ranked_market
-                    if coin not in positions
-                    and coin in prior_signals
-                    and prior_signals[coin][0] in {"BUY", "STRONG BUY"}
-                    and prior_signals[coin][1] >= settings.min_entry_score
-                ]
-                candidates.sort(key=lambda item: item[2], reverse=True)
+                candidates = self._rank_entry_candidates(
+                    market, positions, prior_signals, previous_quote_volumes)
 
                 guard_active = self._recent_pnl_guard_active(closed_pnls)
                 if not guard_active:
-                    for coin, row, score in candidates:
-                        if len(positions) >= settings.max_open_trades:
-                            break
-                        available = max(0.0, cash * (1 - settings.cash_reserve_pct))
-                        if available < settings.min_trade_amount:
-                            break
-                        portfolio_value = cash + sum(
-                            position["amount"] * current_prices.get(
-                                held_coin, position["entry_price"])
-                            for held_coin, position in positions.items()
-                        )
-                        spend = min(
-                            portfolio_value * settings.risk_pct,
-                            settings.trade_amount,
-                            available,
-                        )
-                        if spend < settings.min_trade_amount and available >= settings.min_trade_amount:
-                            spend = settings.min_trade_amount
-                        if spend < settings.min_trade_amount:
-                            continue
-                        fill_price = float(row["open"]) * (1 + settings.slippage)
-                        amount = spend / (fill_price * (1 + settings.fee_rate))
-                        cash -= spend
-                        positions[coin] = {
-                            "amount": amount,
-                            "entry_price": fill_price,
-                            "entry_cost": spend,
-                            "entry_time": timestamp,
-                            "score": score,
-                        }
-                        trades.append({
-                            "timestamp": timestamp,
-                            "coin": coin,
-                            "action": "buy",
-                            "price": fill_price,
-                            "amount_coin": amount,
-                            "pnl_base": 0.0,
-                            "reason": "strict_buy",
-                        })
+                    cash = self._open_backtest_positions(
+                        candidates, positions, current_prices, cash,
+                        trades, timestamp)
 
-                for coin in list(positions):
-                    row = market.get(coin)
-                    if row is None:
-                        continue
-                    reason = self._intrabar_exit_reason(positions[coin], row)
-                    if reason:
-                        exit_price = self._exit_price(positions[coin], row, reason)
-                        cash += self._close_position(
-                            positions, trades, closed_pnls, coin, timestamp, exit_price, reason
-                        )
+                cash = self._apply_intrabar_exits(
+                    positions, market, timestamp, trades, closed_pnls, cash)
 
                 latest_closes.update({
                     coin: float(row["close"]) for coin, row in market.items()
@@ -297,6 +219,150 @@ class HistoricalRuleBacktester:
                 previous_signals[coin] = (row["recommendation"], int(row["score"]))
                 previous_quote_volumes[coin] = float(row["quote_volume_24h"])
 
+        cash = self._close_remaining_positions(
+            positions, latest_closes, eligible_times, trades, closed_pnls,
+            cash)
+        equity_curve[-1] = cash
+        return self._summary(trades, equity_curve, cash)
+
+    def _select_replay_window(
+        self, start_time: pd.Timestamp | None, end_time: pd.Timestamp | None,
+    ) -> tuple[list, list]:
+        """Timestamps to replay and the subset inside the report window."""
+        times = sorted(self.rows_by_time)
+        replay_times = [
+            timestamp for timestamp in times
+            if end_time is None or timestamp <= end_time
+        ]
+        eligible_times = [
+            timestamp for timestamp in replay_times
+            if start_time is None or timestamp >= start_time
+        ]
+        return replay_times, eligible_times
+
+    def _close_signal_exits(
+        self, positions: dict[str, dict], market: dict[str, dict],
+        prior_signals: dict[str, tuple[str, int]],
+        timestamp: pd.Timestamp, trades: list[dict],
+        closed_pnls: list[float], cash: float,
+    ) -> float:
+        """Close positions whose prior candle turned bearish; returns cash."""
+        for coin in list(positions):
+            row = market.get(coin)
+            if row is None:
+                continue
+            position = positions[coin]
+            reason = self._open_exit_reason(
+                position, row, prior_signals.get(coin, ("HOLD", 50))[0], timestamp
+            )
+            if reason:
+                exit_price = self._exit_price(position, row, reason)
+                cash += self._close_position(
+                    positions, trades, closed_pnls, coin, timestamp, exit_price, reason
+                )
+        return cash
+
+    def _rank_entry_candidates(
+        self, market: dict[str, dict], positions: dict[str, dict],
+        prior_signals: dict[str, tuple[str, int]],
+        previous_quote_volumes: dict[str, float],
+    ) -> list[tuple[str, dict, int]]:
+        """Top-volume coins with a prior BUY signal, best score first."""
+        settings = self.settings
+        ranked_market = sorted(
+            (
+                (coin, row)
+                for coin, row in market.items()
+                if coin not in settings.excluded_coins
+                and previous_quote_volumes.get(coin, 0.0) >= settings.min_volume_base
+            ),
+            key=lambda item: previous_quote_volumes.get(item[0], 0.0),
+            reverse=True,
+        )[:settings.top_n]
+        candidates = [
+            (coin, row, prior_signals[coin][1])
+            for coin, row in ranked_market
+            if coin not in positions
+            and coin in prior_signals
+            and prior_signals[coin][0] in {"BUY", "STRONG BUY"}
+            and prior_signals[coin][1] >= settings.min_entry_score
+        ]
+        candidates.sort(key=lambda item: item[2], reverse=True)
+        return candidates
+
+    def _open_backtest_positions(
+        self, candidates: list[tuple[str, dict, int]],
+        positions: dict[str, dict], current_prices: dict[str, float],
+        cash: float, trades: list[dict], timestamp: pd.Timestamp,
+    ) -> float:
+        """Open new positions from ranked candidates; returns cash."""
+        settings = self.settings
+        for coin, row, score in candidates:
+            if len(positions) >= settings.max_open_trades:
+                break
+            available = max(0.0, cash * (1 - settings.cash_reserve_pct))
+            if available < settings.min_trade_amount:
+                break
+            portfolio_value = cash + sum(
+                position["amount"] * current_prices.get(
+                    held_coin, position["entry_price"])
+                for held_coin, position in positions.items()
+            )
+            spend = min(
+                portfolio_value * settings.risk_pct,
+                settings.trade_amount,
+                available,
+            )
+            if spend < settings.min_trade_amount and available >= settings.min_trade_amount:
+                spend = settings.min_trade_amount
+            if spend < settings.min_trade_amount:
+                continue
+            fill_price = float(row["open"]) * (1 + settings.slippage)
+            amount = spend / (fill_price * (1 + settings.fee_rate))
+            cash -= spend
+            positions[coin] = {
+                "amount": amount,
+                "entry_price": fill_price,
+                "entry_cost": spend,
+                "entry_time": timestamp,
+                "score": score,
+            }
+            trades.append({
+                "timestamp": timestamp,
+                "coin": coin,
+                "action": "buy",
+                "price": fill_price,
+                "amount_coin": amount,
+                "pnl_base": 0.0,
+                "reason": "strict_buy",
+            })
+        return cash
+
+    def _apply_intrabar_exits(
+        self, positions: dict[str, dict], market: dict[str, dict],
+        timestamp: pd.Timestamp, trades: list[dict],
+        closed_pnls: list[float], cash: float,
+    ) -> float:
+        """Apply stop-loss/take-profit inside the candle; returns cash."""
+        for coin in list(positions):
+            row = market.get(coin)
+            if row is None:
+                continue
+            reason = self._intrabar_exit_reason(positions[coin], row)
+            if reason:
+                exit_price = self._exit_price(positions[coin], row, reason)
+                cash += self._close_position(
+                    positions, trades, closed_pnls, coin, timestamp, exit_price, reason
+                )
+        return cash
+
+    def _close_remaining_positions(
+        self, positions: dict[str, dict], latest_closes: dict[str, float],
+        eligible_times: list, trades: list[dict],
+        closed_pnls: list[float], cash: float,
+    ) -> float:
+        """Mark-to-market all open positions at the end of the data."""
+        settings = self.settings
         final_time = eligible_times[-1]
         for coin in list(positions):
             if coin not in latest_closes:
@@ -306,8 +372,7 @@ class HistoricalRuleBacktester:
                 positions, trades, closed_pnls, coin, final_time, final_price,
                 "end_of_data",
             )
-        equity_curve[-1] = cash
-        return self._summary(trades, equity_curve, cash)
+        return cash
 
     def _recent_pnl_guard_active(self, closed_pnls: list[float]) -> bool:
         settings = self.settings
