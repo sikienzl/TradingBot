@@ -101,6 +101,13 @@ prepared; this file intentionally remains under **Unreleased** until then.
   `_parse_cash_line`, `_parse_holdings_line`, `_parse_open_trades_line`,
   `_parse_current_price_line`) and the early-exit condition became
   `_portfolio_scan_complete`; the scanner now only dispatches per line.
+- Split `CryptoTradingBot._dry_run_sell` (complexity 19 → 6) into
+  `_resolve_dry_run_sell_entry` (entry validation and quantity capping),
+  `_dry_run_sell_proceeds` (fee/net proceeds validation),
+  `_apply_dry_run_sell_to_holdings`, `_record_dry_run_sell_close`,
+  `_dry_run_sell_gross_net_pnl` and `_update_open_trades_after_dry_run_sell`;
+  the journal row and commit/persist flow stay in the dispatcher so the
+  sell behaviour is unchanged.
 - Remove the stale `train_trading_model_backup.py` and ignore `.scannerwork/`
   and `.github/copilot-instructions.md`.
 - Centralize Ruff configuration in `pyproject.toml` (excludes plus a
