@@ -13,102 +13,113 @@ from typing import Any
 from dotenv import load_dotenv
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "y", "on")
+
+def _env_str(name: str, default: str = "") -> str:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().strip('"').strip("'")
+
+def _env_symbol_int_map(name: str, default: str = "") -> dict[str, int]:
+    raw = _env_str(name, default)
+    if not raw:
+        return {}
+
+    parsed: dict[str, int] = {}
+    for item in raw.split(','):
+        token = item.strip()
+        if not token or ':' not in token:
+            continue
+        symbol, value = token.split(':', 1)
+        symbol = symbol.strip().upper()
+        value = value.strip()
+        if not symbol or not value:
+            continue
+        try:
+            parsed[symbol] = int(value)
+        except ValueError:
+            continue
+    return parsed
+
+def _env_symbol_float_map(name: str, default: str = "") -> dict[str, float]:
+    raw = _env_str(name, default)
+    if not raw:
+        return {}
+
+    parsed: dict[str, float] = {}
+    for item in raw.split(','):
+        token = item.strip()
+        if not token or ':' not in token:
+            continue
+        symbol, value = token.split(':', 1)
+        symbol = symbol.strip().upper()
+        value = value.strip()
+        if not symbol or not value:
+            continue
+        try:
+            parsed[symbol] = float(value)
+        except ValueError:
+            continue
+    return parsed
+
+def _env_threshold_float_pairs(name: str, default: str = "") -> list[tuple[float, float]]:
+    raw = _env_str(name, default)
+    if not raw:
+        return []
+
+    parsed: list[tuple[float, float]] = []
+    for item in raw.split(','):
+        token = item.strip()
+        if not token or ':' not in token:
+            continue
+        threshold, value = token.split(':', 1)
+        try:
+            parsed.append(
+                (float(threshold.strip()), float(value.strip())))
+        except ValueError:
+            continue
+    return sorted(parsed, key=lambda entry: entry[0])
+
+def _env_threshold_int_pairs(name: str, default: str = "") -> list[tuple[float, int]]:
+    raw = _env_str(name, default)
+    if not raw:
+        return []
+
+    parsed: list[tuple[float, int]] = []
+    for item in raw.split(','):
+        token = item.strip()
+        if not token or ':' not in token:
+            continue
+        threshold, value = token.split(':', 1)
+        try:
+            parsed.append(
+                (float(threshold.strip()), int(value.strip())))
+        except ValueError:
+            continue
+    return sorted(parsed, key=lambda entry: entry[0])
+
+
 class BotConfig:
     """Configuration class for the trading bot."""
 
-    def __init__(self):  # noqa: C901
+    def __init__(self):
         load_dotenv()
 
-        def _env_bool(name: str, default: bool) -> bool:
-            raw = os.getenv(name)
-            if raw is None:
-                return default
-            return raw.strip().lower() in ("1", "true", "yes", "y", "on")
-
-        def _env_str(name: str, default: str = "") -> str:
-            raw = os.getenv(name)
-            if raw is None:
-                return default
-            return raw.strip().strip('"').strip("'")
-
-        def _env_symbol_int_map(name: str, default: str = "") -> dict[str, int]:
-            raw = _env_str(name, default)
-            if not raw:
-                return {}
-
-            parsed: dict[str, int] = {}
-            for item in raw.split(','):
-                token = item.strip()
-                if not token or ':' not in token:
-                    continue
-                symbol, value = token.split(':', 1)
-                symbol = symbol.strip().upper()
-                value = value.strip()
-                if not symbol or not value:
-                    continue
-                try:
-                    parsed[symbol] = int(value)
-                except ValueError:
-                    continue
-            return parsed
-
-        def _env_symbol_float_map(name: str, default: str = "") -> dict[str, float]:
-            raw = _env_str(name, default)
-            if not raw:
-                return {}
-
-            parsed: dict[str, float] = {}
-            for item in raw.split(','):
-                token = item.strip()
-                if not token or ':' not in token:
-                    continue
-                symbol, value = token.split(':', 1)
-                symbol = symbol.strip().upper()
-                value = value.strip()
-                if not symbol or not value:
-                    continue
-                try:
-                    parsed[symbol] = float(value)
-                except ValueError:
-                    continue
-            return parsed
-
-        def _env_threshold_float_pairs(name: str, default: str = "") -> list[tuple[float, float]]:
-            raw = _env_str(name, default)
-            if not raw:
-                return []
-
-            parsed: list[tuple[float, float]] = []
-            for item in raw.split(','):
-                token = item.strip()
-                if not token or ':' not in token:
-                    continue
-                threshold, value = token.split(':', 1)
-                try:
-                    parsed.append(
-                        (float(threshold.strip()), float(value.strip())))
-                except ValueError:
-                    continue
-            return sorted(parsed, key=lambda entry: entry[0])
-
-        def _env_threshold_int_pairs(name: str, default: str = "") -> list[tuple[float, int]]:
-            raw = _env_str(name, default)
-            if not raw:
-                return []
-
-            parsed: list[tuple[float, int]] = []
-            for item in raw.split(','):
-                token = item.strip()
-                if not token or ':' not in token:
-                    continue
-                threshold, value = token.split(':', 1)
-                try:
-                    parsed.append(
-                        (float(threshold.strip()), int(value.strip())))
-                except ValueError:
-                    continue
-            return sorted(parsed, key=lambda entry: entry[0])
-
+        self._load_exchange_settings()
+        self._load_risk_management_settings()
+        self._load_trading_parameters()
+        self._load_entry_strategy_settings()
+        self._load_entry_filter_and_reentry_settings()
+        self._load_exit_management_settings()
+        self._load_ml_settings()
+        self._load_analytics_and_guardrail_settings()
+        self._load_ai_copilot_settings()
+    def _load_exchange_settings(self) -> None:
         self.exchange_name = os.getenv('EXCHANGE_NAME', 'kraken').lower()
         self.api_key = os.getenv(
             'KRAKEN_API_KEY', '')
@@ -147,6 +158,8 @@ class BotConfig:
         self.recent_pnl_guard_stale_hours = float(
             os.getenv('RECENT_PNL_GUARD_STALE_HOURS', str(24.0)))
         # Amount in base currency per trade
+
+    def _load_risk_management_settings(self) -> None:
         self.trade_amount = float(os.getenv('TRADE_AMOUNT', str(20)))
         self.portfolio_trade_amount_multipliers = _env_threshold_float_pairs(
             'PORTFOLIO_TRADE_AMOUNT_MULTIPLIERS',
@@ -178,6 +191,8 @@ class BotConfig:
         self.simulation_seed = int(os.getenv('SIMULATION_SEED', str(42)))
         self.simulation_regime = _env_str(
             'SIMULATION_REGIME', 'neutral').lower()
+
+    def _load_trading_parameters(self) -> None:
         self.stop_loss_pct = float(
             os.getenv('STOP_LOSS_PCT', str(0.05)))  # 5% loss
         self.take_profit_pct = float(
@@ -210,6 +225,8 @@ class BotConfig:
         # ATR/price is a volatility proxy for entry screening, not an expected return.
         self.min_entry_atr_pct = float(os.getenv('MIN_ENTRY_ATR_PCT', str(0.012)))
         # If no classic BUY recommendation is available, still trade the strongest candidate
+
+    def _load_entry_strategy_settings(self) -> None:
         self.enable_fallback_entry = _env_bool('ENABLE_FALLBACK_ENTRY', True)
         # Minimum score for fallback entries only (can be lower than MIN_ENTRY_SCORE)
         self.fallback_min_score = int(os.getenv('FALLBACK_MIN_SCORE', str(45)))
@@ -297,6 +314,8 @@ class BotConfig:
         self.uptrend_rules_max_hold_seconds_by_coin = _env_symbol_int_map(
             'UPTREND_RULES_MAX_HOLD_SECONDS_BY_COIN')
         # Optional momentum quality filter for new BUY entries.
+
+    def _load_entry_filter_and_reentry_settings(self) -> None:
         self.entry_momentum_filter_enabled = _env_bool(
             'ENTRY_MOMENTUM_FILTER_ENABLED', True)
         self.entry_min_ret_3 = float(os.getenv('ENTRY_MIN_RET_3', str(-0.01)))
@@ -331,6 +350,8 @@ class BotConfig:
         self.reentry_cooldown_mult_high_vol = float(
             os.getenv('REENTRY_COOLDOWN_MULT_HIGH_VOL', str(1.30)))
         # Enables additional exit signals from market analysis
+
+    def _load_exit_management_settings(self) -> None:
         self.enable_signal_exits = _env_bool('ENABLE_SIGNAL_EXITS', True)
         # Close positions also on HOLD (Down-Trend) signal
         self.exit_on_downtrend = _env_bool('EXIT_ON_DOWNTREND', True)
@@ -368,6 +389,8 @@ class BotConfig:
         # OHLCV timeframe (e.g. 1h = 60m)
         self.ohlcv_timeframe = os.getenv('OHLCV_TIMEFRAME', '1h')
         # ML-Modell Integration
+
+    def _load_ml_settings(self) -> None:
         self.use_ml_model = _env_bool('USE_ML_MODEL', False)
         self.model_path = os.getenv(
             'MODEL_PATH', './model/fine_tuned_trading_model')
@@ -406,6 +429,8 @@ class BotConfig:
         self.tabular_sell_block_min_proba = float(
             os.getenv('TABULAR_SELL_BLOCK_MIN_PROBA', str(0.50)))
         # Optional: automatic recommendation/application of confidence threshold from journal data
+
+    def _load_analytics_and_guardrail_settings(self) -> None:
         self.auto_tune_tabular_confidence = _env_bool(
             'AUTO_TUNE_TABULAR_CONFIDENCE', False)
         self.auto_tune_lookback_trades = int(
@@ -454,6 +479,8 @@ class BotConfig:
             os.getenv('LOSS_STREAK_PAUSE_SECONDS', str(0)))
 
         # Optional external AI co-pilot (budget-limited, disabled by default)
+
+    def _load_ai_copilot_settings(self) -> None:
         self.ai_copilot_enabled = _env_bool('AI_COPILOT_ENABLED', False)
         self.ai_copilot_api_url = _env_str(
             'AI_COPILOT_API_URL', 'https://api.mammouth.ai/v1/chat/completions')
@@ -516,6 +543,7 @@ class BotConfig:
             os.getenv('AI_COPILOT_BENCHMARK_COST_INPUT_PER_MTOK', str(str(self.ai_copilot_cost_input_per_mtok))))
         self.ai_copilot_benchmark_cost_output_per_mtok = float(
             os.getenv('AI_COPILOT_BENCHMARK_COST_OUTPUT_PER_MTOK', str(str(self.ai_copilot_cost_output_per_mtok))))
+
 
     def analytics_db_connect_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {}
