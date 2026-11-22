@@ -51,9 +51,13 @@ auto_tune_state*.json
 .coverage
 /coverage.xml
 
-# IDE
+# IDE / analysis tooling
 .vscode/
 .idea/
+.scannerwork/
+
+# Local agent instructions (personal, not shared)
+.github/copilot-instructions.md
 
 # Local Ansible inventory, secrets, and TLS material
 /ansible/inventory/hosts.yml
