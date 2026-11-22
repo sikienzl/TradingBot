@@ -2719,7 +2719,109 @@ class CryptoTradingBot:
         """Returns True for trades opened via the guarded downtrend reversal path."""
         return str(trade_info.get('recommendation', '')) == 'HOLD (Down-Trend)'
 
-    def _analyze_coin(self, coin: str, current_price: float) -> dict | None:  # noqa: C901
+    def _build_tabular_features(
+        self,
+        ohlcv_df,
+        close,
+        current_price: float,
+        rsi: float,
+        sma_short: float,
+        sma_long: float,
+        atr_14: float,
+    ) -> tuple[pd.DataFrame, float]:
+        """Build the tabular model feature row and return it with the MACD histogram."""
+        n = len(ohlcv_df)
+        latest = ohlcv_df.iloc[-1]
+
+        # MACD + signal + histogram
+        ema12 = close.ewm(span=12, adjust=False).mean()
+        ema26 = close.ewm(span=26, adjust=False).mean()
+        macd_line = ema12 - ema26
+        macd_signal_line = macd_line.ewm(span=9, adjust=False).mean()
+        _macd = float(macd_line.iloc[-1])
+        _macd_sig = float(macd_signal_line.iloc[-1])
+        _macd_hist = _macd - _macd_sig
+        macd_hist = _macd_hist
+
+        # EMAs
+        _ema20 = float(
+            close.ewm(span=20, adjust=False).mean().iloc[-1])
+        _ema50 = float(
+            close.ewm(span=50, adjust=False).mean().iloc[-1])
+        _ema200 = float(
+            close.ewm(span=200, adjust=False).mean().iloc[-1])
+
+        # Stochastic %K/%D
+        _stoch_k, _stoch_d = 50.0, 50.0
+        if n >= 17:
+            low14 = ohlcv_df['low'].rolling(14).min()
+            high14 = ohlcv_df['high'].rolling(14).max()
+            _raw_k = 100.0 * (close - low14) / (high14 - low14 + 1e-12)
+            _stoch_k = float(_raw_k.rolling(3).mean().iloc[-1])
+            _stoch_d = float(_raw_k.rolling(
+                3).mean().rolling(3).mean().iloc[-1])
+
+        # CCI 20
+        _cci = 0.0
+        if n >= 20:
+            tp = (ohlcv_df['high'] + ohlcv_df['low'] + close) / 3.0
+            tp_sma = tp.rolling(20).mean()
+            tp_mad = tp.rolling(20).apply(
+                lambda x: np.mean(np.abs(x - x.mean())), raw=True)
+            _cci = float(
+                ((tp - tp_sma) / (0.015 * tp_mad + 1e-12)).iloc[-1])
+
+        # OBV
+        if n >= 2:
+            _direction = np.sign(close.diff().fillna(0))
+            _obv = float(
+                (_direction * ohlcv_df['volume']).cumsum().iloc[-1])
+        else:
+            _obv = 0.0
+
+        # Bollinger Bands (20, 2)
+        _bb_mid = float(close.rolling(20).mean(
+        ).iloc[-1]) if n >= 20 else float(current_price)
+        _bb_std = float(close.rolling(
+            20).std().iloc[-1]) if n >= 20 else 0.0
+        _bb_upper = _bb_mid + 2.0 * _bb_std
+        _bb_lower = _bb_mid - 2.0 * _bb_std
+
+        # Return features
+        _ret1 = float(close.pct_change(1).iloc[-1]) if n >= 2 else 0.0
+        _ret3 = float(close.pct_change(3).iloc[-1]) if n >= 4 else 0.0
+        _ret6 = float(close.pct_change(6).iloc[-1]) if n >= 7 else 0.0
+        _vol6 = float(close.pct_change().rolling(
+            6).std().iloc[-1]) if n >= 7 else 0.0
+
+        row_data = pd.DataFrame([{
+            'rsi': float(rsi) if not np.isnan(rsi) else 50.0,
+            'macd': _macd,
+            'macd_signal': _macd_sig,
+            'macd_hist': _macd_hist,
+            'sma_50': float(sma_short) if not np.isnan(sma_short) else float(current_price),
+            'sma_200': float(sma_long) if not np.isnan(sma_long) else float(current_price),
+            'ema_20': _ema20,
+            'ema_50': _ema50,
+            'ema_200': _ema200,
+            'atr_14': atr_14 if math.isfinite(atr_14) else 0.0,
+            'stoch_k': _stoch_k,
+            'stoch_d': _stoch_d,
+            'cci_20': _cci,
+            'obv': _obv,
+            'bb_upper': _bb_upper,
+            'bb_middle': _bb_mid,
+            'bb_lower': _bb_lower,
+            'volume': float(latest['volume']) if 'volume' in latest else 0.0,
+            'ret_1': _ret1,
+            'ret_3': _ret3,
+            'ret_6': _ret6,
+            'vol_6': _vol6,
+        }])
+
+        return row_data, macd_hist
+
+    def _analyze_coin(self, coin: str, current_price: float) -> dict | None:
         """Performs a detailed analysis for a single coin."""
         symbol = f"{coin}/{self.config.base_currency}"
         ohlcv_df = self._fetch_ohlcv_data(
@@ -2811,95 +2913,10 @@ class CryptoTradingBot:
         # Fast tabular model analysis (optional)
         if self.tabular_predictor is not None:
             try:
-                n = len(ohlcv_df)
-                latest = ohlcv_df.iloc[-1]
-
-                # MACD + signal + histogram
-                ema12 = close.ewm(span=12, adjust=False).mean()
-                ema26 = close.ewm(span=26, adjust=False).mean()
-                macd_line = ema12 - ema26
-                macd_signal_line = macd_line.ewm(span=9, adjust=False).mean()
-                _macd = float(macd_line.iloc[-1])
-                _macd_sig = float(macd_signal_line.iloc[-1])
-                _macd_hist = _macd - _macd_sig
-                macd_hist = _macd_hist
-
-                # EMAs
-                _ema20 = float(
-                    close.ewm(span=20, adjust=False).mean().iloc[-1])
-                _ema50 = float(
-                    close.ewm(span=50, adjust=False).mean().iloc[-1])
-                _ema200 = float(
-                    close.ewm(span=200, adjust=False).mean().iloc[-1])
-
-                # Stochastic %K/%D
-                _stoch_k, _stoch_d = 50.0, 50.0
-                if n >= 17:
-                    low14 = ohlcv_df['low'].rolling(14).min()
-                    high14 = ohlcv_df['high'].rolling(14).max()
-                    _raw_k = 100.0 * (close - low14) / (high14 - low14 + 1e-12)
-                    _stoch_k = float(_raw_k.rolling(3).mean().iloc[-1])
-                    _stoch_d = float(_raw_k.rolling(
-                        3).mean().rolling(3).mean().iloc[-1])
-
-                # CCI 20
-                _cci = 0.0
-                if n >= 20:
-                    tp = (ohlcv_df['high'] + ohlcv_df['low'] + close) / 3.0
-                    tp_sma = tp.rolling(20).mean()
-                    tp_mad = tp.rolling(20).apply(
-                        lambda x: np.mean(np.abs(x - x.mean())), raw=True)
-                    _cci = float(
-                        ((tp - tp_sma) / (0.015 * tp_mad + 1e-12)).iloc[-1])
-
-                # OBV
-                if n >= 2:
-                    _direction = np.sign(close.diff().fillna(0))
-                    _obv = float(
-                        (_direction * ohlcv_df['volume']).cumsum().iloc[-1])
-                else:
-                    _obv = 0.0
-
-                # Bollinger Bands (20, 2)
-                _bb_mid = float(close.rolling(20).mean(
-                ).iloc[-1]) if n >= 20 else float(current_price)
-                _bb_std = float(close.rolling(
-                    20).std().iloc[-1]) if n >= 20 else 0.0
-                _bb_upper = _bb_mid + 2.0 * _bb_std
-                _bb_lower = _bb_mid - 2.0 * _bb_std
-
-                # Return features
-                _ret1 = float(close.pct_change(1).iloc[-1]) if n >= 2 else 0.0
-                _ret3 = float(close.pct_change(3).iloc[-1]) if n >= 4 else 0.0
-                _ret6 = float(close.pct_change(6).iloc[-1]) if n >= 7 else 0.0
-                _vol6 = float(close.pct_change().rolling(
-                    6).std().iloc[-1]) if n >= 7 else 0.0
-
-                row_data = pd.DataFrame([{
-                    'rsi': float(rsi) if not np.isnan(rsi) else 50.0,
-                    'macd': _macd,
-                    'macd_signal': _macd_sig,
-                    'macd_hist': _macd_hist,
-                    'sma_50': float(sma_short) if not np.isnan(sma_short) else float(current_price),
-                    'sma_200': float(sma_long) if not np.isnan(sma_long) else float(current_price),
-                    'ema_20': _ema20,
-                    'ema_50': _ema50,
-                    'ema_200': _ema200,
-                    'atr_14': atr_14 if math.isfinite(atr_14) else 0.0,
-                    'stoch_k': _stoch_k,
-                    'stoch_d': _stoch_d,
-                    'cci_20': _cci,
-                    'obv': _obv,
-                    'bb_upper': _bb_upper,
-                    'bb_middle': _bb_mid,
-                    'bb_lower': _bb_lower,
-                    'volume': float(latest['volume']) if 'volume' in latest else 0.0,
-                    'ret_1': _ret1,
-                    'ret_3': _ret3,
-                    'ret_6': _ret6,
-                    'vol_6': _vol6,
-                }])
-
+                row_data, macd_hist = self._build_tabular_features(
+                    ohlcv_df, close, current_price, rsi, sma_short, sma_long,
+                    atr_14,
+                )
                 tab_result = self.tabular_predictor.predict(
                     row_data, confidence_threshold=self.config.tabular_min_confidence)
                 tab_decision = tab_result.get('decision', 'halten')
