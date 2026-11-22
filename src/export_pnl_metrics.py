@@ -216,7 +216,7 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
     }
 
 
-def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH, *, on_portfolio_value=None):  # noqa: C901
+def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH, *, on_portfolio_value=None):
     """Read latest portfolio value and cash from bot log."""
     snapshot = {
         'portfolio_value_eur': 0.0,
@@ -234,87 +234,114 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH, *, on_portfolio_value=
     try:
         with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
             tail_lines = list(deque(f, maxlen=800))
-
-        current_prices = {}
-        open_trade_amount_base = {}
-        open_trade_amount_coin = {}
-        portfolio_value_found = False
-        portfolio_cash_found = False
-
-        for line in reversed(tail_lines):
-            if not portfolio_value_found and 'Portfolio value:' in line:
-                try:
-                    value_part = line.split('Portfolio value:', 1)[1].strip()
-                    snapshot['portfolio_value_eur'] = float(
-                        value_part.split(' ')[0])
-                    portfolio_value_found = True
-                    if on_portfolio_value is not None:
-                        on_portfolio_value(line)
-                except (IndexError, ValueError) as e:
-                    print(f"Error parsing portfolio value: {e}", file=sys.stderr)
-
-            if not portfolio_cash_found and '  - Cash:' in line:
-                try:
-                    cash_part = line.split('Cash:', 1)[1].strip()
-                    snapshot['portfolio_cash_eur'] = float(
-                        cash_part.split(' ')[0])
-                    portfolio_cash_found = True
-                except (IndexError, ValueError) as e:
-                    print(f"Error parsing portfolio cash: {e}", file=sys.stderr)
-
-            if not snapshot['holdings_amount_coin'] and '  - Holdings:' in line:
-                try:
-                    holdings_part = line.split('Holdings:', 1)[1].strip()
-                    parsed = ast.literal_eval(holdings_part)
-                    if isinstance(parsed, dict):
-                        snapshot['holdings_amount_coin'] = {
-                            str(coin).upper(): float(amount)
-                            for coin, amount in parsed.items()
-                            if float(amount) > 0.0
-                        }
-                except (SyntaxError, TypeError, ValueError):
-                    pass
-
-            if '  - Open trades details:' in line:
-                for coin, amount_coin in OPEN_TRADE_AMOUNT_COIN_RE.findall(line):
-                    current_coin = coin.upper()
-                    if current_coin not in open_trade_amount_coin:
-                        try:
-                            open_trade_amount_coin[current_coin] = float(
-                                amount_coin)
-                        except ValueError:
-                            pass
-                for coin, amount_base in OPEN_TRADE_AMOUNT_BASE_RE.findall(line):
-                    current_coin = coin.upper()
-                    if current_coin not in open_trade_amount_base:
-                        try:
-                            open_trade_amount_base[current_coin] = float(
-                                amount_base)
-                        except ValueError:
-                            pass
-
-            if '→ Current ' in line:
-                match = CURRENT_PRICE_RE.search(line)
-                if match:
-                    coin, current_price = match.groups()
-                    current_coin = coin.upper()
-                    if current_coin not in current_prices:
-                        try:
-                            current_prices[current_coin] = float(current_price)
-                        except ValueError:
-                            pass
-
-            if portfolio_value_found and portfolio_cash_found:
-                if not snapshot['holdings_amount_coin']:
-                    break
-                if all(
-                    coin in current_prices or coin in open_trade_amount_base
-                    for coin in snapshot['holdings_amount_coin']
-                ):
-                    break
+        current_prices, open_trade_amount_base, open_trade_amount_coin = (
+            _scan_portfolio_tail(tail_lines, snapshot, on_portfolio_value))
     except (OSError, UnicodeError):
         return snapshot
 
+    _aggregate_portfolio_holdings(
+        snapshot, current_prices, open_trade_amount_base,
+        open_trade_amount_coin)
+
+    return snapshot
+
+def _scan_portfolio_tail(
+    tail_lines: list[str],
+    snapshot: dict,
+    on_portfolio_value,
+) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+    """Scan the log tail for value, cash, holdings, open trades and prices.
+
+    Mutates *snapshot* in place and returns (current_prices,
+    open_trade_amount_base, open_trade_amount_coin).
+    """
+    current_prices = {}
+    open_trade_amount_base = {}
+    open_trade_amount_coin = {}
+    portfolio_value_found = False
+    portfolio_cash_found = False
+
+    for line in reversed(tail_lines):
+        if not portfolio_value_found and 'Portfolio value:' in line:
+            try:
+                value_part = line.split('Portfolio value:', 1)[1].strip()
+                snapshot['portfolio_value_eur'] = float(
+                    value_part.split(' ')[0])
+                portfolio_value_found = True
+                if on_portfolio_value is not None:
+                    on_portfolio_value(line)
+            except (IndexError, ValueError) as e:
+                print(f"Error parsing portfolio value: {e}", file=sys.stderr)
+
+        if not portfolio_cash_found and '  - Cash:' in line:
+            try:
+                cash_part = line.split('Cash:', 1)[1].strip()
+                snapshot['portfolio_cash_eur'] = float(
+                    cash_part.split(' ')[0])
+                portfolio_cash_found = True
+            except (IndexError, ValueError) as e:
+                print(f"Error parsing portfolio cash: {e}", file=sys.stderr)
+
+        if not snapshot['holdings_amount_coin'] and '  - Holdings:' in line:
+            try:
+                holdings_part = line.split('Holdings:', 1)[1].strip()
+                parsed = ast.literal_eval(holdings_part)
+                if isinstance(parsed, dict):
+                    snapshot['holdings_amount_coin'] = {
+                        str(coin).upper(): float(amount)
+                        for coin, amount in parsed.items()
+                        if float(amount) > 0.0
+                    }
+            except (SyntaxError, TypeError, ValueError):
+                pass
+
+        if '  - Open trades details:' in line:
+            for coin, amount_coin in OPEN_TRADE_AMOUNT_COIN_RE.findall(line):
+                current_coin = coin.upper()
+                if current_coin not in open_trade_amount_coin:
+                    try:
+                        open_trade_amount_coin[current_coin] = float(
+                            amount_coin)
+                    except ValueError:
+                        pass
+            for coin, amount_base in OPEN_TRADE_AMOUNT_BASE_RE.findall(line):
+                current_coin = coin.upper()
+                if current_coin not in open_trade_amount_base:
+                    try:
+                        open_trade_amount_base[current_coin] = float(
+                            amount_base)
+                    except ValueError:
+                        pass
+
+        if '→ Current ' in line:
+            match = CURRENT_PRICE_RE.search(line)
+            if match:
+                coin, current_price = match.groups()
+                current_coin = coin.upper()
+                if current_coin not in current_prices:
+                    try:
+                        current_prices[current_coin] = float(current_price)
+                    except ValueError:
+                        pass
+
+        if portfolio_value_found and portfolio_cash_found:
+            if not snapshot['holdings_amount_coin']:
+                break
+            if all(
+                coin in current_prices or coin in open_trade_amount_base
+                for coin in snapshot['holdings_amount_coin']
+            ):
+                break
+    return current_prices, open_trade_amount_base, open_trade_amount_coin
+
+
+def _aggregate_portfolio_holdings(
+    snapshot: dict,
+    current_prices: dict[str, float],
+    open_trade_amount_base: dict[str, float],
+    open_trade_amount_coin: dict[str, float],
+) -> None:
+    """Fill holdings value, cost basis and unrealized PnL into *snapshot*."""
     for coin, amount_coin in snapshot['holdings_amount_coin'].items():
         if coin in current_prices:
             snapshot['holdings_value_eur'][coin] = amount_coin * \
@@ -332,8 +359,6 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH, *, on_portfolio_value=
         cost_basis = snapshot['holdings_cost_basis_eur'].get(coin, 0.0)
         snapshot['holdings_unrealized_pnl_eur'][coin] = current_value - cost_basis
     snapshot['open_positions_count'] = len(snapshot['holdings_amount_coin'])
-
-    return snapshot
 
 
 def read_portfolio_start_value(log_path=BOT_LOG_PATH):

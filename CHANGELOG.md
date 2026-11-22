@@ -73,6 +73,10 @@ prepared; this file intentionally remains under **Unreleased** until then.
   slippage/fee fill calculation), `_dry_run_buy` and `_dry_run_sell`; the
   journal-row construction and paper-trade commit logic stay inside their
   branch so behaviour is unchanged.
+- Split `export_pnl_metrics.read_latest_portfolio_snapshot` (complexity 33 → 3,
+  `# noqa: C901` removed) into the log-tail scanner `_scan_portfolio_tail`
+  (returns the price/open-trade maps, mutates the snapshot) and the holdings
+  aggregator `_aggregate_portfolio_holdings`.
 - Remove the stale `train_trading_model_backup.py` and ignore `.scannerwork/`
   and `.github/copilot-instructions.md`.
 - Centralize Ruff configuration in `pyproject.toml` (excludes plus a
