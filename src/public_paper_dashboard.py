@@ -216,7 +216,7 @@ def _market_unavailable(reason: str) -> dict[str, Any]:
     }
 
 
-def load_market_observations(selected_symbol: str | None = None) -> dict[str, Any]:  # noqa: C901
+def load_market_observations(selected_symbol: str | None = None) -> dict[str, Any]:
     market_dir = Path(os.getenv("DASHBOARD_MARKET_DATA_DIR", "/market-data"))
     metadata_path = market_dir / "metadata.json"
     ticker_path = market_dir / "tickers.csv"
@@ -261,55 +261,12 @@ def load_market_observations(selected_symbol: str | None = None) -> dict[str, An
     now = datetime.now(UTC)
     window_start = now - MARKET_DATA_WINDOW
 
-    def valid_rows(
-        rows: Iterator[dict[str, str]],
-        timestamp_field: str,
-    ) -> tuple[dict[str, list[tuple[datetime, dict[str, str]]]], int]:
-        grouped: dict[str, list[tuple[datetime, dict[str, str]]]] = defaultdict(list)
-        older_latest: dict[str, tuple[datetime, dict[str, str]]] = {}
-        invalid = 0
-        for row in rows:
-            symbol = row.get("symbol", "")
-            timestamp = _parse_utc(row.get(timestamp_field))
-            if symbol not in symbols or timestamp is None:
-                invalid += 1
-                continue
-            numeric_fields = (
-                ("bid", "ask", "last")
-                if timestamp_field == "observed_at_utc"
-                else ("open", "high", "low", "close", "volume")
-            )
-            values = [_number(row.get(field)) for field in numeric_fields]
-            if any(value is None for value in values):
-                invalid += 1
-                continue
-            if timestamp_field == "observed_at_utc":
-                bid, ask = values[:2]
-                if bid <= 0 or ask < bid or values[2] <= 0:
-                    invalid += 1
-                    continue
-            else:
-                open_price, high, low, close, volume = values
-                if min(open_price, high, low, close) <= 0 or volume < 0 or high < low:
-                    invalid += 1
-                    continue
-            if window_start <= timestamp <= now:
-                grouped[symbol].append((timestamp, row))
-            elif timestamp < window_start and (
-                symbol not in older_latest or timestamp > older_latest[symbol][0]
-            ):
-                older_latest[symbol] = (timestamp, row)
-        for symbol, entry in older_latest.items():
-            if not grouped[symbol]:
-                grouped[symbol].append(entry)
-        for entries in grouped.values():
-            entries.sort(key=lambda item: item[0])
-        return grouped, invalid
-
     try:
-        all_tickers_by_symbol, invalid_tickers = valid_rows(tickers, "observed_at_utc")
+        all_tickers_by_symbol, invalid_tickers = _valid_rows(
+            tickers, "observed_at_utc", symbols, window_start, now)
         del tickers
-        all_candles_by_symbol, invalid_candles = valid_rows(candles, "timestamp_utc")
+        all_candles_by_symbol, invalid_candles = _valid_rows(
+            candles, "timestamp_utc", symbols, window_start, now)
         del candles
     except csv.Error as exc:
         logger.error("Unable to parse public market observations: %s", exc)
@@ -324,92 +281,12 @@ def load_market_observations(selected_symbol: str | None = None) -> dict[str, An
         symbol: [entry for entry in entries if entry[0] >= window_start]
         for symbol, entries in all_candles_by_symbol.items()
     }
-    summaries = []
-    for symbol in symbols:
-        ticker_rows = ticker_by_symbol.get(symbol, [])
-        candle_rows = candle_by_symbol.get(symbol, [])
-        all_ticker_rows = all_tickers_by_symbol.get(symbol, [])
-        all_candle_rows = all_candles_by_symbol.get(symbol, [])
-        first_ticker = ticker_rows[0] if ticker_rows else None
-        last_ticker = all_ticker_rows[-1] if all_ticker_rows else None
-        latest_candle = all_candle_rows[-1] if all_candle_rows else None
-        bid = _number(last_ticker[1].get("bid")) if last_ticker else None
-        ask = _number(last_ticker[1].get("ask")) if last_ticker else None
-        last = _number(last_ticker[1].get("last")) if last_ticker else None
-        spread_bps = (
-            round((ask - bid) / ((ask + bid) / 2) * 10_000, 2)
-            if bid is not None and ask is not None and ask >= bid and ask + bid > 0
-            else None
-        )
-        first_price = _number(first_ticker[1].get("last")) if first_ticker else None
-        change_pct = (
-            round((last / first_price - 1) * 100, 4)
-            if last is not None and first_price is not None and first_price > 0
-            else None
-        )
-        spreads = []
-        for _, row in ticker_rows:
-            row_bid = _number(row.get("bid"))
-            row_ask = _number(row.get("ask"))
-            if (
-                row_bid is not None
-                and row_ask is not None
-                and row_ask >= row_bid
-                and row_ask + row_bid > 0
-            ):
-                spreads.append((row_ask - row_bid) / ((row_ask + row_bid) / 2) * 10_000)
-        candle_times = [timestamp for timestamp, _ in candle_rows]
-        gap_count = 0
-        max_gap_minutes = 0
-        for earlier, later in pairwise(candle_times):
-            difference_minutes = int((later - earlier).total_seconds() // 60)
-            if difference_minutes > 1:
-                gap_count += difference_minutes - 1
-                max_gap_minutes = max(max_gap_minutes, difference_minutes - 1)
-        ticker_span_seconds = (
-            (ticker_rows[-1][0] - ticker_rows[0][0]).total_seconds()
-            if len(ticker_rows) > 1
-            else 0
-        )
-        expected_candles = (
-            int((candle_times[-1] - candle_times[0]).total_seconds() // 60) + 1
-            if len(candle_times) > 1
-            else len(candle_times)
-        )
-        summaries.append(
-            {
-                "symbol": symbol,
-                "latest_observed_at": last_ticker[0].isoformat()
-                if last_ticker
-                else None,
-                "ticker_samples_24h": len(ticker_rows),
-                "ticker_samples_per_hour": round(len(ticker_rows) / 24, 1),
-                "ticker_span_hours": round(ticker_span_seconds / 3600, 2),
-                "latest_bid": bid,
-                "latest_ask": ask,
-                "latest_last": last,
-                "latest_spread_bps": spread_bps,
-                "average_spread_bps": round(sum(spreads) / len(spreads), 2)
-                if spreads
-                else None,
-                "price_change_pct_observed": change_pct,
-                "first_ticker_at": first_ticker[0].isoformat()
-                if first_ticker
-                else None,
-                "candle_count_24h": len(candle_rows),
-                "expected_candles_in_observed_span": expected_candles,
-                "candle_coverage_pct": (
-                    round(len(candle_rows) / expected_candles * 100, 2)
-                    if expected_candles
-                    else None
-                ),
-                "candle_gap_minutes": gap_count,
-                "largest_candle_gap_minutes": max_gap_minutes,
-                "latest_candle_at": latest_candle[0].isoformat()
-                if latest_candle
-                else None,
-            }
-        )
+    summaries = [
+        _build_market_summary(
+            symbol, ticker_by_symbol, candle_by_symbol,
+            all_tickers_by_symbol, all_candles_by_symbol)
+        for symbol in symbols
+    ]
 
     selected = selected_symbol or symbols[0]
     ticker_series = [
@@ -428,12 +305,6 @@ def load_market_observations(selected_symbol: str | None = None) -> dict[str, An
         }
         for timestamp, row in candle_by_symbol.get(selected, [])
     ]
-
-    def downsample(points: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
-        if len(points) <= limit:
-            return points
-        stride = (len(points) - 1) / (limit - 1)
-        return [points[round(index * stride)] for index in range(limit)]
 
     ticker_stat = ticker_path.stat()
     candle_stat = candle_path.stat()
@@ -455,8 +326,8 @@ def load_market_observations(selected_symbol: str | None = None) -> dict[str, An
         "symbols": symbols,
         "selected_symbol": selected,
         "markets": summaries,
-        "ticker_series": downsample(ticker_series, 300),
-        "candle_series": downsample(candle_series, 360),
+        "ticker_series": _downsample(ticker_series, 300),
+        "candle_series": _downsample(candle_series, 360),
         "latest_data_at": newest.isoformat() if newest else None,
         "latest_data_age_seconds": round((now - newest).total_seconds(), 1)
         if newest
@@ -485,6 +356,158 @@ def load_market_observations(selected_symbol: str | None = None) -> dict[str, An
             "The 24-hour price change uses available first and last ticker observations.",
         ],
     }
+
+
+def _valid_rows(
+    rows: Iterator[dict[str, str]],
+    timestamp_field: str,
+    symbols: list[str],
+    window_start: datetime,
+    now: datetime,
+) -> tuple[dict[str, list[tuple[datetime, dict[str, str]]]], int]:
+    """Group valid ticker/candle rows by symbol within the data window."""
+    grouped: dict[str, list[tuple[datetime, dict[str, str]]]] = defaultdict(list)
+    older_latest: dict[str, tuple[datetime, dict[str, str]]] = {}
+    invalid = 0
+    for row in rows:
+        symbol = row.get("symbol", "")
+        timestamp = _parse_utc(row.get(timestamp_field))
+        if symbol not in symbols or timestamp is None:
+            invalid += 1
+            continue
+        numeric_fields = (
+            ("bid", "ask", "last")
+            if timestamp_field == "observed_at_utc"
+            else ("open", "high", "low", "close", "volume")
+        )
+        values = [_number(row.get(field)) for field in numeric_fields]
+        if any(value is None for value in values):
+            invalid += 1
+            continue
+        if timestamp_field == "observed_at_utc":
+            bid, ask = values[:2]
+            if bid <= 0 or ask < bid or values[2] <= 0:
+                invalid += 1
+                continue
+        else:
+            open_price, high, low, close, volume = values
+            if min(open_price, high, low, close) <= 0 or volume < 0 or high < low:
+                invalid += 1
+                continue
+        if window_start <= timestamp <= now:
+            grouped[symbol].append((timestamp, row))
+        elif timestamp < window_start and (
+            symbol not in older_latest or timestamp > older_latest[symbol][0]
+        ):
+            older_latest[symbol] = (timestamp, row)
+    for symbol, entry in older_latest.items():
+        if not grouped[symbol]:
+            grouped[symbol].append(entry)
+    for entries in grouped.values():
+        entries.sort(key=lambda item: item[0])
+    return grouped, invalid
+
+
+def _build_market_summary(
+    symbol: str,
+    ticker_by_symbol: dict[str, list[tuple[datetime, dict[str, str]]]],
+    candle_by_symbol: dict[str, list[tuple[datetime, dict[str, str]]]],
+    all_tickers_by_symbol: dict[str, list[tuple[datetime, dict[str, str]]]],
+    all_candles_by_symbol: dict[str, list[tuple[datetime, dict[str, str]]]],
+) -> dict[str, Any]:
+    """Compute the per-symbol market quality summary row."""
+    ticker_rows = ticker_by_symbol.get(symbol, [])
+    candle_rows = candle_by_symbol.get(symbol, [])
+    all_ticker_rows = all_tickers_by_symbol.get(symbol, [])
+    all_candle_rows = all_candles_by_symbol.get(symbol, [])
+    first_ticker = ticker_rows[0] if ticker_rows else None
+    last_ticker = all_ticker_rows[-1] if all_ticker_rows else None
+    latest_candle = all_candle_rows[-1] if all_candle_rows else None
+    bid = _number(last_ticker[1].get("bid")) if last_ticker else None
+    ask = _number(last_ticker[1].get("ask")) if last_ticker else None
+    last = _number(last_ticker[1].get("last")) if last_ticker else None
+    spread_bps = (
+        round((ask - bid) / ((ask + bid) / 2) * 10_000, 2)
+        if bid is not None and ask is not None and ask >= bid and ask + bid > 0
+        else None
+    )
+    first_price = _number(first_ticker[1].get("last")) if first_ticker else None
+    change_pct = (
+        round((last / first_price - 1) * 100, 4)
+        if last is not None and first_price is not None and first_price > 0
+        else None
+    )
+    spreads = []
+    for _, row in ticker_rows:
+        row_bid = _number(row.get("bid"))
+        row_ask = _number(row.get("ask"))
+        if (
+            row_bid is not None
+            and row_ask is not None
+            and row_ask >= row_bid
+            and row_ask + row_bid > 0
+        ):
+            spreads.append((row_ask - row_bid) / ((row_ask + row_bid) / 2) * 10_000)
+    candle_times = [timestamp for timestamp, _ in candle_rows]
+    gap_count = 0
+    max_gap_minutes = 0
+    for earlier, later in pairwise(candle_times):
+        difference_minutes = int((later - earlier).total_seconds() // 60)
+        if difference_minutes > 1:
+            gap_count += difference_minutes - 1
+            max_gap_minutes = max(max_gap_minutes, difference_minutes - 1)
+    ticker_span_seconds = (
+        (ticker_rows[-1][0] - ticker_rows[0][0]).total_seconds()
+        if len(ticker_rows) > 1
+        else 0
+    )
+    expected_candles = (
+        int((candle_times[-1] - candle_times[0]).total_seconds() // 60) + 1
+        if len(candle_times) > 1
+        else len(candle_times)
+    )
+    return (
+        {
+            "symbol": symbol,
+            "latest_observed_at": last_ticker[0].isoformat()
+            if last_ticker
+            else None,
+            "ticker_samples_24h": len(ticker_rows),
+            "ticker_samples_per_hour": round(len(ticker_rows) / 24, 1),
+            "ticker_span_hours": round(ticker_span_seconds / 3600, 2),
+            "latest_bid": bid,
+            "latest_ask": ask,
+            "latest_last": last,
+            "latest_spread_bps": spread_bps,
+            "average_spread_bps": round(sum(spreads) / len(spreads), 2)
+            if spreads
+            else None,
+            "price_change_pct_observed": change_pct,
+            "first_ticker_at": first_ticker[0].isoformat()
+            if first_ticker
+            else None,
+            "candle_count_24h": len(candle_rows),
+            "expected_candles_in_observed_span": expected_candles,
+            "candle_coverage_pct": (
+                round(len(candle_rows) / expected_candles * 100, 2)
+                if expected_candles
+                else None
+            ),
+            "candle_gap_minutes": gap_count,
+            "largest_candle_gap_minutes": max_gap_minutes,
+            "latest_candle_at": latest_candle[0].isoformat()
+            if latest_candle
+            else None,
+        }
+    )
+
+
+def _downsample(points: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Evenly thin a point series down to at most *limit* points."""
+    if len(points) <= limit:
+        return points
+    stride = (len(points) - 1) / (limit - 1)
+    return [points[round(index * stride)] for index in range(limit)]
 
 
 def _read_bot_log(

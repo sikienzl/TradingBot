@@ -77,6 +77,12 @@ prepared; this file intentionally remains under **Unreleased** until then.
   `# noqa: C901` removed) into the log-tail scanner `_scan_portfolio_tail`
   (returns the price/open-trade maps, mutates the snapshot) and the holdings
   aggregator `_aggregate_portfolio_holdings`.
+- Split `public_paper_dashboard.load_market_observations` (complexity 29 → 10,
+  `# noqa: C901` removed) by promoting its nested closures to module helpers:
+  `_valid_rows` (ticker/candle validation and window grouping),
+  `_build_market_summary` (per-symbol quality summary, replacing the
+  per-symbol loop with a list comprehension) and `_downsample` (point-series
+  thinning).
 - Remove the stale `train_trading_model_backup.py` and ignore `.scannerwork/`
   and `.github/copilot-instructions.md`.
 - Centralize Ruff configuration in `pyproject.toml` (excludes plus a
