@@ -255,9 +255,9 @@ def _scan_portfolio_tail(
     Mutates *snapshot* in place and returns (current_prices,
     open_trade_amount_base, open_trade_amount_coin).
     """
-    current_prices = {}
-    open_trade_amount_base = {}
-    open_trade_amount_coin = {}
+    current_prices: dict[str, float] = {}
+    open_trade_amount_base: dict[str, float] = {}
+    open_trade_amount_coin: dict[str, float] = {}
     portfolio_value_found = False
     portfolio_cash_found = False
 

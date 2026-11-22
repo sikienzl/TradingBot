@@ -14,7 +14,7 @@ import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import ccxt
 
@@ -118,7 +118,7 @@ class PublicMarketRecorder:
         self.ticker_path = data_dir / "tickers.csv"
         self.candle_path = data_dir / "candles_1m.csv"
         self.metadata_path = data_dir / "metadata.json"
-        self.lock_file = None
+        self.lock_file: Any = None
         self.last_candle_ms: dict[str, int] = {}
 
         data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -268,7 +268,8 @@ class PublicMarketRecorder:
                     continue
                 if last_seen is not None and timestamp_ms <= last_seen:
                     continue
-                open_price, high, low, close, volume = values
+                open_price, high, low, close, volume = cast(
+                    tuple[float, float, float, float, float], values)
                 if high < max(open_price, close, low) or low > min(open_price, close, high):
                     LOGGER.warning("Ignoring inconsistent candle for %s", symbol)
                     continue

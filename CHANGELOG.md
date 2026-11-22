@@ -113,6 +113,17 @@ prepared; this file intentionally remains under **Unreleased** until then.
   `_open_backtest_positions`, `_apply_intrabar_exits` and
   `_close_remaining_positions`; cash flows through each phase explicitly so
   the replay order and next-bar execution semantics are unchanged.
+- Burn down the informational mypy baseline (81 → 11 findings) by annotating
+  loosely-typed attributes and locals on the money path: `self.performance`
+  (`dict[str, Any]`), optional handles (`_conn`, `_psycopg`, `_vdevice`,
+  `lock_file`, `tabular_predictor`), scan accumulators, and the reused tuning
+  variables in `_clamp_ai_changes`/`_apply_ai_changes`. All `operator`, `index`
+  and
+  `return`-value classes are eliminated; the remaining 11 are `float(...)`
+  calls already guarded by `try/except (TypeError, ValueError)`. Also fixes a
+  latent `severity_rank.get` → `__getitem__` key lookup and adds the missing
+  `return False` in `_maybe_partial_take_profit` (call site uses truthiness,
+  so behaviour is unchanged).
 - Remove the stale `train_trading_model_backup.py` and ignore `.scannerwork/`
   and `.github/copilot-instructions.md`.
 - Centralize Ruff configuration in `pyproject.toml` (excludes plus a

@@ -13,7 +13,7 @@ class CatBoostTradingPredictor:
         self.model_dir = model_dir
         self.research_signal_path = research_signal_path
         self.model = CatBoostClassifier()
-        self.features = []
+        self.features: list[str] = []
         self.label_map = {"verkaufen": 0, "halten": 1, "kaufen": 2}
         self.inv_label_map = {v: k for k, v in self.label_map.items()}
         self.recommended_confidence_threshold = 0.45

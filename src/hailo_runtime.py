@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
+from typing import Any
 
 import numpy as np
 
@@ -116,7 +117,7 @@ class HailoRuntime:
         self.metadata_path = metadata_path
         self.device_id = device_id.strip()
         self.metadata: HailoModelMetadata | None = None
-        self._vdevice = None
+        self._vdevice: Any = None
         self._activation = None
         self._infer_pipeline = None
         self._input_name = ""

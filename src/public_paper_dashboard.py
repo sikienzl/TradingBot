@@ -19,7 +19,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from itertools import pairwise
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -380,10 +380,11 @@ def _valid_rows(
             if timestamp_field == "observed_at_utc"
             else ("open", "high", "low", "close", "volume")
         )
-        values = [_number(row.get(field)) for field in numeric_fields]
-        if any(value is None for value in values):
+        parsed_values = [_number(row.get(field)) for field in numeric_fields]
+        if any(value is None for value in parsed_values):
             invalid += 1
             continue
+        values = cast("list[float]", parsed_values)
         if timestamp_field == "observed_at_utc":
             bid, ask = values[:2]
             if bid <= 0 or ask < bid or values[2] <= 0:
@@ -512,7 +513,7 @@ def _downsample(points: list[dict[str, Any]], limit: int) -> list[dict[str, Any]
 
 def _read_bot_log(
     path: Path, start: datetime
-) -> tuple[dict[str, int | None], dict[str, str | int] | None]:
+) -> tuple[dict[str, int | None], dict[str, Any] | None]:
     counts: Counter[str] = Counter()
     last_cycle: tuple[datetime, int] | None = None
     try:
@@ -563,7 +564,7 @@ def _read_bot_log(
             "tabular_sell_veto": None,
             "hailo_failures": None,
         }, None
-    log_counts = {
+    log_counts: dict[str, int | None] = {
         "atr_guard": counts["atr_guard"],
         "tabular_sell_veto": counts["tabular_sell_veto"],
         "hailo_failures": counts["hailo_failures"],
@@ -787,7 +788,7 @@ def _snapshot_signature() -> tuple[tuple[int, int] | None, ...]:
     data_dir = Path(os.getenv("DASHBOARD_DATA_DIR", "/data"))
     report_file = Path(os.getenv("DASHBOARD_REPORT_FILE", "/reports/latest.json"))
     log_file = Path(os.getenv("DASHBOARD_LOG_FILE", str(data_dir / "trading_bot.log")))
-    signature = []
+    signature: list[tuple[int, int] | None] = []
     for path in (
         data_dir / ".portfolio_state.json",
         data_dir / "trade_journal.csv",

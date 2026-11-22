@@ -8,6 +8,7 @@ import json
 import time
 import urllib.parse
 import urllib.request
+from typing import Any
 
 
 def main():
@@ -26,7 +27,7 @@ def request(method: str = "GET", path: str = "", query: dict | None = None, body
    if query is not None and len(query) > 0:
       query_str = urllib.parse.urlencode(query)
       url += "?" + query_str
-   nonce = ""
+   nonce: Any = ""
    if len(public_key) > 0:
       if body is None:
          body = {}

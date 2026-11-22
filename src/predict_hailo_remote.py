@@ -1,5 +1,6 @@
 import json
 import math
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit
 from urllib.request import Request, urlopen
@@ -54,7 +55,7 @@ class HailoRemotePredictor:
             value = float(row[name])
             if math.isfinite(value):
                 features[name] = value
-        payload = {"features": features}
+        payload: dict[str, Any] = {"features": features}
         if confidence_threshold is not None:
             payload["confidence_threshold"] = float(confidence_threshold)
         request = Request(

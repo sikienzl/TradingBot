@@ -29,8 +29,8 @@ class PostgresAnalyticsWriter:
     def __init__(self, config: BotConfig):
         self.config = config
         self.enabled = config.analytics_db_enabled
-        self._psycopg = None
-        self._conn = None
+        self._psycopg: Any = None
+        self._conn: Any = None
         self._disabled_reason_logged = False
         self._schema = self._sanitize_identifier(
             config.analytics_db_schema, 'public')

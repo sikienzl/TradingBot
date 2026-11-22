@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections import Counter, defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import ccxt
@@ -116,7 +116,8 @@ def configure_logging(log_file: str = 'trading_bot.log', level: int = logging.IN
     root_logger.setLevel(level)
     for handler in handlers:
         root_logger.addHandler(handler)
-    root_logger._trading_bot_logging_configured = True
+    # Flag is informational only; read back via getattr(..., False) above.
+    root_logger._trading_bot_logging_configured = True  # type: ignore[attr-defined]
 
 
 def _mask_secret(value: str) -> str:
@@ -214,7 +215,7 @@ class CryptoTradingBot:
         self.portfolio.strict_persistence = config.simulation_initial_balance_from_kraken
         self.analytics_writer = PostgresAnalyticsWriter(config)
         self.iteration = 0
-        self.performance = {
+        self.performance: dict[str, Any] = {
             'buys': 0,
             'sells': 0,
             'wins': 0,
@@ -224,7 +225,7 @@ class CryptoTradingBot:
             'closed_trades': 0,
             'by_source': defaultdict(lambda: {'buys': 0, 'sells': 0, 'pnl': 0.0}),
         }
-        self.daily_anchor_date = None
+        self.daily_anchor_date: date | None = None
         self.daily_anchor_value: float = 0.0
         self.buy_timestamps_utc: list[datetime] = []
         self.last_sell_timestamps_utc: dict[str, datetime] = {}
@@ -281,7 +282,7 @@ class CryptoTradingBot:
                 logger.warning(
                     f"ML model could not be loaded: {e}. Using rule-based analysis only.")
 
-        self.tabular_predictor = None
+        self.tabular_predictor: Any = None
         if self.config.use_tabular_model:
             if self.config.tabular_model_backend == 'hailo':
                 from src.predict_hailo_remote import HailoRemotePredictor
@@ -1315,19 +1316,21 @@ class CryptoTradingBot:
 
         if 'reentry_cooldown_seconds' in raw_changes:
             try:
-                v = round(float(raw_changes['reentry_cooldown_seconds']))
-                v = min(max(v, self.config.ai_copilot_reentry_cooldown_min),
-                        self.config.ai_copilot_reentry_cooldown_max)
-                out['reentry_cooldown_seconds'] = v
+                cooldown = round(float(raw_changes['reentry_cooldown_seconds']))
+                cooldown = min(max(cooldown,
+                                   self.config.ai_copilot_reentry_cooldown_min),
+                               self.config.ai_copilot_reentry_cooldown_max)
+                out['reentry_cooldown_seconds'] = cooldown
             except (TypeError, ValueError, OverflowError):
                 pass
 
         if 'tabular_buy_min_confidence' in raw_changes:
             try:
-                v = float(raw_changes['tabular_buy_min_confidence'])
-                v = min(max(v, self.config.ai_copilot_tabular_buy_conf_min),
-                        self.config.ai_copilot_tabular_buy_conf_max)
-                out['tabular_buy_min_confidence'] = round(v, 4)
+                conf = float(raw_changes['tabular_buy_min_confidence'])
+                conf = min(max(conf,
+                               self.config.ai_copilot_tabular_buy_conf_min),
+                           self.config.ai_copilot_tabular_buy_conf_max)
+                out['tabular_buy_min_confidence'] = round(conf, 4)
             except (TypeError, ValueError, OverflowError):
                 pass
 
@@ -1337,25 +1340,25 @@ class CryptoTradingBot:
         applied: dict[str, tuple[Any, Any]] = {}
 
         if 'min_entry_score' in changes:
-            old = self.config.min_entry_score
-            new = int(changes['min_entry_score'])
-            if old != new:
-                self.config.min_entry_score = new
-                applied['min_entry_score'] = (old, new)
+            old_score = self.config.min_entry_score
+            new_score = int(changes['min_entry_score'])
+            if old_score != new_score:
+                self.config.min_entry_score = new_score
+                applied['min_entry_score'] = (old_score, new_score)
 
         if 'reentry_cooldown_seconds' in changes:
-            old = self.config.reentry_cooldown_seconds
-            new = int(changes['reentry_cooldown_seconds'])
-            if old != new:
-                self.config.reentry_cooldown_seconds = new
-                applied['reentry_cooldown_seconds'] = (old, new)
+            old_cooldown = self.config.reentry_cooldown_seconds
+            new_cooldown = int(changes['reentry_cooldown_seconds'])
+            if old_cooldown != new_cooldown:
+                self.config.reentry_cooldown_seconds = new_cooldown
+                applied['reentry_cooldown_seconds'] = (old_cooldown, new_cooldown)
 
         if 'tabular_buy_min_confidence' in changes:
-            old = self.config.tabular_buy_min_confidence
-            new = float(changes['tabular_buy_min_confidence'])
-            if abs(old - new) > 1e-9:
-                self.config.tabular_buy_min_confidence = new
-                applied['tabular_buy_min_confidence'] = (old, new)
+            old_conf = self.config.tabular_buy_min_confidence
+            new_conf = float(changes['tabular_buy_min_confidence'])
+            if abs(old_conf - new_conf) > 1e-9:
+                self.config.tabular_buy_min_confidence = new_conf
+                applied['tabular_buy_min_confidence'] = (old_conf, new_conf)
 
         return applied
 
@@ -2392,7 +2395,7 @@ class CryptoTradingBot:
         elif bearish_share >= 0.40 or bearish > bullish:
             signal_mode = 'cautious'
 
-        return max((regime_mode, signal_mode), key=severity_rank.get)
+        return max((regime_mode, signal_mode), key=severity_rank.__getitem__)
 
     @staticmethod
     def _filter_reason_code(reason: str) -> str:
@@ -3551,8 +3554,8 @@ class CryptoTradingBot:
         pnl_base: float, entry_cost_mode: str,
     ) -> tuple[str | float, str | float]:
         """Gross/net PnL pair for the journal; empty strings when unavailable."""
-        gross_pnl_base = ''
-        net_pnl_base = ''
+        gross_pnl_base: str | float = ''
+        net_pnl_base: str | float = ''
         if entry_cost_mode == 'net_costs':
             try:
                 entry_reference = float(entry_trade.get('entry_reference_price'))
@@ -3577,7 +3580,8 @@ class CryptoTradingBot:
             self.portfolio.remove_trade(coin)
             return
         if costs_enabled or entry_cost_mode == 'net_costs':
-            remaining_basis = entry_basis * remaining_ratio
+            # _resolve_dry_run_sell_entry guarantees a float basis in this branch.
+            remaining_basis = (entry_basis or 0.0) * remaining_ratio
         else:
             remaining_basis = float(entry_trade.get('amount_base', 0.0)) * remaining_ratio
         self.portfolio.open_trades[coin]['amount_coin'] = remaining_open_amount
@@ -3768,6 +3772,7 @@ class CryptoTradingBot:
                     coin,
                 )
             return False
+        return False
 
     def _partial_tp_remainder_exit_reason(
         self,
