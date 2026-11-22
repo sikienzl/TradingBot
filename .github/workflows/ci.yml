@@ -97,6 +97,56 @@ jobs:
             exit 1
           fi
 
+  typecheck:
+    name: Type check (mypy, informational)
+    runs-on: ubuntu-latest
+    # Informational only: this job never gates the build. It surfaces typing
+    # regressions in the PR/commit summary without failing CI.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install mypy
+        run: |
+          python -m pip install --upgrade pip
+          pip install "mypy>=1.13"
+
+      - name: Run mypy
+        id: mypy
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          set +e
+          mypy | tee mypy-report.txt
+          echo "mypy_exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Mypy summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Mypy Type Check (informational)"
+            echo
+            if [[ "${{ steps.mypy.outputs.mypy_exit_code }}" == "0" ]]; then
+              echo "- Status: passed"
+            else
+              echo "- Status: findings reported (non-blocking)"
+              echo
+              echo "Sample findings:"
+              echo '```text'
+              head -n 80 mypy-report.txt || true
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
   tests:
     name: Unit tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
