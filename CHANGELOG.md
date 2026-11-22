@@ -26,6 +26,9 @@ prepared; this file intentionally remains under **Unreleased** until then.
   only.
 - Add an offline historical OHLCV replay using shared rule recommendations,
   next-candle execution, transaction costs, and a chronological holdout.
+- Add an informational mypy type-check job to CI (non-blocking) plus a
+  `[tool.mypy]` section and `mypy`/`ruff` in the `dev` extra; the dual
+  `if __package__:` import pattern is exempted via `no-redef`.
 
 ### Changed
 
@@ -88,6 +91,11 @@ prepared; this file intentionally remains under **Unreleased** until then.
   candidate ranking/slot-filling `_select_entry_candidates`, the signal-exit
   pass `_execute_signal_exits` and the position-opening pass
   `_open_new_positions`; the main loop now just orchestrates these phases.
+- De-duplicate the fallback and force-fill candidate filters in
+  `_select_entry_candidates` into a single `_candidates_within_filters`
+  closure (one shared predicate instead of two identical comprehensions) and
+  extract the ATR/cash-reserve sizing from `_open_new_positions` into
+  `_compute_entry_position_size`.
 - Remove the stale `train_trading_model_backup.py` and ignore `.scannerwork/`
   and `.github/copilot-instructions.md`.
 - Centralize Ruff configuration in `pyproject.toml` (excludes plus a

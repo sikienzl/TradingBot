@@ -4173,23 +4173,28 @@ class CryptoTradingBot:
         _excluded_signals_fallback = ['SELL', 'WEAK SELL']
         if self.config.exit_on_downtrend:
             _excluded_signals_fallback.append('HOLD (Down-Trend)')
-        fallback_base_candidates = [
-            coin for coin, data in market_analysis.items()
-            if coin not in occupied_positions
-            and coin not in top_buy_recommendations
-            if data.get('score', 0) >= self.config.fallback_min_score
-            and self._entry_guards_allow(coin, data, entry_guard_results)
-            and str(data.get('signal_source', 'rules')).strip().lower() not in degraded_entry_sources
-            and self._allows_entry_signal(
-                str(data.get('recommendation', '')),
-                downtrend_filter_results.get(
-                    coin, (False, 'not_evaluated'))[0],
-                set(_excluded_signals_fallback),
-            )
-            and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-            and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-            and self._entry_pair_allowed(coin, data, dynamic_excluded_entry_pairs)
-        ]
+        def _candidates_within_filters(min_score: float) -> list[str]:
+            """Coins passing the shared entry filters for a given minimum score."""
+            return [
+                coin for coin, data in market_analysis.items()
+                if coin not in occupied_positions
+                and coin not in top_buy_recommendations
+                if data.get('score', 0) >= min_score
+                and self._entry_guards_allow(coin, data, entry_guard_results)
+                and str(data.get('signal_source', 'rules')).strip().lower() not in degraded_entry_sources
+                and self._allows_entry_signal(
+                    str(data.get('recommendation', '')),
+                    downtrend_filter_results.get(
+                        coin, (False, 'not_evaluated'))[0],
+                    set(_excluded_signals_fallback),
+                )
+                and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+                and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+                and self._entry_pair_allowed(coin, data, dynamic_excluded_entry_pairs)
+            ]
+
+        fallback_base_candidates = _candidates_within_filters(
+            self.config.fallback_min_score)
         fallback_filter_results = {
             coin: self._passes_fallback_entry_filter(
                 coin, market_analysis.get(coin, {}))
@@ -4240,23 +4245,8 @@ class CryptoTradingBot:
             )
         )
         if force_fill_allowed:
-            force_fill_candidates = [
-                coin for coin, data in market_analysis.items()
-                if coin not in occupied_positions
-                and coin not in top_buy_recommendations
-                and data.get('score', 0) >= self.config.force_fill_min_score
-                and self._entry_guards_allow(coin, data, entry_guard_results)
-                and str(data.get('signal_source', 'rules')).strip().lower() not in degraded_entry_sources
-                and self._allows_entry_signal(
-                    str(data.get('recommendation', '')),
-                    downtrend_filter_results.get(
-                        coin, (False, 'not_evaluated'))[0],
-                    set(_excluded_signals_fallback),
-                )
-                and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                and self._entry_pair_allowed(coin, data, dynamic_excluded_entry_pairs)
-            ]
+            force_fill_candidates = _candidates_within_filters(
+                self.config.force_fill_min_score)
             if force_fill_candidates:
                 missing_slots = available_trade_slots - \
                     len(top_buy_recommendations)
@@ -4365,6 +4355,39 @@ class CryptoTradingBot:
                     )
 
 
+    def _compute_entry_position_size(
+        self,
+        coin: str,
+        current_price: float,
+        atr: float,
+        portfolio_value: float,
+        trade_amount_cap: float,
+        attempt_meta: dict[str, Any],
+    ) -> float:
+        """Size a new entry from ATR risk and the cash reserve, updating attempt_meta."""
+        target_position_size = self._calculate_position_size(
+            coin,
+            current_price,
+            atr,
+            portfolio_value=portfolio_value,
+            trade_amount_cap=trade_amount_cap,
+        )
+        reserved_cash = self.portfolio.cash * self.config.cash_reserve_pct
+        max_affordable = max(
+            self.portfolio.cash - reserved_cash, 0.0)
+        position_size = min(
+            target_position_size, max_affordable)
+        attempt_meta['position_size_text'] = f"{position_size:.2f}"
+        attempt_meta['cash_text'] = f"{self.portfolio.cash:.2f}"
+
+        # Very small ATR risk amounts should not completely block entries
+        # as long as the minimum trade is still affordable with the cash reserve.
+        if position_size < self.config.min_trade_amount and max_affordable >= self.config.min_trade_amount:
+            position_size = self.config.min_trade_amount
+            attempt_meta['position_size_text'] = f"{position_size:.2f}"
+        return position_size
+
+
     def _open_new_positions(
         self,
         current_market_data: dict[str, Any],
@@ -4409,26 +4432,10 @@ class CryptoTradingBot:
                     if price_data:
                         current_price = price_data['price']
                         atr = self._get_atr_for_coin(coin, period=14)
-                        target_position_size = self._calculate_position_size(
-                            coin,
-                            current_price,
-                            atr,
-                            portfolio_value=portfolio_value_live,
-                            trade_amount_cap=effective_trade_amount,
-                        )
-                        reserved_cash = self.portfolio.cash * self.config.cash_reserve_pct
-                        max_affordable = max(
-                            self.portfolio.cash - reserved_cash, 0.0)
-                        position_size = min(
-                            target_position_size, max_affordable)
-                        attempt_meta['position_size_text'] = f"{position_size:.2f}"
-                        attempt_meta['cash_text'] = f"{self.portfolio.cash:.2f}"
-
-                        # Very small ATR risk amounts should not completely block entries
-                        # as long as the minimum trade is still affordable with the cash reserve.
-                        if position_size < self.config.min_trade_amount and max_affordable >= self.config.min_trade_amount:
-                            position_size = self.config.min_trade_amount
-                            attempt_meta['position_size_text'] = f"{position_size:.2f}"
+                        position_size = self._compute_entry_position_size(
+                            coin, current_price, atr,
+                            portfolio_value_live, effective_trade_amount,
+                            attempt_meta)
 
                         if position_size < self.config.min_trade_amount:
                             logger.info(
