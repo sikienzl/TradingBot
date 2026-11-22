@@ -162,6 +162,32 @@ def _order_fill_details(
     return filled, average, cost
 
 
+def _currency_aliases(currency: str) -> list[str]:
+    base = currency.upper().strip()
+    aliases = [base, f"Z{base}", f"X{base}"]
+    if base == 'BTC':
+        aliases.extend(['XBT', 'XXBT'])
+    return list(dict.fromkeys(aliases))
+
+def _extract_cash_and_holdings(free_balances: dict[str, float], base_currency: str) -> tuple[float, dict[str, float]]:
+    cash = 0.0
+    aliases = _currency_aliases(base_currency)
+    for key in aliases:
+        value = free_balances.get(key)
+        if value is not None:
+            cash = float(value)
+            break
+
+    holdings: dict[str, float] = {}
+    for currency, amount in free_balances.items():
+        if amount <= 0:
+            continue
+        if currency in aliases:
+            continue
+        holdings[currency] = float(amount)
+    return cash, holdings
+
+
 class CryptoTradingBot:
     """Main class of the trading bot."""
 
@@ -1809,33 +1835,28 @@ class CryptoTradingBot:
                 self.all_symbols = [
                     f'{coin}/{self.config.base_currency}' for coin in self.all_coins]
 
-    def _update_portfolio_balance(self):  # noqa: C901
+    def _update_portfolio_balance(self):
         """Updates the portfolio with current balances from the exchange."""
-        def _currency_aliases(currency: str) -> list[str]:
-            base = currency.upper().strip()
-            aliases = [base, f"Z{base}", f"X{base}"]
-            if base == 'BTC':
-                aliases.extend(['XBT', 'XXBT'])
-            return list(dict.fromkeys(aliases))
+        if self.config.simulation_initial_balance_from_kraken:
+            self._initialize_simulation_portfolio_from_kraken()
+            return
 
-        def _extract_cash_and_holdings(free_balances: dict[str, float]) -> tuple[float, dict[str, float]]:
-            cash = 0.0
-            aliases = _currency_aliases(self.config.base_currency)
-            for key in aliases:
-                value = free_balances.get(key)
-                if value is not None:
-                    cash = float(value)
-                    break
+        if self.config.simulate_data or self.exchange is None:
+            self._initialize_simulated_portfolio()
+            return
 
-            holdings: dict[str, float] = {}
-            for currency, amount in free_balances.items():
-                if amount <= 0:
-                    continue
-                if currency in aliases:
-                    continue
-                holdings[currency] = float(amount)
-            return cash, holdings
+        # In dry-run mode:
+        # 1. Load initial balance from exchange exactly once
+        # 2. Then restore from persistent state file (portfolio changes from previous runs)
+        # 3. Never overwrite simulated portfolio changes
+        if self.config.dry_run:
+            self._initialize_dry_run_portfolio()
+            return
 
+        self._refresh_live_portfolio_balance()
+
+    def _initialize_simulation_portfolio_from_kraken(self) -> None:
+        """Bootstrap the simulation portfolio once from the Kraken EUR balance."""
         if self.config.simulation_initial_balance_from_kraken:
             if self.portfolio.last_update is not None:
                 return
@@ -1877,8 +1898,9 @@ class CryptoTradingBot:
                 self.portfolio.save_state()
                 logger.info("Simulation initialized once from Kraken free EUR balance: %.2f EUR", cash)
             self.portfolio.last_update = datetime.now()
-            return
 
+    def _initialize_simulated_portfolio(self) -> None:
+        """Restore or seed the portfolio for simulated / offline data mode."""
         if self.config.simulate_data or self.exchange is None:
             needs_initialization = (
                 self.portfolio.last_update is None
@@ -1894,10 +1916,8 @@ class CryptoTradingBot:
             self.portfolio.last_update = datetime.now()
             return
 
-        # In dry-run mode:
-        # 1. Load initial balance from exchange exactly once
-        # 2. Then restore from persistent state file (portfolio changes from previous runs)
-        # 3. Never overwrite simulated portfolio changes
+    def _initialize_dry_run_portfolio(self) -> None:
+        """Restore the dry-run portfolio from state, else seed it from the exchange."""
         if self.config.dry_run:
             if self.portfolio.last_update is not None:
                 return
@@ -1911,7 +1931,7 @@ class CryptoTradingBot:
                 balance = self.exchange.fetch_balance()
                 free_balances = balance.get('free', {})
                 self.portfolio.cash, self.portfolio.holdings = _extract_cash_and_holdings(
-                    free_balances)
+                    free_balances, self.config.base_currency)
                 if not self.portfolio.holdings:
                     self.portfolio.initial_portfolio_value = self.portfolio.cash
                 self.portfolio.last_update = datetime.now()
@@ -1920,14 +1940,15 @@ class CryptoTradingBot:
             except ccxt.BaseError as e:
                 logger.warning(
                     f"Failed to load initial balance from exchange in dry-run mode: {e}")
-            return
 
+    def _refresh_live_portfolio_balance(self) -> None:
+        """Fetch the current balance from the exchange (live trading mode)."""
         # Live trading mode: always fetch current balance
         try:
             balance = self.exchange.fetch_balance()
             free_balances = balance.get('free', {})
             self.portfolio.cash, self.portfolio.holdings = _extract_cash_and_holdings(
-                free_balances)
+                free_balances, self.config.base_currency)
             self.portfolio.last_update = datetime.now()
             logger.info(
                 f"Portfolio balance updated. Cash: {self.portfolio.cash:.2f} {self.config.base_currency}, Holdings: {self.portfolio.holdings}")
@@ -1936,6 +1957,7 @@ class CryptoTradingBot:
                 f"Error fetching/updating account balance: {e}")
         except ccxt.BaseError as e:
             logger.error(f"Error fetching/updating account balance: {e}")
+
 
     def _get_market_data(self) -> dict[str, dict]:
         """Fetches current ticker data (price, volume) for all relevant coins."""

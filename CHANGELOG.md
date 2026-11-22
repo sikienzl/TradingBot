@@ -55,6 +55,19 @@ prepared; this file intentionally remains under **Unreleased** until then.
   the tabular indicator/feature-row construction is a pure helper returning the
   feature row and MACD histogram, and the optional ML/LLM ensemble signal is a
   separate helper returning the updated recommendation, score and signal source.
+- Split `BotConfig.__init__` (500 lines, complexity 32 → 1) into nine focused
+  loader methods (`_load_exchange_settings`, `_load_risk_management_settings`,
+  `_load_trading_parameters`, `_load_entry_strategy_settings`,
+  `_load_entry_filter_and_reentry_settings`, `_load_exit_management_settings`,
+  `_load_ml_settings`, `_load_analytics_and_guardrail_settings`,
+  `_load_ai_copilot_settings`); the six nested env-parsing helpers moved to
+  module level so they are importable and testable on their own.
+- Split `_update_portfolio_balance` (complexity 27 → 4, `# noqa: C901` removed)
+  into one dispatcher plus four mode-specific initialisers
+  (`_initialize_simulation_portfolio_from_kraken`,
+  `_initialize_simulated_portfolio`, `_initialize_dry_run_portfolio`,
+  `_refresh_live_portfolio_balance`); the nested balance-parsing helpers became
+  module-level `_currency_aliases` / `_extract_cash_and_holdings`.
 - Remove the stale `train_trading_model_backup.py` and ignore `.scannerwork/`
   and `.github/copilot-instructions.md`.
 - Centralize Ruff configuration in `pyproject.toml` (excludes plus a
