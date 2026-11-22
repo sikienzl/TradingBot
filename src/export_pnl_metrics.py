@@ -263,76 +263,129 @@ def _scan_portfolio_tail(
 
     for line in reversed(tail_lines):
         if not portfolio_value_found and 'Portfolio value:' in line:
-            try:
-                value_part = line.split('Portfolio value:', 1)[1].strip()
-                snapshot['portfolio_value_eur'] = float(
-                    value_part.split(' ')[0])
-                portfolio_value_found = True
-                if on_portfolio_value is not None:
-                    on_portfolio_value(line)
-            except (IndexError, ValueError) as e:
-                print(f"Error parsing portfolio value: {e}", file=sys.stderr)
+            portfolio_value_found = _parse_portfolio_value_line(
+                line, snapshot, on_portfolio_value)
 
         if not portfolio_cash_found and '  - Cash:' in line:
-            try:
-                cash_part = line.split('Cash:', 1)[1].strip()
-                snapshot['portfolio_cash_eur'] = float(
-                    cash_part.split(' ')[0])
-                portfolio_cash_found = True
-            except (IndexError, ValueError) as e:
-                print(f"Error parsing portfolio cash: {e}", file=sys.stderr)
+            portfolio_cash_found = _parse_cash_line(line, snapshot)
 
         if not snapshot['holdings_amount_coin'] and '  - Holdings:' in line:
-            try:
-                holdings_part = line.split('Holdings:', 1)[1].strip()
-                parsed = ast.literal_eval(holdings_part)
-                if isinstance(parsed, dict):
-                    snapshot['holdings_amount_coin'] = {
-                        str(coin).upper(): float(amount)
-                        for coin, amount in parsed.items()
-                        if float(amount) > 0.0
-                    }
-            except (SyntaxError, TypeError, ValueError):
-                pass
+            _parse_holdings_line(line, snapshot)
 
         if '  - Open trades details:' in line:
-            for coin, amount_coin in OPEN_TRADE_AMOUNT_COIN_RE.findall(line):
-                current_coin = coin.upper()
-                if current_coin not in open_trade_amount_coin:
-                    try:
-                        open_trade_amount_coin[current_coin] = float(
-                            amount_coin)
-                    except ValueError:
-                        pass
-            for coin, amount_base in OPEN_TRADE_AMOUNT_BASE_RE.findall(line):
-                current_coin = coin.upper()
-                if current_coin not in open_trade_amount_base:
-                    try:
-                        open_trade_amount_base[current_coin] = float(
-                            amount_base)
-                    except ValueError:
-                        pass
+            _parse_open_trades_line(
+                line, open_trade_amount_base, open_trade_amount_coin)
 
         if '→ Current ' in line:
-            match = CURRENT_PRICE_RE.search(line)
-            if match:
-                coin, current_price = match.groups()
-                current_coin = coin.upper()
-                if current_coin not in current_prices:
-                    try:
-                        current_prices[current_coin] = float(current_price)
-                    except ValueError:
-                        pass
+            _parse_current_price_line(line, current_prices)
 
-        if portfolio_value_found and portfolio_cash_found:
-            if not snapshot['holdings_amount_coin']:
-                break
-            if all(
-                coin in current_prices or coin in open_trade_amount_base
-                for coin in snapshot['holdings_amount_coin']
-            ):
-                break
+        if _portfolio_scan_complete(
+            snapshot, current_prices, open_trade_amount_base,
+            portfolio_value_found, portfolio_cash_found,
+        ):
+            break
     return current_prices, open_trade_amount_base, open_trade_amount_coin
+
+
+def _parse_portfolio_value_line(
+    line: str, snapshot: dict, on_portfolio_value
+) -> bool:
+    """Parse a 'Portfolio value:' line into *snapshot*. True if parsed."""
+    found = False
+    try:
+        value_part = line.split('Portfolio value:', 1)[1].strip()
+        snapshot['portfolio_value_eur'] = float(
+            value_part.split(' ')[0])
+        found = True
+        if on_portfolio_value is not None:
+            on_portfolio_value(line)
+    except (IndexError, ValueError) as e:
+        print(f"Error parsing portfolio value: {e}", file=sys.stderr)
+    return found
+
+
+def _parse_cash_line(line: str, snapshot: dict) -> bool:
+    """Parse a 'Cash:' line into *snapshot*. True if parsed."""
+    try:
+        cash_part = line.split('Cash:', 1)[1].strip()
+        snapshot['portfolio_cash_eur'] = float(
+            cash_part.split(' ')[0])
+        return True
+    except (IndexError, ValueError) as e:
+        print(f"Error parsing portfolio cash: {e}", file=sys.stderr)
+    return False
+
+
+def _parse_holdings_line(line: str, snapshot: dict) -> None:
+    """Parse a 'Holdings:' line into *snapshot*."""
+    try:
+        holdings_part = line.split('Holdings:', 1)[1].strip()
+        parsed = ast.literal_eval(holdings_part)
+        if isinstance(parsed, dict):
+            snapshot['holdings_amount_coin'] = {
+                str(coin).upper(): float(amount)
+                for coin, amount in parsed.items()
+                if float(amount) > 0.0
+            }
+    except (SyntaxError, TypeError, ValueError):
+        pass
+
+
+def _parse_open_trades_line(
+    line: str,
+    open_trade_amount_base: dict[str, float],
+    open_trade_amount_coin: dict[str, float],
+) -> None:
+    """Parse an 'Open trades details:' line into the amount dicts."""
+    for coin, amount_coin in OPEN_TRADE_AMOUNT_COIN_RE.findall(line):
+        current_coin = coin.upper()
+        if current_coin not in open_trade_amount_coin:
+            try:
+                open_trade_amount_coin[current_coin] = float(
+                    amount_coin)
+            except ValueError:
+                pass
+    for coin, amount_base in OPEN_TRADE_AMOUNT_BASE_RE.findall(line):
+        current_coin = coin.upper()
+        if current_coin not in open_trade_amount_base:
+            try:
+                open_trade_amount_base[current_coin] = float(
+                    amount_base)
+            except ValueError:
+                pass
+
+
+def _parse_current_price_line(
+    line: str, current_prices: dict[str, float]
+) -> None:
+    """Parse a current-price line into *current_prices*."""
+    match = CURRENT_PRICE_RE.search(line)
+    if match:
+        coin, current_price = match.groups()
+        current_coin = coin.upper()
+        if current_coin not in current_prices:
+            try:
+                current_prices[current_coin] = float(current_price)
+            except ValueError:
+                pass
+
+
+def _portfolio_scan_complete(
+    snapshot: dict,
+    current_prices: dict[str, float],
+    open_trade_amount_base: dict[str, float],
+    portfolio_value_found: bool,
+    portfolio_cash_found: bool,
+) -> bool:
+    """Return True once the tail scan has collected everything needed."""
+    if not (portfolio_value_found and portfolio_cash_found):
+        return False
+    if not snapshot['holdings_amount_coin']:
+        return True
+    return all(
+        coin in current_prices or coin in open_trade_amount_base
+        for coin in snapshot['holdings_amount_coin']
+    )
 
 
 def _aggregate_portfolio_holdings(

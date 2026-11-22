@@ -96,6 +96,11 @@ prepared; this file intentionally remains under **Unreleased** until then.
   closure (one shared predicate instead of two identical comprehensions) and
   extract the ATR/cash-reserve sizing from `_open_new_positions` into
   `_compute_entry_position_size`.
+- Split `export_pnl_metrics._scan_portfolio_tail` (complexity 24 → 8) so each
+  log-line pattern is a focused parser (`_parse_portfolio_value_line`,
+  `_parse_cash_line`, `_parse_holdings_line`, `_parse_open_trades_line`,
+  `_parse_current_price_line`) and the early-exit condition became
+  `_portfolio_scan_complete`; the scanner now only dispatches per line.
 - Remove the stale `train_trading_model_backup.py` and ignore `.scannerwork/`
   and `.github/copilot-instructions.md`.
 - Centralize Ruff configuration in `pyproject.toml` (excludes plus a
