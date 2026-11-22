@@ -682,6 +682,29 @@ def format_prometheus_metrics(metrics):
     output.append(
         f'trading_portfolio_start_value_eur {metrics.get("portfolio_start_value_eur", 0.0)}')
 
+    # Snapshot freshness metrics are only emitted by the HTTP exporter, which
+    # attaches them to its metrics dict; the one-shot script omits them.
+    if 'metrics_generated_unixtime' in metrics:
+        output.append(
+            '# HELP trading_metrics_generated_unixtime Unix timestamp when the exporter generated this metrics payload')
+        output.append('# TYPE trading_metrics_generated_unixtime gauge')
+        output.append(
+            f'trading_metrics_generated_unixtime {metrics.get("metrics_generated_unixtime", 0.0)}')
+
+    if 'portfolio_snapshot_timestamp_unixtime' in metrics:
+        output.append(
+            '# HELP trading_portfolio_snapshot_unixtime Unix timestamp of the latest portfolio snapshot parsed from the bot log')
+        output.append('# TYPE trading_portfolio_snapshot_unixtime gauge')
+        output.append(
+            f'trading_portfolio_snapshot_unixtime {metrics.get("portfolio_snapshot_timestamp_unixtime", 0.0)}')
+
+    if 'portfolio_snapshot_age_seconds' in metrics:
+        output.append(
+            '# HELP trading_portfolio_snapshot_age_seconds Age in seconds of the latest portfolio snapshot parsed from the bot log')
+        output.append('# TYPE trading_portfolio_snapshot_age_seconds gauge')
+        output.append(
+            f'trading_portfolio_snapshot_age_seconds {metrics.get("portfolio_snapshot_age_seconds", 0.0)}')
+
     output.append(
         '# HELP trading_current_holding_value_eur Current mark-to-market holding value per coin in EUR')
     output.append('# TYPE trading_current_holding_value_eur gauge')
