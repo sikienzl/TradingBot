@@ -46,6 +46,10 @@ prepared; this file intentionally remains under **Unreleased** until then.
   `_execute_trade` into dry-run/real branches, and `run()` into reusable
   helpers (`_entry_pair_allowed`, `_entry_guards_allow`,
   `_log_portfolio_status`).
+- Split `_manage_open_trades` (complexity 34 → 12) into focused exit helpers
+  (`_maybe_partial_take_profit`, `_partial_tp_remainder_exit_reason`,
+  `_downtrend_reversal_exit_reason`, `_uptrend_rules_exit_reason`,
+  `_core_exit_reason`), each below the complexity gate.
 - Remove the stale `train_trading_model_backup.py` and ignore `.scannerwork/`
   and `.github/copilot-instructions.md`.
 - Centralize Ruff configuration in `pyproject.toml` (excludes plus a
