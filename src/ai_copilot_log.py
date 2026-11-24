@@ -122,7 +122,14 @@ def _now() -> datetime:
 
 
 def _parse_log_timestamp(timestamp_raw: str) -> datetime:
-    return datetime.strptime(timestamp_raw.strip(), LOG_TIME_FORMAT)
+    """Parse a bot log timestamp into an aware UTC datetime.
+
+    ``logging.Formatter`` writes ``asctime`` in the bot's local time with no
+    offset, so the naive value is interpreted as local time and converted --
+    the same assumption ``pnl_exporter._extract_log_line_timestamp()`` makes
+    when it calls ``timestamp()`` on it.
+    """
+    return datetime.strptime(timestamp_raw.strip(), LOG_TIME_FORMAT).astimezone(UTC)
 
 
 def _suggestion_series(
