@@ -86,6 +86,14 @@ a version heading is assigned when a release is prepared.
   argument or through the `RealTradeHooks` / `EntryHooks` callbacks, so the money
   paths are now unit-testable against a stub exchange without importing the bot.
   Covered by 26 new tests in `tests/test_execution_service.py`.
+- `.github/skills/extract-module-refactor/`, a skill that records how the
+  extractions above are done so the next one follows the same recipe: the
+  verbatim-copy and thin-delegator rules, the layer registration and line-count
+  ratchet, the full local gate list, and a reference for the equivalence
+  harness. It bundles `scripts/complexity_report.py` (cyclomatic-complexity
+  report used to pick extraction targets) and `scripts/ci_env_sim.py` (runs
+  pytest with `talib`/`torch`/`transformers`/`onnx` hidden, reproducing the slim
+  CI test job locally).
 
 ### Changed
 
