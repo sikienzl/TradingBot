@@ -14,6 +14,9 @@ __pycache__/
 dist/
 build/
 
+# Build-generated version file (written by hatch-vcs)
+src/_version.py
+
 # Logs
 *.log
 backtest_log.txt
