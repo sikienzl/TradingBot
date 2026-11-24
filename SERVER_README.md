@@ -581,7 +581,9 @@ For a reproducible Ansible deployment on an already-provisioned Debian/Ubuntu
 host, see the generic starter in [`ansible/`](./ansible/) and its
 [`README.md`](./ansible/README.md). For a separate, generic two-node CM5/K3s
 bootstrap package, see [`cluster-starter/`](./cluster-starter/README.md); its
-GitHub Actions workflow publishes validated ZIP pre-releases. Both starters
+GitHub Actions workflow publishes validated ZIP pre-releases, and the cluster
+release archive also carries the same tree so the links in this guide resolve
+after unpacking. Both starters
 require operator-supplied inventory and secrets, and neither contains this
 site's addresses or credentials. The cluster starter does not provision
 hardware, VPN or firewall configuration, or deploy the TradingBot workloads.
@@ -862,6 +864,12 @@ After an upgrade, keep `DRY_RUN=true` and verify:
 
 ### PostgreSQL analytics backups
 
+The backup wrappers and their service/timer units ship in both release packages.
+The jobs only apply where a PostgreSQL analytics container and the NAS mount
+exist; on a single-host install without them, leave the timers disabled — each
+wrapper checks for the expected mount and a running container and exits rather
+than writing anywhere.
+
 The PostgreSQL container now runs with the host `trading` account's numeric
 UID and GID (`999:984` on the current bot host). The official image's
 `postgres` account is UID 999 inside the container, so its database processes
@@ -1001,13 +1009,16 @@ two-node CM5 cluster are deployed differently:
 
 - `trading-bot-pi-<version>.tar.gz` - single Raspberry Pi: runtime scripts,
   the `docs/` guides, `requirements-pi.txt`, systemd units (including the
-  weekly scorecard, research-signal and auto-tuning timers) and the one-shot
-  `scripts/install_pi.sh`.
+  weekly scorecard, research-signal and auto-tuning timers), the analytics
+  PostgreSQL backup wrappers and their service/timer units
+  (`scripts/postgresql-analytics-*`, `deploy/postgresql-analytics-*`) and the
+  one-shot `scripts/install_pi.sh`.
 - `trading-cluster-<version>.tar.gz` - CM5 cluster: `src/`, the `docker/`
   Dockerfiles, cluster units and env templates, `requirements-hailo-server.txt`,
   `requirements-hailo-shadow.txt` and `requirements-dashboard.txt`, the generic
-  `ansible/` paper-dashboard starter (example inventories and vault templates
-  only), plus a `version.txt`
+  `ansible/` paper-dashboard starter and the generic `cluster-starter/`
+  two-node CM5/K3s starter (example inventories and vault templates only),
+  plus a `version.txt`
   with the version and commit. Built by `.github/scripts/cluster_release.py`,
   which is deterministic (sorted members, fixed metadata) so the checksum is
   reproducible. The LLM adapter, Hailo SDK packages and HEF files are excluded

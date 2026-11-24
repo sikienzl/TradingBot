@@ -36,6 +36,26 @@ ANSIBLE_EXCLUDED = re.compile(
     r"^ansible/(?:files/[^/]+\.(?:crt|key|pem)$|\.vault_pass"
     r"|(?:inventory|group_vars)/.*(?:hosts\.yml|vault\.ya?ml)$)"
 )
+# The generic two-node CM5/K3s starter is referenced by SERVER_README.md and by
+# the docs/ guides, so the cluster archive has to carry it. The allowlist below
+# mirrors .github/scripts/cluster_starter_release.py, which publishes the same
+# tree as a standalone pre-release: only the tracked example inventories and the
+# playbook/role/test trees are packaged, never dot-files or real inventories.
+STARTER_DIR = "cluster-starter"
+STARTER_TOP_LEVEL = {
+    f"{STARTER_DIR}/README.md",
+    f"{STARTER_DIR}/ansible.cfg",
+    f"{STARTER_DIR}/requirements-controller.txt",
+    f"{STARTER_DIR}/requirements.yml",
+}
+STARTER_INVENTORY = re.compile(
+    rf"^{STARTER_DIR}/inventory/(?:example/(?:hosts\.yml|group_vars/all\.yml)"
+    r"|vault\.example\.yml)$"
+)
+STARTER_TREE = re.compile(
+    rf"^{STARTER_DIR}/(?:roles|playbooks|tests)/.*\.(?:yml|yaml|j2|py)$"
+)
+STARTER_VAULT = re.compile(rf"^{STARTER_DIR}/.*vault\.ya?ml$")
 # Single top-level files needed to rebuild and operate the cluster deployment.
 PACKAGED_FILES = (
     "README.md",
@@ -95,6 +115,10 @@ REQUIRED = (
     "SERVER_README.md",
     "ansible/README.md",
     "ansible/playbooks/dashboard.yml",
+    "cluster-starter/README.md",
+    "cluster-starter/ansible.cfg",
+    "cluster-starter/playbooks/site.yml",
+    "cluster-starter/inventory/example/hosts.yml",
     "version.txt",
 )
 
@@ -119,6 +143,15 @@ YAML_ASSIGNMENT = re.compile(
 PLACEHOLDER = ("replace_with_", "replace-with-", "change_me", "change-me", "<", "{{")
 
 
+def starter_allowed(name: str) -> bool:
+    """Return True when a tracked cluster-starter path is a publishable file."""
+    if STARTER_VAULT.search(name):
+        return False
+    if name in STARTER_TOP_LEVEL or STARTER_INVENTORY.fullmatch(name):
+        return True
+    return bool(STARTER_TREE.fullmatch(name))
+
+
 def allowed_path(name: str) -> bool:
     """Return True when a tracked path belongs in the cluster archive."""
     path = PurePosixPath(name)
@@ -130,6 +163,8 @@ def allowed_path(name: str) -> bool:
         return False
     if ANSIBLE_EXCLUDED.search(name):
         return False
+    if path.parts[0] == STARTER_DIR:
+        return starter_allowed(name)
     if name in PACKAGED_FILES:
         return True
     if name in SCRIPTS_EXCLUDED:
@@ -169,7 +204,7 @@ def check_content(name: str, data: bytes) -> None:
             value = match.group(2)
             if value and not value.lower().startswith(PLACEHOLDER):
                 raise ValueError(f"Filled-in secret in {name}: {match.group(1)}")
-    if name.startswith("ansible/"):
+    if name.startswith(("ansible/", f"{STARTER_DIR}/")):
         for line in data.decode("utf-8", "replace").splitlines():
             match = YAML_ASSIGNMENT.match(line)
             if not match:

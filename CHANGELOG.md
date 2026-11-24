@@ -5,6 +5,30 @@ a version heading is assigned when a release is prepared.
 
 ## Unreleased
 
+### Fixed
+
+- The cluster archive now ships the generic `cluster-starter/` two-node CM5/K3s
+  starter, which `SERVER_README.md` and the `docs/` guides link. The published
+  `trading-cluster-<version>.tar.gz` previously omitted the whole tree, so those
+  links resolved to nothing after unpacking. The same allowlist as the standalone
+  starter pre-release applies: tracked example inventories plus the
+  `playbooks/`, `roles/` and `tests/` trees, never real inventories, vault files
+  or dot-files, and the ansible credential scan now covers the starter YAML too.
+- The Pi archive now ships the analytics PostgreSQL backup wrappers and their
+  service/timer units that `SERVER_README.md` tells operators to install, so the
+  instructions no longer reference files the package does not contain. The
+  wrappers exit rather than write when the expected NAS mount or the PostgreSQL
+  container is absent, so a single-host install can leave the timers disabled.
+- `pnl-exporter.service` moved from the repository root into `deploy/`, matching
+  every other systemd unit. The Pi installer already copied it from `deploy/`, and
+  the release workflow had to relocate it as a special case; the cluster archive
+  was missing the unit entirely.
+
+### Added
+
+- The `cluster-starter/` unit tests now run in the CI quality job instead of only
+  in the manually triggered starter pre-release workflow.
+
 ## v1.0.26 - 2026-11-24
 
 ### Added

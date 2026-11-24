@@ -33,6 +33,17 @@ class ClusterReleaseTest(unittest.TestCase):
                 }
             self.assertTrue(set(release.REQUIRED).issubset(names))
             self.assertIn("version.txt", names)
+            for name in (
+                "cluster-starter/README.md",
+                "cluster-starter/ansible.cfg",
+                "cluster-starter/playbooks/site.yml",
+                "cluster-starter/inventory/example/hosts.yml",
+                "cluster-starter/inventory/vault.example.yml",
+                "cluster-starter/roles/postgresql/tasks/main.yml",
+                "cluster-starter/tests/test_disk_guard.py",
+            ):
+                self.assertIn(name, names)
+            self.assertFalse(any("cluster-starter/.gitignore" in name for name in names))
             with tarfile.open(archive, "r:gz") as tar:
                 scripts = {
                     "scripts/postgresql-analytics-backup",
@@ -79,6 +90,12 @@ class ClusterReleaseTest(unittest.TestCase):
             "ansible/group_vars/paper_dashboard/vault.yml",
             "ansible/.vault_pass.txt",
             "ansible/files/dashboard.key",
+            "cluster-starter/inventory/production/hosts.yml",
+            "cluster-starter/inventory/example/group_vars/vault.yml",
+            "cluster-starter/.gitignore",
+            "cluster-starter/.venv/pyvenv.cfg",
+            "cluster-starter/tests/__pycache__/test_disk_guard.cpython-314.pyc",
+            "cluster-starter/roles/storage/handlers/main.sh",
         ):
             with self.subTest(name=name):
                 self.assertFalse(release.allowed_path(name))
@@ -102,6 +119,16 @@ class ClusterReleaseTest(unittest.TestCase):
             "ansible/inventory/hosts.yml.example",
             "ansible/group_vars/paper_dashboard/vault.yml.example",
             "ansible/roles/public_paper_dashboard/templates/dashboard.env.j2",
+            "cluster-starter/README.md",
+            "cluster-starter/ansible.cfg",
+            "cluster-starter/requirements.yml",
+            "cluster-starter/inventory/example/hosts.yml",
+            "cluster-starter/inventory/example/group_vars/all.yml",
+            "cluster-starter/inventory/vault.example.yml",
+            "cluster-starter/playbooks/site.yml",
+            "cluster-starter/roles/k3s/templates/config.yml.j2",
+            "cluster-starter/roles/storage/files/inspect_disk.py",
+            "cluster-starter/tests/test_disk_guard.py",
         ):
             with self.subTest(name=name):
                 self.assertTrue(release.allowed_path(name))
@@ -126,6 +153,8 @@ class ClusterReleaseTest(unittest.TestCase):
             ("ansible/group_vars/paper_dashboard/vault.yml.example", b"$ANSIBLE_VAULT;1.1;AES256\n"),
             ("ansible/group_vars/paper_dashboard/vars.yml.example", b"vault_public_paper_dashboard_password: hunter2\n"),
             ("ansible/roles/public_paper_dashboard/defaults/main.yml", b"public_paper_dashboard_api_key: abc123\n"),
+            ("cluster-starter/inventory/example/group_vars/all.yml", b"postgresql_password: hunter2\n"),
+            ("cluster-starter/roles/postgresql/tasks/main.yml", b"      password: super-secret\n"),
         ):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 release.check_content(name, data)
@@ -139,6 +168,9 @@ class ClusterReleaseTest(unittest.TestCase):
             ("ansible/group_vars/paper_dashboard/vars.yml.example", b'public_paper_dashboard_password: "{{ vault_public_paper_dashboard_password }}"\n'),
             ("ansible/roles/public_paper_dashboard/defaults/main.yml", b'public_paper_dashboard_password: ""\n'),
             ("ansible/roles/public_paper_dashboard/templates/dashboard.env.j2", b"DASHBOARD_PASSWORD={{ public_paper_dashboard_password }}\n"),
+            ("cluster-starter/inventory/example/hosts.yml", b"          ansible_host: REPLACE_WITH_MASTER_IP_OR_DNS\n"),
+            ("cluster-starter/roles/postgresql/tasks/main.yml", b'    password: "{{ vault_postgresql_password }}"\n'),
+            ("cluster-starter/roles/k3s/templates/config.yml.j2", b"token: {{ vault_k3s_token | to_json }}\n"),
         ):
             with self.subTest(name=name):
                 release.check_content(name, data)
