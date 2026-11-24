@@ -25,8 +25,17 @@ ROOT = Path(__file__).resolve().parents[2]
 
 VERSION = re.compile(r"v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?")
 
-# Directories that are packaged wholesale (tracked files only).
-PACKAGED_DIRS = ("src", "docker", "deploy", "docs")
+# Directories that are packaged wholesale (tracked files only). The ansible/
+# directory is the generic paper-dashboard deployment starter referenced by
+# SERVER_README.md; only its example templates are tracked, real inventories,
+# vault files and TLS material are git-ignored and rejected below.
+PACKAGED_DIRS = ("src", "docker", "deploy", "docs", "ansible")
+# Real (non-example) ansible inventories, vaults and TLS key material must
+# never enter an archive, even if someone force-adds them to git.
+ANSIBLE_EXCLUDED = re.compile(
+    r"^ansible/(?:files/[^/]+\.(?:crt|key|pem)$|\.vault_pass"
+    r"|(?:inventory|group_vars)/.*(?:hosts\.yml|vault\.ya?ml)$)"
+)
 # Single top-level files needed to rebuild and operate the cluster deployment.
 PACKAGED_FILES = (
     "README.md",
@@ -76,11 +85,14 @@ REQUIRED = (
     "requirements-hailo-shadow.txt",
     "requirements-dashboard.txt",
     "SERVER_README.md",
+    "ansible/README.md",
+    "ansible/playbooks/dashboard.yml",
     "version.txt",
 )
 
 SECRET_MARKERS = re.compile(
     r"-----BEGIN (?:[A-Z0-9 ]* )?PRIVATE KEY-----"
+    r"|\$ANSIBLE_VAULT;"
     r"|gh[pousr]_[A-Za-z0-9]{36,}"
     r"|github_pat_[A-Za-z0-9_]{20,}"
     r"|AKIA[0-9A-Z]{16}",
@@ -88,6 +100,13 @@ SECRET_MARKERS = re.compile(
 # In *.env templates every credential value must stay empty or a placeholder.
 ENV_ASSIGNMENT = re.compile(
     r"^\s*((?:[A-Z0-9_]*_)?(?:API_KEY|API_SECRET|TOKEN|SECRET|PASSWORD|PASSPHRASE))=(\S*)\s*$"
+)
+# In ansible YAML files credential-like variables must stay empty, a
+# REPLACE_WITH_ placeholder or a vault/template reference.
+YAML_ASSIGNMENT = re.compile(
+    r"^\s*[\w.-]*(?:password|passwd|secret|token|api[_-]?key|private[_-]?key)[\w.-]*"
+    r"\s*:\s*(.*?)\s*$",
+    re.IGNORECASE,
 )
 PLACEHOLDER = ("replace_with_", "replace-with-", "change_me", "change-me", "<", "{{")
 
@@ -100,6 +119,8 @@ def allowed_path(name: str) -> bool:
     if any(part == "__pycache__" for part in path.parts):
         return False
     if MODEL_EXCLUDED.search(name):
+        return False
+    if ANSIBLE_EXCLUDED.search(name):
         return False
     if name in PACKAGED_FILES:
         return True
@@ -119,7 +140,9 @@ def env_kind(name: str) -> str | None:
     for part in PurePosixPath(name).parts:
         if ".env" not in part:
             continue
-        return "template" if part.endswith(".example") else "real"
+        if part.endswith((".example", ".j2")):
+            return "template"
+        return "real"
     return None
 
 
@@ -138,6 +161,14 @@ def check_content(name: str, data: bytes) -> None:
             value = match.group(2)
             if value and not value.lower().startswith(PLACEHOLDER):
                 raise ValueError(f"Filled-in secret in {name}: {match.group(1)}")
+    if name.startswith("ansible/"):
+        for line in data.decode("utf-8", "replace").splitlines():
+            match = YAML_ASSIGNMENT.match(line)
+            if not match:
+                continue
+            value = match.group(1).strip().strip("'\"")
+            if value and not value.lower().startswith(PLACEHOLDER):
+                raise ValueError(f"Filled-in credential variable in {name}")
 
 
 def tracked_files() -> list[str]:

@@ -286,6 +286,8 @@ jobs:
           - \`src/\`, \`docker/\` Dockerfiles and \`docs/\`
           - Cluster units and env templates (\`deploy/\`), including the Hailo
             inference, tunnel, shadow and public-paper services
+          - Generic \`ansible/\` paper-dashboard starter (example inventories
+            and vault templates only)
           - \`requirements-hailo-shadow.txt\` and \`requirements-dashboard.txt\`
           - CatBoost decision model; the LLM adapter and Hailo SDK/HEF artifacts are excluded
 

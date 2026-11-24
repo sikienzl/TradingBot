@@ -12,8 +12,9 @@ a version heading is assigned when a release is prepared.
   cluster (Dockerfiles, Hailo inference/tunnel/shadow units, dashboard) has an
   artifact of its own instead of only a Pi package. The cluster archive is built
   deterministically by `.github/scripts/cluster_release.py`, records version and
-  commit in `version.txt`, and excludes the LLM adapter, Hailo SDK packages and
-  HEF files.
+  commit in `version.txt`, ships the generic `ansible/` paper-dashboard starter
+  (example inventories and vault templates only), and excludes the LLM adapter,
+  Hailo SDK packages and HEF files.
 
 ## v1.0.25 - 2026-11-24
 
