@@ -16,6 +16,18 @@ a version heading is assigned when a release is prepared.
   (example inventories and vault templates only) plus
   `requirements-hailo-server.txt`, and excludes the LLM adapter, Hailo SDK
   packages and HEF files.
+- Added the analytics PostgreSQL backup wrappers that
+  `deploy/postgresql-analytics-backup.service`/`-restore-check.service` execute:
+  `scripts/postgresql-analytics-backup` (custom-format `pg_dump` to the NAS
+  mount with a `.sha256` sidecar and retention pruning) and
+  `scripts/postgresql-analytics-restore-check` (restores the newest dump into a
+  throwaway database and verifies the `trading_analytics` schema). Database name
+  and user are read from the container environment, so no credentials live on
+  the host. New daily/weekly timer units (`deploy/postgresql-analytics-backup.timer`,
+  `deploy/postgresql-analytics-restore-check.timer`) schedule both jobs.
+- The cluster archive now keeps the executable bit of tracked scripts
+  (git mode 100755) instead of flattening every member to 0644, so unpacked
+  wrappers can be run directly.
 
 ### Fixed
 

@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Back up the TradingBot analytics PostgreSQL database to the NAS mount.
+#
+# Installed as /usr/local/sbin/postgresql-analytics-backup and run by
+# deploy/postgresql-analytics-backup.service as the `trading` account.
+# The database name and user are read from the container environment
+# (POSTGRES_DB / POSTGRES_USER), so no credentials live on the host.
+#
+# Overrides (environment or a sourced /etc/trading-postgresql-backup.env):
+#   POSTGRESQL_BACKUP_CONTAINER       container name   (default: postgresql-node1)
+#   POSTGRESQL_BACKUP_DIR             NAS target dir   (default: /nas-1/postgresql)
+#   POSTGRESQL_BACKUP_RETENTION_DAYS  prune after days (default: 14)
+set -euo pipefail
+
+if [[ -f /etc/trading-postgresql-backup.env ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source /etc/trading-postgresql-backup.env
+    set +a
+fi
+
+CONTAINER="${POSTGRESQL_BACKUP_CONTAINER:-postgresql-node1}"
+BACKUP_DIR="${POSTGRESQL_BACKUP_DIR:-/nas-1/postgresql}"
+RETENTION_DAYS="${POSTGRESQL_BACKUP_RETENTION_DAYS:-14}"
+
+# Fail rather than writing to an unmounted local directory.
+if ! mountpoint -q "$BACKUP_DIR"; then
+    echo "refusing to back up: $BACKUP_DIR is not a mount point" >&2
+    exit 1
+fi
+
+if [[ "$(docker inspect --format '{{.State.Running}}' "$CONTAINER")" != "true" ]]; then
+    echo "container $CONTAINER is not running" >&2
+    exit 1
+fi
+
+DB_NAME="$(docker exec "$CONTAINER" printenv POSTGRES_DB)"
+DB_USER="$(docker exec "$CONTAINER" printenv POSTGRES_USER)"
+
+TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+ARCHIVE="$BACKUP_DIR/analytics-$TIMESTAMP.dump"
+TMP_ARCHIVE="$ARCHIVE.partial"
+trap 'rm -f "$TMP_ARCHIVE"' EXIT
+
+docker exec "$CONTAINER" pg_dump --format=custom --no-owner \
+    -U "$DB_USER" "$DB_NAME" > "$TMP_ARCHIVE"
+mv "$TMP_ARCHIVE" "$ARCHIVE"
+trap - EXIT
+
+(
+    cd "$BACKUP_DIR"
+    sha256sum "$(basename "$ARCHIVE")" > "$(basename "$ARCHIVE").sha256"
+)
+
+find "$BACKUP_DIR" -maxdepth 1 -name 'analytics-*.dump' \
+    -mtime "+$RETENTION_DAYS" -delete
+find "$BACKUP_DIR" -maxdepth 1 -name 'analytics-*.dump.sha256' \
+    -mtime "+$RETENTION_DAYS" -delete
+
+echo "backup written: $ARCHIVE"

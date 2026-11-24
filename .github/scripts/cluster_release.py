@@ -81,6 +81,12 @@ REQUIRED = (
     "deploy/trading-hailo-tunnel.service",
     "deploy/hailo-shadow.env.example",
     "deploy/public-paper-daily-report.service",
+    "deploy/postgresql-analytics-backup.service",
+    "deploy/postgresql-analytics-backup.timer",
+    "deploy/postgresql-analytics-restore-check.service",
+    "deploy/postgresql-analytics-restore-check.timer",
+    "scripts/postgresql-analytics-backup",
+    "scripts/postgresql-analytics-restore-check",
     "scripts/run_public_paper_daily_report.sh",
     "scripts/public_paper_daily_report.py",
     "requirements-hailo-shadow.txt",
@@ -229,7 +235,14 @@ def build(version: str, output_dir: Path, commit: str = "") -> Path:
             for name in sorted(files):
                 info = tarfile.TarInfo(f"{package}/{name}")
                 info.size = len(files[name])
-                info.mode = 0o644
+                # Keep the executable bit of tracked scripts (git mode 100755);
+                # everything else is a plain 0644 data file.
+                source = ROOT / name
+                info.mode = (
+                    0o755
+                    if source.exists() and source.lstat().st_mode & stat.S_IXUSR
+                    else 0o644
+                )
                 info.mtime = 0
                 info.uid = info.gid = 0
                 info.uname = info.gname = ""

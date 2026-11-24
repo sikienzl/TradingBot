@@ -881,23 +881,34 @@ docker exec postgresql-node1 ps -o uid,gid,user,group,comm -C postgres
 The configured container user should match `id -u trading` and `id -g trading`
 on the host.
 
-Install the service units from `deploy/` and allow the `trading` group to
-execute the root-managed backup scripts:
+The backup wrapper scripts live in `scripts/` and are installed root-owned
+under `/usr/local/sbin/`, where the `trading` group may execute them. The
+database name and user are read from the container environment
+(`POSTGRES_DB` / `POSTGRES_USER`), so no credentials live on the host.
+Optional overrides (container name, backup dir, retention days) go into
+`/etc/trading-postgresql-backup.env`.
+
+Install the scripts and the service/timer units from `deploy/`:
 
 ```sh
-sudo chown root:trading /usr/local/sbin/postgresql-analytics-backup \
-  /usr/local/sbin/postgresql-analytics-restore-check
-sudo chmod 0750 /usr/local/sbin/postgresql-analytics-backup \
-  /usr/local/sbin/postgresql-analytics-restore-check
+sudo install -o root -g trading -m 0750 \
+  scripts/postgresql-analytics-backup \
+  scripts/postgresql-analytics-restore-check /usr/local/sbin/
 sudo cp deploy/postgresql-analytics-backup.service \
-  deploy/postgresql-analytics-restore-check.service /etc/systemd/system/
+  deploy/postgresql-analytics-backup.timer \
+  deploy/postgresql-analytics-restore-check.service \
+  deploy/postgresql-analytics-restore-check.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl start postgresql-analytics-backup.service
-sudo systemctl start postgresql-analytics-restore-check.service
+sudo systemctl enable --now postgresql-analytics-backup.timer
+sudo systemctl enable --now postgresql-analytics-restore-check.timer
 ```
 
-Both jobs require the expected NAS mount and fail rather than writing to an
-unmounted local directory. Check each run with
+The backup runs daily (custom-format `pg_dump` plus a `.sha256` sidecar,
+pruned after 14 days); the restore-check restores the newest dump into a
+throwaway database inside the container, verifies the `trading_analytics`
+schema and drops it again. Both jobs require the expected NAS mount and fail
+rather than writing to an unmounted local directory. Trigger a manual run with
+`systemctl start postgresql-analytics-backup.service` and check each run with
 `systemctl status postgresql-analytics-backup.service
 postgresql-analytics-restore-check.service` and inspect its journal before
 relying on the timers.

@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Restore-test the latest TradingBot analytics PostgreSQL backup.
+#
+# Installed as /usr/local/sbin/postgresql-analytics-restore-check and run by
+# deploy/postgresql-analytics-restore-check.service as the `trading` account.
+# The newest analytics-*.dump in the NAS backup dir is restored into a
+# throwaway database inside the container, the trading_analytics schema is
+# verified, and the database is dropped again.
+#
+# Overrides (environment or a sourced /etc/trading-postgresql-backup.env):
+#   POSTGRESQL_BACKUP_CONTAINER   container name  (default: postgresql-node1)
+#   POSTGRESQL_BACKUP_DIR         NAS backup dir  (default: /nas-1/postgresql)
+set -euo pipefail
+
+if [[ -f /etc/trading-postgresql-backup.env ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source /etc/trading-postgresql-backup.env
+    set +a
+fi
+
+CONTAINER="${POSTGRESQL_BACKUP_CONTAINER:-postgresql-node1}"
+BACKUP_DIR="${POSTGRESQL_BACKUP_DIR:-/nas-1/postgresql}"
+CHECK_DB="analytics_restore_check"
+
+if ! mountpoint -q "$BACKUP_DIR"; then
+    echo "refusing to restore-test: $BACKUP_DIR is not a mount point" >&2
+    exit 1
+fi
+
+if [[ "$(docker inspect --format '{{.State.Running}}' "$CONTAINER")" != "true" ]]; then
+    echo "container $CONTAINER is not running" >&2
+    exit 1
+fi
+
+ARCHIVE="$(find "$BACKUP_DIR" -maxdepth 1 -name 'analytics-*.dump' -print | sort | tail -n 1)"
+if [[ -z "$ARCHIVE" ]]; then
+    echo "no analytics-*.dump found in $BACKUP_DIR" >&2
+    exit 1
+fi
+
+if [[ -f "$ARCHIVE.sha256" ]]; then
+    (
+        cd "$BACKUP_DIR"
+        sha256sum -c "$(basename "$ARCHIVE").sha256"
+    )
+fi
+
+DB_USER="$(docker exec "$CONTAINER" printenv POSTGRES_USER)"
+
+docker exec "$CONTAINER" createdb -U "$DB_USER" "$CHECK_DB"
+trap 'docker exec "$CONTAINER" dropdb -U "$DB_USER" --if-exists "$CHECK_DB"' EXIT
+
+docker exec -i "$CONTAINER" pg_restore -U "$DB_USER" -d "$CHECK_DB" --no-owner \
+    < "$ARCHIVE"
+
+TABLES="$(docker exec "$CONTAINER" psql -U "$DB_USER" -d "$CHECK_DB" -At \
+    -c "select count(*) from information_schema.tables where table_schema = 'trading_analytics'")"
+if [[ "${TABLES:-0}" -lt 1 ]]; then
+    echo "restore check failed: no trading_analytics tables in $ARCHIVE" >&2
+    exit 1
+fi
+
+echo "restore check passed: $ARCHIVE ($TABLES trading_analytics tables)"
