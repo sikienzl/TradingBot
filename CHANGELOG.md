@@ -94,6 +94,18 @@ a version heading is assigned when a release is prepared.
   report used to pick extraction targets) and `scripts/ci_env_sim.py` (runs
   pytest with `talib`/`torch`/`transformers`/`onnx` hidden, reproducing the slim
   CI test job locally).
+- `src/exit_policy.py`, the exit-decision collaborator that used to be eight
+  methods inside `src/trading_bot.py`: the dynamic stop-level maths
+  (`effective_stop_loss_level` with trailing stop and break-even protection), the
+  two trade-class predicates (`is_rules_uptrend_trade`,
+  `is_downtrend_reversal_trade`), the partial take-profit sell
+  (`maybe_partial_take_profit`) and the four ranked exit-reason checks
+  (`partial_tp_remainder_exit_reason`, `downtrend_reversal_exit_reason`,
+  `uptrend_rules_exit_reason`, `core_exit_reason`). The config and portfolio are
+  injected and the bot-owned pieces — the trade executor, the public-paper-mode
+  probe and the clock — arrive as arguments or callbacks, so every exit branch is
+  now unit-testable without constructing a bot. Covered by 41 new tests in
+  `tests/test_exit_policy.py`.
 
 ### Changed
 
@@ -147,6 +159,22 @@ a version heading is assigned when a release is prepared.
   The entry loop no longer re-assigns `available_funds_for_trade` and
   `current_open_trades_count` after each buy; both are only read by the outer
   log branches, which are evaluated before the loop, so the values were dead.
+- `src/trading_bot.py` shrank from 4026 to 3931 lines now that the exit policy
+  lives in `src/exit_policy.py`. `_effective_stop_loss_level()`,
+  `_is_rules_uptrend_trade()`, `_is_downtrend_reversal_trade()`,
+  `_maybe_partial_take_profit()`, `_partial_tp_remainder_exit_reason()`,
+  `_downtrend_reversal_exit_reason()`, `_uptrend_rules_exit_reason()` and
+  `_core_exit_reason()` are thin delegators with the previous signatures, so the
+  trade loop, the ATR cache and the journal stay with the bot and the existing
+  tests that call bot methods still apply. The architecture ceiling was
+  ratcheted to the new size and `exit_policy` was registered as a layer-1 module.
+  The old and new code were compared over 53 scenarios (the base / trailing /
+  break-even stop branches, missing and non-positive buy prices, every
+  partial-take-profit gate including the public-paper and live bookkeeping, all
+  remainder timeout and weak-signal signals, the full downtrend-reversal and
+  uptrend-rules hold/PnL/signal matrices with their per-coin overrides, and every
+  core stop-loss, take-profit, max-hold and signal branch) and produced identical
+  return values, log lines and portfolio state.
 
 ### Fixed
 
