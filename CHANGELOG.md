@@ -75,6 +75,17 @@ a version heading is assigned when a release is prepared.
   the narrow `except (IndexError, SyntaxError, ValueError)` did not catch. It was
   masked until the bare `except Exception` was narrowed. The extraction itself
   left that behaviour untouched; the defect is fixed separately below.
+- `src/execution_service.py`, the live order-execution collaborator that used to
+  be four blocks inside `src/trading_bot.py`: the fill-details validator
+  (`order_fill_details`), the fill-confirmation state machine
+  (`confirm_order_fill`, with the terminal-status set now a named constant), the
+  real-money market-order path (`execute_real_trade` plus its buy and sell
+  halves) and the candidate entry loop (`open_new_positions`). The ccxt exchange
+  is injected and every piece of bot-owned state — portfolio, config,
+  performance counters, journal, cooldown and balance bookkeeping — arrives as an
+  argument or through the `RealTradeHooks` / `EntryHooks` callbacks, so the money
+  paths are now unit-testable against a stub exchange without importing the bot.
+  Covered by 26 new tests in `tests/test_execution_service.py`.
 
 ### Changed
 
@@ -113,6 +124,21 @@ a version heading is assigned when a release is prepared.
   no-candidates summary moved to its own `_log_no_entry_candidates()` method.
   Cyclomatic complexity of `_select_entry_candidates()` dropped from 52 to 13,
   and `src/trading_bot.py` shrank from 4581 to 4306 lines.
+- `src/trading_bot.py` shrank from 4306 to 4026 lines now that the execution
+  logic lives in `src/execution_service.py`. `_confirm_order_fill()`,
+  `_execute_real_trade()` and `_open_new_positions()` are thin delegators with
+  the previous signatures, `_order_fill_details` is re-exported from the new
+  module, and the risk gates, position sizing, momentum filter and cooldown
+  bookkeeping stay with the bot — so the existing tests that patch bot methods
+  still apply. The architecture ceiling was ratcheted to the new size and
+  `execution_service` was registered as a layer-1 module. The old and new code
+  were compared over 15 scenarios (partial and full sells, an unconfirmable
+  fill, the exchange minimum, all five ccxt error classes, every entry-loop
+  blocked reason, the guardrail / max-trades / insufficient-cash branches) and
+  produced identical log lines, hook call order and portfolio/performance state.
+  The entry loop no longer re-assigns `available_funds_for_trade` and
+  `current_open_trades_count` after each buy; both are only read by the outer
+  log branches, which are evaluated before the loop, so the values were dead.
 
 ### Fixed
 
