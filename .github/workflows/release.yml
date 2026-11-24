@@ -155,7 +155,8 @@ jobs:
           VERSION="${{ steps.version.outputs.VERSION }}"
           python .github/scripts/cluster_release.py "$VERSION" dist/cluster \
             --commit "${GITHUB_SHA}"
-          sha256sum --check "dist/cluster/trading-cluster-${VERSION}.tar.gz.sha256"
+          # The sidecar lists the bare file name, so verify from its directory.
+          ( cd "dist/cluster" && sha256sum --check "trading-cluster-${VERSION}.tar.gz.sha256" )
           echo "CLUSTER_PKG=dist/cluster/trading-cluster-${VERSION}.tar.gz" >> "$GITHUB_ENV"
 
       - name: Generate release notes
