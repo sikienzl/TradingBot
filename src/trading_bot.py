@@ -37,6 +37,25 @@ from src.entry_selection import (
     log_fallback_entry_diagnostics as _entry_log_fallback_diagnostics,
 )
 from src.entry_selection import select_entry_candidates as _entry_select_candidates
+from src.execution_service import (
+    EntryHooks as _EntryHooks,
+)
+from src.execution_service import (
+    RealTradeHooks as _RealTradeHooks,
+)
+from src.execution_service import (
+    confirm_order_fill as _service_confirm_order_fill,
+)
+from src.execution_service import (
+    execute_real_trade as _service_execute_real_trade,
+)
+from src.execution_service import (
+    open_new_positions as _service_open_new_positions,
+)
+from src.execution_service import (
+    # Re-exported: tests import src.trading_bot._order_fill_details.
+    order_fill_details as _order_fill_details,  # noqa: F401
+)
 from src.indicator_service import (
     calculate_atr,
     calculate_macd,
@@ -142,40 +161,6 @@ def _mask_secret(value: str) -> str:
     if len(value) <= 8:
         return "*" * len(value)
     return f"{value[:4]}...{value[-4:]}"
-
-
-def _order_fill_details(
-    order: dict[str, Any],
-    requested_amount: float,
-    fallback_price: float,
-) -> tuple[float, float, float]:
-    """Returns validated filled amount, average price, and quote cost."""
-    if not isinstance(order, dict):
-        raise TypeError("Exchange order response is not an object.")
-    status = str(order.get("status", "")).lower()
-    filled_value = order.get("filled")
-    if filled_value is None and status in {"closed", "filled"}:
-        filled_value = order.get("amount", requested_amount)
-    if filled_value is None:
-        raise ValueError("Exchange order response does not report a filled amount.")
-
-    filled = float(filled_value)
-    average = float(order.get("average") or order.get("price") or fallback_price)
-    cost = float(order.get("cost") or filled * average)
-    if (
-        not math.isfinite(filled)
-        or not math.isfinite(average)
-        or not math.isfinite(cost)
-        or not math.isfinite(requested_amount)
-        or not math.isfinite(fallback_price)
-        or filled <= 0
-        or average <= 0
-        or cost <= 0
-        or requested_amount <= 0
-        or filled > requested_amount + max(1e-12, requested_amount * 1e-8)
-    ):
-        raise ValueError("Exchange order response contains invalid fill details.")
-    return filled, average, cost
 
 
 def _currency_aliases(currency: str) -> list[str]:
@@ -2758,69 +2743,15 @@ class CryptoTradingBot:
         requested_amount: float,
         fallback_price: float,
     ) -> tuple[float, float, float]:
-        if not isinstance(order, dict):
-            raise TypeError("Exchange order response is not an object.")
-        status = str(order.get("status", "")).lower()
-        terminal_statuses = {"closed", "filled", "canceled", "cancelled", "expired", "rejected"}
-        if status in terminal_statuses:
-            try:
-                return _order_fill_details(order, requested_amount, fallback_price)
-            except (TypeError, ValueError) as exc:
-                order_id = order.get("id")
-                if not order_id:
-                    raise ValueError(
-                        "Terminal order response has no usable fill details or order ID."
-                    ) from exc
-        else:
-            order_id = order.get("id")
-            if not order_id or self.exchange is None:
-                raise ValueError(
-                    "Unconfirmed order response has no usable order ID."
-                )
-
-        cancel_error = None
-        if status not in terminal_statuses:
-            try:
-                self.exchange.cancel_order(order_id, symbol)
-            except (ccxt.OrderNotFound, ccxt.InvalidOrder):
-                pass
-            except (ccxt.NetworkError, ccxt.ExchangeError) as exc:
-                cancel_error = exc
-
-        try:
-            refreshed_order = self.exchange.fetch_order(order_id, symbol)
-        except (ccxt.NetworkError, ccxt.ExchangeError) as exc:
-            raise ValueError(
-                f"Could not refresh order {order_id} to confirm its final state."
-            ) from exc
-
-        if not isinstance(refreshed_order, dict):
-            raise TypeError(f"Order {order_id} refresh returned an invalid response.")
-        refreshed_status = str(refreshed_order.get("status", "")).lower()
-        if refreshed_status not in terminal_statuses:
-            error = ValueError(
-                f"Order {order_id} remains non-terminal ({refreshed_status or 'unknown'}); "
-                "fill state is not safe to account."
-            )
-            if cancel_error:
-                raise error from cancel_error
-            raise error
-
-        try:
-            return _order_fill_details(refreshed_order, requested_amount, fallback_price)
-        except (TypeError, ValueError) as exc:
-            if status in terminal_statuses:
-                try:
-                    return _order_fill_details(order, requested_amount, fallback_price)
-                except (TypeError, ValueError):
-                    pass
-            else:
-                raise ValueError(
-                    f"Order {order_id} has no usable confirmed fill details."
-                ) from exc
-            raise ValueError(
-                f"Order {order_id} has no usable confirmed fill details."
-            ) from exc
+        """Delegates to :func:`src.execution_service.confirm_order_fill`."""
+        return _service_confirm_order_fill(
+            self.exchange,
+            order,
+            symbol,
+            requested_amount,
+            fallback_price,
+            logger=logger,
+        )
 
     def _execute_trade(
         self,
@@ -3206,127 +3137,31 @@ class CryptoTradingBot:
         recommendation: str = 'HOLD',
         reason: str = '',
     ):
-        """Live exchange trade execution (ccxt market orders)."""
-        if self.exchange is None:
-            logger.error(
-                "Real trade cannot be executed in simulation mode or without an exchange.")
-            return False
-
-        symbol = f"{coin}/{self.config.base_currency}"
-        try:
-            market = self.exchange.market(symbol)
-            min_amount_base = market['limits']['amount']['min'] * \
-                price if market['limits']['amount']['min'] else 0
-            if amount_in_base_currency < min_amount_base and min_amount_base > 0:
-                logger.warning(
-                    f"Trade amount {amount_in_base_currency:.2f} {self.config.base_currency} for {coin} is below the minimum of {min_amount_base:.2f} {self.config.base_currency}. Trade not executed.")
-                return False
-
-            if action == "buy":
-                order = self.exchange.create_market_buy_order(
-                    symbol, amount_in_base_currency / price)
-                try:
-                    filled, average, cost = self._confirm_order_fill(
-                        order, symbol, amount_in_base_currency / price, price
-                    )
-                except (TypeError, ValueError) as exc:
-                    logger.error("Unable to confirm BUY fill for %s: %s", coin, exc)
-                    return False
-                logger.info(
-                    f"✅ REAL TRADE (BUY): {filled:.4f} {coin} @ {average:.4f} {self.config.base_currency} (cost: {cost:.2f} {self.config.base_currency}, ID: {order.get('id', 'n/a')})")
-                self.portfolio.add_trade(
-                    coin,
-                    average,
-                    filled,
-                    cost,
-                    signal_source=signal_source,
-                    signal_confidence=signal_confidence,
-                    recommendation=recommendation,
-                )
-                self.performance['buys'] += 1
-                self.performance['by_source'][signal_source]['buys'] += 1
-                self._register_buy_timestamp()
-                self._append_trade_journal({
-                    'coin': coin,
-                    'action': 'buy',
-                    'price': average,
-                    'amount_coin': filled,
-                    'amount_base': cost,
-                    'signal_source': signal_source,
-                    'signal_confidence': signal_confidence,
-                    'recommendation': recommendation,
-                    'reason': reason,
-                    'dry_run': False,
-                })
-            elif action == "sell":
-                if coin not in self.portfolio.holdings or self.portfolio.holdings[coin] < amount_in_base_currency / price:
-                    logger.warning(
-                        f"Insufficient {coin} ({self.portfolio.holdings.get(coin, 0):.4f}) in portfolio to sell {amount_in_base_currency / price:.4f} {coin}.")
-                    return False
-                order = self.exchange.create_market_sell_order(
-                    symbol, amount_in_base_currency / price)
-                try:
-                    sold_amount_coin, average, cost = self._confirm_order_fill(
-                        order, symbol, amount_in_base_currency / price, price
-                    )
-                except (TypeError, ValueError) as exc:
-                    logger.error("Unable to confirm SELL fill for %s: %s", coin, exc)
-                    return False
-                logger.info(
-                    f"✅ REAL TRADE (SELL): {sold_amount_coin:.4f} {coin} @ {average:.4f} {self.config.base_currency} (proceeds: {cost:.2f} {self.config.base_currency}, ID: {order.get('id', 'n/a')})")
-
-                entry_trade = self.portfolio.open_trades.get(coin, {})
-                original_amount_coin = float(
-                    entry_trade.get('amount_coin', amount_in_base_currency / price))
-                remaining_open_amount = max(
-                    0.0, original_amount_coin - sold_amount_coin)
-                remaining_ratio = (
-                    remaining_open_amount / original_amount_coin
-                    if original_amount_coin > 0 else 0.0
-                )
-                pnl_base, pnl_pct, hold_seconds = self._record_close_performance(
-                    entry_trade, average, sold_amount_coin)
-                mfe_pct, mae_pct = self._trade_excursion_metrics(entry_trade)
-                self._append_trade_journal({
-                    'coin': coin,
-                    'action': 'sell',
-                    'price': average,
-                    'amount_coin': sold_amount_coin,
-                    'amount_base': cost,
-                    'pnl_base': pnl_base,
-                    'pnl_pct': pnl_pct,
-                    'hold_seconds': hold_seconds,
-                    'mfe_pct': mfe_pct,
-                    'mae_pct': mae_pct,
-                    'signal_source': entry_trade.get('signal_source', 'rules'),
-                    'signal_confidence': entry_trade.get('signal_confidence', ''),
-                    'recommendation': entry_trade.get('recommendation', ''),
-                    'reason': reason,
-                    'dry_run': False,
-                })
-                self._register_sell_timestamp(coin)
-                if remaining_open_amount > 1e-12 and coin in self.portfolio.open_trades:
-                    self.portfolio.open_trades[coin]['amount_coin'] = remaining_open_amount
-                    self.portfolio.open_trades[coin]['amount_base'] = float(
-                        entry_trade.get('amount_base', 0.0)) * remaining_ratio
-                else:
-                    self.portfolio.remove_trade(coin)
-            self._update_portfolio_balance()
-            return True
-        except ccxt.InsufficientFunds as e:
-            logger.error(f"Insufficient funds for {action} {coin}: {e}")
-            return False
-        except ccxt.InvalidOrder as e:
-            logger.error(
-                f"Invalid order parameter for {action} {coin}: {e}")
-            return False
-        except (ccxt.NetworkError, ccxt.ExchangeError) as e:
-            logger.error(
-                f"Error executing trade ({action} {coin}): {e}")
-            return False
-        except ccxt.BaseError as e:
-            logger.error(f"Exchange error executing trade ({action} {coin}): {e}")
-            return False
+        """Delegates to :func:`src.execution_service.execute_real_trade`."""
+        return _service_execute_real_trade(
+            self.exchange,
+            self.config,
+            self.portfolio,
+            self.performance,
+            _RealTradeHooks(
+                confirm_fill=self._confirm_order_fill,
+                record_close_performance=self._record_close_performance,
+                trade_excursion_metrics=self._trade_excursion_metrics,
+                append_trade_journal=self._append_trade_journal,
+                register_buy_timestamp=self._register_buy_timestamp,
+                register_sell_timestamp=self._register_sell_timestamp,
+                update_portfolio_balance=self._update_portfolio_balance,
+            ),
+            coin,
+            action,
+            price,
+            amount_in_base_currency,
+            signal_source=signal_source,
+            signal_confidence=signal_confidence,
+            recommendation=recommendation,
+            reason=reason,
+            logger=logger,
+        )
 
     def _maybe_partial_take_profit(
         self,
@@ -3991,150 +3826,35 @@ class CryptoTradingBot:
         top_buy_recommendations: list[str],
         portfolio_value_live: float,
     ) -> None:
-        """Open new positions for the selected buy candidates within risk limits."""
-        # Step 5: Trade logic - open new positions
-        current_open_trades_count = len(self.portfolio.open_trades)
-        available_funds_for_trade = self.portfolio.cash
+        """Delegates to :func:`src.execution_service.open_new_positions`."""
         effective_trade_amount = self._effective_trade_amount(
             portfolio_value_live)
         effective_max_open_trades = self._effective_max_open_trades(
             portfolio_value_live)
-        min_required_cash = self.config.min_trade_amount if self.config.allow_partial_trades else effective_trade_amount
         can_open_positions, block_reason = self._can_open_new_positions(
             portfolio_value_live)
-
-        if not can_open_positions:
-            logger.warning(
-                f"⛔ Risk guardrail blocking new positions: {block_reason}")
-        elif available_funds_for_trade >= min_required_cash and current_open_trades_count < effective_max_open_trades:
-            logger.info(
-                f"Attempting to open new positions. Available: {available_funds_for_trade:.2f} {self.config.base_currency}, Open trades: {current_open_trades_count}/{effective_max_open_trades}, Min amount: {min_required_cash:.2f} {self.config.base_currency}, Effective trade amount: {effective_trade_amount:.2f} {self.config.base_currency}.")
-            blocked_buy_attempts: list[dict[str, Any]] = []
-            successful_buy_count = 0
-            for coin in top_buy_recommendations:
-                # Only trade if no position is already open
-                if coin not in self.portfolio.open_trades and coin not in self.portfolio.holdings:
-                    coin_data = market_analysis.get(coin, {})
-                    attempt_meta = {
-                        'coin': coin,
-                        'signal_source': coin_data.get('signal_source', 'rules'),
-                        'score': coin_data.get('score', 0),
-                        'recommendation': coin_data.get('recommendation', 'HOLD'),
-                        'position_size_text': 'n/a',
-                        'cash_text': f"{self.portfolio.cash:.2f}",
-                        'cooldown_text': 'n/a',
-                    }
-                    price_data = current_market_data.get(coin)
-                    if price_data:
-                        current_price = price_data['price']
-                        atr = self._get_atr_for_coin(coin, period=14)
-                        position_size = self._compute_entry_position_size(
-                            coin, current_price, atr,
-                            portfolio_value_live, effective_trade_amount,
-                            attempt_meta)
-
-                        if position_size < self.config.min_trade_amount:
-                            logger.info(
-                                f"Skipping {coin}: effective trade amount {position_size:.2f} {self.config.base_currency} is below MIN_TRADE_AMOUNT {self.config.min_trade_amount:.2f}.")
-                            blocked_buy_attempts.append({
-                                **attempt_meta,
-                                'reason': (
-                                    'below_min_trade_amount '
-                                    f'({position_size:.2f} < {self.config.min_trade_amount:.2f})'
-                                ),
-                            })
-                            continue
-
-                        if self.portfolio.cash >= position_size:
-                            logger.info(
-                                f"ℹ️ Attempting to buy {coin}...")
-                            signal_source = coin_data.get(
-                                'signal_source', 'rules')
-                            signal_confidence = coin_data.get(
-                                'signal_confidence')
-                            passes_filter, filter_reason = self._passes_entry_momentum_filter(
-                                coin_data)
-                            if not passes_filter:
-                                logger.info(
-                                    f"⛔ Momentum filter blocked entry for {coin}: {filter_reason}")
-                                blocked_buy_attempts.append({
-                                    **attempt_meta,
-                                    'reason': filter_reason,
-                                })
-                                continue
-                            effective_cooldown, cooldown_mode = self._resolve_reentry_cooldown_seconds(
-                                current_price, atr)
-                            in_cooldown, cooldown_remaining = self._is_coin_in_reentry_cooldown(
-                                coin, cooldown_seconds=effective_cooldown)
-                            if in_cooldown:
-                                cooldown_text = (
-                                    f"{cooldown_remaining}s remaining "
-                                    f"(effective={effective_cooldown}s, {cooldown_mode})"
-                                )
-                                logger.info(
-                                    f"⛔ Re-entry cooldown active for {coin}: {cooldown_remaining}s remaining "
-                                    f"(effective={effective_cooldown}s, base={self.config.reentry_cooldown_seconds}s, {cooldown_mode})")
-                                blocked_buy_attempts.append({
-                                    **attempt_meta,
-                                    'reason': 'reentry_cooldown_active',
-                                    'cooldown_text': cooldown_text,
-                                })
-                                continue
-                            if self._execute_trade(
-                                coin,
-                                "buy",
-                                current_price,
-                                position_size,
-                                atr=atr,
-                                signal_source=signal_source,
-                                signal_confidence=signal_confidence,
-                                recommendation=coin_data.get(
-                                    'recommendation', 'HOLD'),
-                                reason='ENTRY',
-                            ):
-                                successful_buy_count += 1
-                                # Update available capital
-                                available_funds_for_trade = self.portfolio.cash
-                                current_open_trades_count = len(
-                                    self.portfolio.open_trades)
-                                if current_open_trades_count >= effective_max_open_trades:
-                                    logger.info(
-                                        "Maximum number of open trades reached, stopping further buys.")
-                                    break
-                            else:
-                                blocked_buy_attempts.append({
-                                    **attempt_meta,
-                                    'reason': 'execute_trade_failed',
-                                })
-                        else:
-                            logger.warning(
-                                f"Insufficient available funds ({self.portfolio.cash:.2f} {self.config.base_currency}) for a trade of {position_size:.2f} {self.config.base_currency} for {coin}.")
-                            blocked_buy_attempts.append({
-                                **attempt_meta,
-                                'reason': (
-                                    'insufficient_available_funds '
-                                    f'({self.portfolio.cash:.2f} < {position_size:.2f})'
-                                ),
-                            })
-                    else:
-                        logger.warning(
-                            f"Price data for {coin} not found, cannot buy.")
-                        blocked_buy_attempts.append({
-                            **attempt_meta,
-                            'reason': 'missing_price_data',
-                        })
-                else:
-                    logger.debug(
-                        f"{coin} already in portfolio or open position.")
-            if top_buy_recommendations and successful_buy_count == 0:
-                self._log_blocked_buy_attempt_candidates(
-                    blocked_buy_attempts)
-        elif current_open_trades_count >= effective_max_open_trades:
-            logger.info(
-                f"Maximum number of open trades ({effective_max_open_trades}) reached. No new buys.")
-        else:
-            logger.info(
-                f"Insufficient available funds ({available_funds_for_trade:.2f} {self.config.base_currency}) for minimum trade ({min_required_cash:.2f} {self.config.base_currency}).")
+        _service_open_new_positions(
+            self.config,
+            self.portfolio,
+            _EntryHooks(
+                get_atr=self._get_atr_for_coin,
+                compute_position_size=self._compute_entry_position_size,
+                passes_momentum_filter=self._passes_entry_momentum_filter,
+                resolve_cooldown_seconds=self._resolve_reentry_cooldown_seconds,
+                in_reentry_cooldown=self._is_coin_in_reentry_cooldown,
+                execute_trade=self._execute_trade,
+                log_blocked_attempts=self._log_blocked_buy_attempt_candidates,
+            ),
+            current_market_data,
+            market_analysis,
+            top_buy_recommendations,
+            portfolio_value_live,
+            effective_trade_amount=effective_trade_amount,
+            effective_max_open_trades=effective_max_open_trades,
+            can_open_positions=can_open_positions,
+            block_reason=block_reason,
+            logger=logger,
+        )
 
 
     def run(self):
