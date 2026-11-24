@@ -25,6 +25,18 @@ from dotenv import load_dotenv  # noqa: F401  (re-exported: tests patch src.trad
 
 from src.analytics import PostgresAnalyticsWriter
 from src.backtesting import Backtester, simple_strategy
+from src.bot_bootstrap import (
+    load_ml_predictor as _bootstrap_load_ml_predictor,
+)
+from src.bot_bootstrap import (
+    load_tabular_predictor as _bootstrap_load_tabular_predictor,
+)
+from src.bot_bootstrap import (
+    log_startup_details as _bootstrap_log_startup_details,
+)
+from src.bot_bootstrap import (
+    validate_startup_config as _bootstrap_validate_startup_config,
+)
 from src.bot_config import BotConfig
 from src.coin_analysis import (
     analyze_coin as _coin_analysis_analyze_coin,
@@ -243,19 +255,7 @@ class CryptoTradingBot:
 
     def __init__(self, config: BotConfig):
         self.config = config
-        if config.simulation_initial_balance_from_kraken and (
-            not config.dry_run or config.exchange_name != 'kraken'
-            or config.base_currency != 'EUR'
-        ):
-            raise ValueError(
-                "Kraken simulation initialization requires DRY_RUN, Kraken and EUR"
-            )
-        if (config.simulation_initial_balance_from_kraken and not config.simulate_data
-                and (config.api_key or config.api_secret)):
-            raise ValueError(
-                "Public-market paper trading requires a previously initialized portfolio "
-                "and no Kraken API credentials"
-            )
+        _bootstrap_validate_startup_config(config)
         self.run_id = os.getenv('TRADING_RUN_ID', '').strip() or uuid.uuid4().hex
         self.config_hash = _config_fingerprint(config)
         self._journal_fields = list(_TRADE_JOURNAL_FIELDS)
@@ -280,20 +280,7 @@ class CryptoTradingBot:
         self.last_sell_timestamps_utc: dict[str, datetime] = {}
         self.consecutive_losses: int = 0
         self.buy_pause_until_utc: datetime | None = None
-        logger.info(
-            "Trading run started: run_id=%s config_hash=%s dry_run=%s simulated_data=%s",
-            self.run_id,
-            self.config_hash,
-            config.dry_run,
-            config.simulate_data,
-        )
-        if config.dry_run:
-            logger.info(
-                "DRY-RUN execution cost mode=%s fee_rate=%.6f slippage_rate=%.6f",
-                'net_costs' if config.dry_run_costs_enabled else 'gross_legacy',
-                config.dry_run_fee_rate if config.dry_run_costs_enabled else 0.0,
-                config.dry_run_slippage_rate if config.dry_run_costs_enabled else 0.0,
-            )
+        _bootstrap_log_startup_details(logger, config, self.run_id, self.config_hash)
         self.exchange = self._initialize_exchange()
         self._simulation_engine = SimulationEngine(
             config, iteration_provider=lambda: self.iteration)
@@ -312,57 +299,10 @@ class CryptoTradingBot:
                     f'{coin}/{config.base_currency}' for coin in self.all_coins]
 
         # ML model loading (optional, activated via USE_ML_MODEL=True)
-        self.ml_predictor = None
-        if self.config.use_ml_model:
-            try:
-                from src.predict import TradingModelPredictor
-                self.ml_predictor = TradingModelPredictor(
-                    self.config.model_path)
-                logger.info(
-                    f"🤖 ML model loaded from '{self.config.model_path}'.")
-            except (
-                ImportError,
-                OSError,
-                RuntimeError,
-                TypeError,
-                ValueError,
-                KeyError,
-            ) as e:
-                logger.warning(
-                    f"ML model could not be loaded: {e}. Using rule-based analysis only.")
+        self.ml_predictor = _bootstrap_load_ml_predictor(logger, self.config)
 
-        self.tabular_predictor: Any = None
-        if self.config.use_tabular_model:
-            if self.config.tabular_model_backend == 'hailo':
-                from src.predict_hailo_remote import HailoRemotePredictor
-                self.tabular_predictor = HailoRemotePredictor(
-                    service_url=self.config.hailo_service_url,
-                    api_token=self.config.hailo_api_token,
-                    timeout_seconds=self.config.hailo_timeout_seconds,
-                )
-                logger.info(
-                    "Remote Hailo inference configured at %s",
-                    self.config.hailo_service_url,
-                )
-            else:
-                try:
-                    from src.predict_catboost import CatBoostTradingPredictor
-                    self.tabular_predictor = CatBoostTradingPredictor(
-                        self.config.tabular_model_path,
-                        research_signal_path=self.config.tabular_research_signal_path,
-                    )
-                    logger.info(
-                        f"📊 CatBoost model loaded from '{self.config.tabular_model_path}'.")
-                except (
-                    ImportError,
-                    OSError,
-                    RuntimeError,
-                    TypeError,
-                    ValueError,
-                    KeyError,
-                ) as e:
-                    logger.warning(
-                        f"CatBoost model could not be loaded: {e}.")
+        self.tabular_predictor: Any = _bootstrap_load_tabular_predictor(
+            logger, self.config)
 
         if self._public_paper_mode():
             if not self.config.performance_log_enabled:
