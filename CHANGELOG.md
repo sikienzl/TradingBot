@@ -125,6 +125,17 @@ a version heading is assigned when a release is prepared.
   path — including the sell veto, the gated-signal diagnostics and the Hailo
   failure suppression — is unit-testable without an exchange, a database or a
   model. Covered by 36 new tests in `tests/test_coin_analysis.py`.
+- `src/bot_bootstrap.py`, the startup wiring that used to be inline in
+  `CryptoTradingBot.__init__()` (cyclomatic complexity 30):
+  `validate_startup_config` (the two Kraken-simulation / public-paper start-up
+  errors), `log_startup_details` (the run banner and the DRY-RUN execution-cost
+  line), `load_ml_predictor` (the optional LLM predictor with its import-failure
+  fallback) and `load_tabular_predictor` (the CatBoost model, or the remote
+  Hailo backend, with the same fallback). The logger and the config are
+  injected, so the whole start-up contract — including which errors abort the
+  process and which are swallowed into rule-only mode — is unit-testable
+  without an exchange. Covered by 31 new tests in
+  `tests/test_bot_bootstrap.py`.
 
 ### Changed
 
@@ -222,6 +233,20 @@ a version heading is assigned when a release is prepared.
   nine tabular-predictor and config combinations including the Hailo failure
   path) and produced identical return values, raised exceptions and log output;
   the moved bodies are also AST-identical apart from the injected collaborators.
+- `src/trading_bot.py` shrank from 3476 to 3416 lines now that the start-up
+  wiring lives in `src/bot_bootstrap.py`. `__init__()` keeps the exchange,
+  market-info, journal, paper-trade recovery, simulation-portfolio and
+  auto-tune steps — everything the existing tests patch — and only delegates
+  the two config validations, the start-up logging and the two predictor
+  loads. The architecture ceiling was ratcheted to the new size and
+  `bot_bootstrap` was registered as a layer-1 module. The old and new code were
+  compared over 16 start-up scenarios (both validation errors and their
+  boundary combinations, the banner with both cost modes, the ML and CatBoost
+  loads with success, six swallowed error types and a propagating one, and the
+  Hailo backend with its non-swallowed failures) and produced identical
+  exceptions, log lines and bot attribute state; the moved bodies are also
+  AST-identical apart from the `self.config` to `config` and
+  `self.run_id`/`self.config_hash` to local renames.
 
 ### Fixed
 
