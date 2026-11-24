@@ -26,6 +26,21 @@ from dotenv import load_dotenv  # noqa: F401  (re-exported: tests patch src.trad
 from src.analytics import PostgresAnalyticsWriter
 from src.backtesting import Backtester, simple_strategy
 from src.bot_config import BotConfig
+from src.coin_analysis import (
+    analyze_coin as _coin_analysis_analyze_coin,
+)
+from src.coin_analysis import (
+    apply_ml_signal as _coin_analysis_apply_ml_signal,
+)
+from src.coin_analysis import (
+    build_tabular_features as _coin_analysis_build_tabular_features,
+)
+from src.coin_analysis import (
+    recommendation_bias as _coin_analysis_recommendation_bias,
+)
+from src.coin_analysis import (
+    should_apply_tabular_signal as _coin_analysis_should_apply_tabular_signal,
+)
 from src.entry_filters import (
     entry_volatility_guard as _entry_filters_entry_volatility_guard,
 )
@@ -95,12 +110,7 @@ from src.exit_policy import (
 from src.exit_policy import (
     uptrend_rules_exit_reason as _exit_uptrend_rules_exit_reason,
 )
-from src.indicator_service import (
-    calculate_atr,
-    calculate_macd,
-    calculate_rsi,
-    calculate_sma,
-)
+from src.indicator_service import calculate_atr
 from src.journal_guards import (
     _compute_degraded_entry_sources,
     _compute_dynamic_lossmaker_entry_pairs,
@@ -2009,12 +2019,8 @@ class CryptoTradingBot:
 
     @staticmethod
     def _recommendation_bias(recommendation: str) -> int:
-        normalized = (recommendation or '').strip().upper()
-        if normalized in {'STRONG BUY', 'BUY', 'HOLD (UP-TREND)'}:
-            return 1
-        if normalized in {'SELL', 'WEAK SELL', 'HOLD (DOWN-TREND)'}:
-            return -1
-        return 0
+        """Delegates to :func:`src.coin_analysis.recommendation_bias`."""
+        return _coin_analysis_recommendation_bias(recommendation)
 
     def _should_apply_tabular_signal(
         self,
@@ -2023,38 +2029,15 @@ class CryptoTradingBot:
         tab_decision: str,
         tab_confidence: float,
     ) -> tuple[bool, str]:
-        if tab_decision == 'kaufen' and not self.config.tabular_allow_buy_entries:
-            return False, 'buy_entries_disabled'
+        """Delegates to :func:`src.coin_analysis.should_apply_tabular_signal`."""
+        return _coin_analysis_should_apply_tabular_signal(
+            self.config,
+            rule_recommendation,
+            rule_score,
+            tab_decision,
+            tab_confidence,
+        )
 
-        required_confidence = self.config.tabular_buy_min_confidence
-        if tab_decision == 'verkaufen':
-            required_confidence = self.config.tabular_min_confidence
-
-        if tab_confidence < required_confidence:
-            return False, 'below_min_confidence'
-
-        if not self.config.tabular_source_gate_enabled:
-            return True, 'gate_disabled'
-
-        tab_bias = 1 if tab_decision == 'kaufen' else - \
-            1 if tab_decision == 'verkaufen' else 0
-        rule_bias = self._recommendation_bias(rule_recommendation)
-
-        if tab_bias == 0:
-            return False, 'neutral_tabular_signal'
-
-        if tab_bias == rule_bias:
-            return True, 'rule_confirmed'
-
-        rule_strength = abs(float(rule_score) - 50.0) / 50.0
-        advantage = tab_confidence - rule_strength
-        if (
-            tab_confidence >= self.config.tabular_override_min_confidence
-            and advantage >= self.config.tabular_override_margin
-        ):
-            return True, 'strong_override'
-
-        return False, 'gated_by_rules'
 
     def _effective_stop_loss_level(self, trade_info: dict, current_price: float, atr: float) -> float:
         """Delegates to :func:`src.exit_policy.effective_stop_loss_level`."""
@@ -2187,97 +2170,17 @@ class CryptoTradingBot:
         sma_long: float,
         atr_14: float,
     ) -> tuple[pd.DataFrame, float]:
-        """Build the tabular model feature row and return it with the MACD histogram."""
-        n = len(ohlcv_df)
-        latest = ohlcv_df.iloc[-1]
+        """Delegates to :func:`src.coin_analysis.build_tabular_features`."""
+        return _coin_analysis_build_tabular_features(
+            ohlcv_df,
+            close,
+            current_price,
+            rsi,
+            sma_short,
+            sma_long,
+            atr_14,
+        )
 
-        # MACD + signal + histogram
-        ema12 = close.ewm(span=12, adjust=False).mean()
-        ema26 = close.ewm(span=26, adjust=False).mean()
-        macd_line = ema12 - ema26
-        macd_signal_line = macd_line.ewm(span=9, adjust=False).mean()
-        _macd = float(macd_line.iloc[-1])
-        _macd_sig = float(macd_signal_line.iloc[-1])
-        _macd_hist = _macd - _macd_sig
-        macd_hist = _macd_hist
-
-        # EMAs
-        _ema20 = float(
-            close.ewm(span=20, adjust=False).mean().iloc[-1])
-        _ema50 = float(
-            close.ewm(span=50, adjust=False).mean().iloc[-1])
-        _ema200 = float(
-            close.ewm(span=200, adjust=False).mean().iloc[-1])
-
-        # Stochastic %K/%D
-        _stoch_k, _stoch_d = 50.0, 50.0
-        if n >= 17:
-            low14 = ohlcv_df['low'].rolling(14).min()
-            high14 = ohlcv_df['high'].rolling(14).max()
-            _raw_k = 100.0 * (close - low14) / (high14 - low14 + 1e-12)
-            _stoch_k = float(_raw_k.rolling(3).mean().iloc[-1])
-            _stoch_d = float(_raw_k.rolling(
-                3).mean().rolling(3).mean().iloc[-1])
-
-        # CCI 20
-        _cci = 0.0
-        if n >= 20:
-            tp = (ohlcv_df['high'] + ohlcv_df['low'] + close) / 3.0
-            tp_sma = tp.rolling(20).mean()
-            tp_mad = tp.rolling(20).apply(
-                lambda x: np.mean(np.abs(x - x.mean())), raw=True)
-            _cci = float(
-                ((tp - tp_sma) / (0.015 * tp_mad + 1e-12)).iloc[-1])
-
-        # OBV
-        if n >= 2:
-            _direction = np.sign(close.diff().fillna(0))
-            _obv = float(
-                (_direction * ohlcv_df['volume']).cumsum().iloc[-1])
-        else:
-            _obv = 0.0
-
-        # Bollinger Bands (20, 2)
-        _bb_mid = float(close.rolling(20).mean(
-        ).iloc[-1]) if n >= 20 else float(current_price)
-        _bb_std = float(close.rolling(
-            20).std().iloc[-1]) if n >= 20 else 0.0
-        _bb_upper = _bb_mid + 2.0 * _bb_std
-        _bb_lower = _bb_mid - 2.0 * _bb_std
-
-        # Return features
-        _ret1 = float(close.pct_change(1).iloc[-1]) if n >= 2 else 0.0
-        _ret3 = float(close.pct_change(3).iloc[-1]) if n >= 4 else 0.0
-        _ret6 = float(close.pct_change(6).iloc[-1]) if n >= 7 else 0.0
-        _vol6 = float(close.pct_change().rolling(
-            6).std().iloc[-1]) if n >= 7 else 0.0
-
-        row_data = pd.DataFrame([{
-            'rsi': float(rsi) if not np.isnan(rsi) else 50.0,
-            'macd': _macd,
-            'macd_signal': _macd_sig,
-            'macd_hist': _macd_hist,
-            'sma_50': float(sma_short) if not np.isnan(sma_short) else float(current_price),
-            'sma_200': float(sma_long) if not np.isnan(sma_long) else float(current_price),
-            'ema_20': _ema20,
-            'ema_50': _ema50,
-            'ema_200': _ema200,
-            'atr_14': atr_14 if math.isfinite(atr_14) else 0.0,
-            'stoch_k': _stoch_k,
-            'stoch_d': _stoch_d,
-            'cci_20': _cci,
-            'obv': _obv,
-            'bb_upper': _bb_upper,
-            'bb_middle': _bb_mid,
-            'bb_lower': _bb_lower,
-            'volume': float(latest['volume']) if 'volume' in latest else 0.0,
-            'ret_1': _ret1,
-            'ret_3': _ret3,
-            'ret_6': _ret6,
-            'vol_6': _vol6,
-        }])
-
-        return row_data, macd_hist
 
     def _apply_ml_signal(
         self,
@@ -2290,232 +2193,33 @@ class CryptoTradingBot:
         signal_source: str,
         signal_confidence,
     ) -> tuple[str, int, str, Any]:
-        """Run the optional ML predictor and weave its signal into the rule result."""
-        if self.ml_predictor is None:
-            return recommendation, score, signal_source, signal_confidence
-        try:
-            macd = calculate_macd(ohlcv_df['close'])
-            row_data = pd.DataFrame([{
-                'coin': coin,
-                'timestamp': int(ohlcv_df['timestamp'].iloc[-1].timestamp() * 1000),
-                'open': float(ohlcv_df['open'].iloc[-1]),
-                'high': float(ohlcv_df['high'].iloc[-1]),
-                'low': float(ohlcv_df['low'].iloc[-1]),
-                'close': float(current_price),
-                'volume': float(ohlcv_df['volume'].iloc[-1]),
-                'rsi': float(rsi) if not np.isnan(rsi) else 50.0,
-                'macd': float(macd) if not np.isnan(macd) else 0.0,
-            }])
-            ml_result = self.ml_predictor.predict(row_data)
-            ml_decision = ml_result['decision']
-            ml_confidence = ml_result['confidence']
-            logger.info(
-                f"  🤖 ML for {coin}: {ml_decision.upper()} "
-                f"(Confidence: {ml_confidence*100:.0f}%, "
-                f"Votes: {ml_result.get('llm_votes', {})}, "
-                f"Rule: {ml_result.get('rule', '-')})")
+        """Delegates to :func:`src.coin_analysis.apply_ml_signal`."""
+        return _coin_analysis_apply_ml_signal(
+            self.config,
+            self.ml_predictor,
+            coin,
+            ohlcv_df,
+            current_price,
+            rsi,
+            recommendation,
+            score,
+            signal_source,
+            signal_confidence,
+        )
 
-            # Ensemble: weave ML signal into score/recommendation
-            if ml_confidence >= self.config.ml_min_confidence:
-                signal_source = 'llm'
-                signal_confidence = ml_confidence
-                if ml_decision == 'kaufen':
-                    if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'HOLD (Down-Trend)']:
-                        recommendation = 'BUY'
-                        score = max(score, 70)
-                    elif recommendation in ['BUY', 'STRONG BUY']:
-                        score = min(score + int(ml_confidence * 15), 95)
-                elif ml_decision == 'verkaufen':
-                    if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'BUY', 'STRONG BUY']:
-                        recommendation = 'WEAK SELL'
-                        score = min(score, 30)
-                    elif recommendation in ['SELL', 'WEAK SELL']:
-                        score = max(score - int(ml_confidence * 10), 5)
-        except (IndexError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
-            logger.warning(f"ML prediction for {coin} failed: {e}")
-        return recommendation, score, signal_source, signal_confidence
 
     def _analyze_coin(self, coin: str, current_price: float) -> dict | None:
-        """Performs a detailed analysis for a single coin."""
-        symbol = f"{coin}/{self.config.base_currency}"
-        ohlcv_df = self._fetch_ohlcv_data(
-            symbol, timeframe=self.config.ohlcv_timeframe, limit=self.config.ohlcv_limit)
-
-        # Less tolerance for missing data
-        if ohlcv_df is None or len(ohlcv_df) < self.config.ohlcv_limit - 5:
-            logger.warning(
-                f"Insufficient historical data for {coin} for analysis. Skipping.")
-            return None
-
-        # Calculate indicators
-        rsi = calculate_rsi(ohlcv_df['close'], self.config.rsi_period)
-        sma_short = calculate_sma(
-            ohlcv_df['close'], self.config.sma_period_short)
-        sma_long = calculate_sma(
-            ohlcv_df['close'], self.config.sma_period_long)
-        close = ohlcv_df['close']
-        ema_20 = float(close.ewm(span=20, adjust=False).mean().iloc[-1])
-        ret_1 = float(close.pct_change(
-            1).iloc[-1]) if len(ohlcv_df) >= 2 else 0.0
-        ret_3 = float(close.pct_change(
-            3).iloc[-1]) if len(ohlcv_df) >= 4 else 0.0
-
-        # Simple strategy based on indicators
-        recommendation, score = get_rule_recommendation(
-            rsi, sma_short, sma_long, current_price
-        )
-        signal_source = 'rules'
-        signal_confidence = None
-        tab_buy_proba = None
-        tab_hold_proba = None
-        tab_sell_proba = None
-        tabular_sell_veto = False
-        macd_hist = None
-        atr_14 = float(calculate_atr(ohlcv_df, 14))
-        atr_pct = (
-            atr_14 / current_price
-            if math.isfinite(atr_14) and math.isfinite(current_price) and current_price > 0
-            else None
+        """Delegates to :func:`src.coin_analysis.analyze_coin`."""
+        return _coin_analysis_analyze_coin(
+            self.config,
+            self._fetch_ohlcv_data,
+            self.ml_predictor,
+            self.tabular_predictor,
+            coin,
+            current_price,
+            rule_recommender=get_rule_recommendation,
         )
 
-        rule_recommendation = recommendation
-        rule_score = score
-
-        # ML model analysis (optional, only if loaded and data is valid)
-        recommendation, score, signal_source, signal_confidence = (
-            self._apply_ml_signal(
-                coin, ohlcv_df, current_price, rsi, recommendation, score,
-                signal_source, signal_confidence,
-            )
-        )
-
-        # Fast tabular model analysis (optional)
-        if self.tabular_predictor is not None:
-            try:
-                row_data, macd_hist = self._build_tabular_features(
-                    ohlcv_df, close, current_price, rsi, sma_short, sma_long,
-                    atr_14,
-                )
-                tab_result = self.tabular_predictor.predict(
-                    row_data, confidence_threshold=self.config.tabular_min_confidence)
-                tab_decision = tab_result.get('decision', 'halten')
-                tab_confidence = float(tab_result.get('confidence', 0.0))
-                tab_proba = tab_result.get('proba', {})
-                tab_sell_proba = float(tab_proba.get('verkaufen', 0.0))
-                tab_hold_proba = float(tab_proba.get('halten', 0.0))
-                tab_buy_proba = float(tab_proba.get('kaufen', 0.0))
-                model_name = self.config.tabular_model_backend.upper()
-                logger.info(
-                    f"  📊 {model_name} for {coin}: {tab_decision.upper()} "
-                    f"(Confidence: {tab_confidence*100:.0f}%, Proba: {tab_proba})")
-
-                # A decisive tabular SELL is a separate veto; HOLD or low-confidence
-                # predictions are not treated as sell evidence.
-                if (
-                    self.config.tabular_block_on_sell
-                    and tab_decision == 'verkaufen'
-                    and tab_confidence >= max(
-                        self.config.tabular_min_confidence,
-                        self.config.tabular_sell_block_min_proba,
-                    )
-                    and tab_sell_proba >= self.config.tabular_sell_block_min_proba
-                    and recommendation in ['HOLD', 'HOLD (Up-Trend)', 'HOLD (Down-Trend)', 'BUY', 'STRONG BUY']
-                ):
-                    tabular_sell_veto = True
-                    recommendation = 'WEAK SELL'
-                    score = min(score, 25)
-                    signal_source = self.config.tabular_model_backend
-                    signal_confidence = tab_sell_proba
-                    logger.info(
-                        f"  🛡️ {model_name} sell-filter active for {coin}: "
-                        f"P(sell)={tab_sell_proba*100:.0f}% >= "
-                        f"{self.config.tabular_sell_block_min_proba*100:.0f}%")
-
-                should_apply, gate_reason = self._should_apply_tabular_signal(
-                    rule_recommendation=rule_recommendation,
-                    rule_score=rule_score,
-                    tab_decision=tab_decision,
-                    tab_confidence=tab_confidence,
-                )
-                if (
-                    self.config.tabular_block_on_sell
-                    and tab_decision == 'verkaufen'
-                    and rule_recommendation in ['BUY', 'STRONG BUY']
-                    and not tabular_sell_veto
-                ):
-                    should_apply = False
-                    gate_reason = 'sell_below_entry_veto_threshold'
-                    logger.info(
-                        "  🛡️ %s sell signal below entry-veto threshold for %s; "
-                        "preserving rule BUY (P(sell)=%.0f%%, threshold=%.0f%%)",
-                        model_name,
-                        coin,
-                        tab_sell_proba * 100,
-                        self.config.tabular_sell_block_min_proba * 100,
-                    )
-                required_confidence = self.config.tabular_buy_min_confidence if tab_decision == 'kaufen' else self.config.tabular_min_confidence
-                if tab_confidence >= required_confidence and not should_apply:
-                    logger.info(
-                        f"  🚧 {model_name} gated for {coin}: {gate_reason} "
-                        f"(rule={rule_recommendation}, rule_score={rule_score}, "
-                        f"tab_decision={tab_decision}, tab_confidence={tab_confidence*100:.0f}%)"
-                    )
-
-                if should_apply:
-                    signal_source = self.config.tabular_model_backend
-                    signal_confidence = tab_confidence
-                    if tab_decision == 'kaufen':
-                        if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'HOLD (Down-Trend)']:
-                            recommendation = 'BUY'
-                            score = max(score, 72)
-                        elif recommendation in ['BUY', 'STRONG BUY']:
-                            score = min(score + int(tab_confidence * 12), 97)
-                    elif tab_decision == 'verkaufen':
-                        if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'BUY', 'STRONG BUY']:
-                            recommendation = 'WEAK SELL'
-                            score = min(score, 28)
-                        elif recommendation in ['SELL', 'WEAK SELL']:
-                            score = max(score - int(tab_confidence * 8), 3)
-            except (IndexError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
-                if self.config.tabular_model_backend == 'hailo':
-                    logger.error(
-                        "Hailo prediction for %s failed; suppressing this coin's entries: %s",
-                        coin,
-                        e,
-                    )
-                    recommendation = 'HOLD'
-                    score = 0
-                    signal_source = 'hailo_unavailable'
-                    signal_confidence = 0.0
-                    tab_sell_proba = 0.0
-                    tab_hold_proba = 0.0
-                    tab_buy_proba = 0.0
-                    tabular_sell_veto = False
-                else:
-                    logger.warning(
-                        f"CatBoost prediction for {coin} failed: {e}")
-
-        return {
-            'rsi': rsi,
-            'sma_short': sma_short,
-            'sma_long': sma_long,
-            'ema_20': ema_20,
-            'ret_1': ret_1,
-            'ret_3': ret_3,
-            'recommendation': recommendation,
-            'score': score,
-            'rule_recommendation': rule_recommendation,
-            'rule_score': rule_score,
-            'signal_source': signal_source,
-            'signal_confidence': signal_confidence,
-            'tabular_buy_proba': tab_buy_proba,
-            'tabular_hold_proba': tab_hold_proba,
-            'tabular_sell_proba': tab_sell_proba,
-            'tabular_sell_veto': tabular_sell_veto,
-            'atr_14': atr_14 if math.isfinite(atr_14) else None,
-            'atr_pct': atr_pct,
-            'macd_hist': macd_hist,
-        }
 
     def _analyze_markets(self, market_data: dict[str, dict], extra_coins: list[str] | None = None) -> dict[str, dict]:
         """Performs a comprehensive market analysis and returns recommendations."""

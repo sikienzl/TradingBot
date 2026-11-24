@@ -114,6 +114,17 @@ a version heading is assigned when a release is prepared.
   `(config, coin_data) -> (bool, reason)` predicate with the config injected, so
   every rejection reason and per-coin override is unit-testable without a bot,
   an exchange or a model. Covered by 72 new tests in `tests/test_entry_filters.py`.
+- `src/coin_analysis.py`, the per-coin analysis cluster that used to be five
+  methods inside `src/trading_bot.py`: `analyze_coin` (the whole indicator,
+  rule-signal and model-overlay path for one coin, previously cyclomatic
+  complexity 31), `apply_ml_signal` (the optional LLM predictor and its ensemble
+  weaving), `build_tabular_features` (the 22-column CatBoost/Hailo feature row),
+  `should_apply_tabular_signal` (the rule-vs-model source gate with its seven
+  gate reasons) and `recommendation_bias`. The config, the OHLCV fetcher, both
+  predictors and the rule recommender are injected, so the complete analysis
+  path — including the sell veto, the gated-signal diagnostics and the Hailo
+  failure suppression — is unit-testable without an exchange, a database or a
+  model. Covered by 36 new tests in `tests/test_coin_analysis.py`.
 
 ### Changed
 
@@ -196,6 +207,21 @@ a version heading is assigned when a release is prepared.
   disabled-flag branch of all five gates) and produced identical return values
   and log output; the moved bodies are also AST-identical apart from the
   `self.config` to `config` rename.
+- `src/trading_bot.py` shrank from 3772 to 3476 lines now that the per-coin
+  analysis lives in `src/coin_analysis.py`. `_analyze_coin()`, `_apply_ml_signal()`,
+  `_build_tabular_features()`, `_should_apply_tabular_signal()` and
+  `_recommendation_bias()` are thin delegators with the previous signatures, so
+  the bot still owns the config, the predictors and the OHLCV fetch, and the
+  existing tests that call bot methods or patch
+  `src.trading_bot.get_rule_recommendation` still apply. The architecture ceiling
+  was ratcheted to the new size and `coin_analysis` was registered as a layer-1
+  module. The old and new code were compared over 2,068 scenarios (every rule
+  label, all seven gate reasons and gate configurations, six OHLCV shapes from a
+  single row to NaN volume through the feature builder, the full ML decision /
+  confidence / starting-recommendation matrix, and the end-to-end analysis across
+  nine tabular-predictor and config combinations including the Hailo failure
+  path) and produced identical return values, raised exceptions and log output;
+  the moved bodies are also AST-identical apart from the injected collaborators.
 
 ### Fixed
 
