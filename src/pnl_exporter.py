@@ -5,7 +5,6 @@ Listens on http://localhost:9200/metrics
 """
 import json
 import os
-import re
 import sys
 import time
 import urllib.error
@@ -30,6 +29,9 @@ from .export_pnl_metrics import (
     format_prometheus_metrics as _shared_format_prometheus_metrics,
 )
 from .export_pnl_metrics import (
+    read_ai_copilot_usage as _shared_read_ai_copilot_usage,
+)
+from .export_pnl_metrics import (
     read_ai_shadow_suggestions as _shared_read_ai_shadow_suggestions,
 )
 from .export_pnl_metrics import (
@@ -44,7 +46,6 @@ BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
 ENV_PATH = '/opt/trading_2/.env'
 AI_COPILOT_STATE_PATH = '/opt/trading_2/ai_copilot_state.json'
 PORTFOLIO_STATE_PATH = '/opt/trading_2/.portfolio_state.json'
-MIN_DRAWDOWN_PCT_BASE_USD = 1.0
 START_VALUE_CACHE = {
     'log_mtime': None,
     'value': 0.0,
@@ -55,9 +56,6 @@ AI_SPEND_CACHE = {
 }
 AI_SPEND_CACHE_TTL_SECONDS = 300
 AI_SPEND_API_TIMEOUT_SECONDS = 2
-SHADOW_SUGGESTION_META_RE = re.compile(
-    r'^([a-z]+),\s+confidence=([0-9.]+),\s+reason='
-)
 
 
 class MetricsHandler(BaseHTTPRequestHandler):
@@ -212,45 +210,12 @@ class MetricsHandler(BaseHTTPRequestHandler):
 
     def read_ai_copilot_usage(self):
         """Read AI co-pilot caps and monthly usage state for monitoring."""
-        result = {
-            'ai_copilot_budget_cap_usd': 0.0,
-            'ai_copilot_budget_used_usd': 0.0,
-            'ai_copilot_calls_used_monthly': 0.0,
-            'ai_copilot_calls_cap_monthly': 0.0,
-        }
-
-        try:
-            budget_cap = self._read_env_value(
-                'AI_COPILOT_MAX_BUDGET_USD_PER_MONTH')
-            calls_cap = self._read_env_value('AI_COPILOT_MAX_CALLS_PER_MONTH')
-            if budget_cap:
-                result['ai_copilot_budget_cap_usd'] = float(budget_cap)
-            if calls_cap:
-                result['ai_copilot_calls_cap_monthly'] = float(calls_cap)
-        except (TypeError, ValueError):
-            pass
-
-        try:
-            for candidate in (AI_COPILOT_STATE_PATH, f'{AI_COPILOT_STATE_PATH}.bak'):
-                if not os.path.exists(candidate):
-                    continue
-                with open(candidate, 'r', encoding='utf-8') as f:
-                    state = json.load(f)
-                now = datetime.now(UTC)
-                month_key = f"{now.year:04d}-{now.month:02d}"
-                if state.get('month_key') == month_key:
-                    result['ai_copilot_budget_cap_usd'] = float(
-                        state.get('budget_cap_usd', result['ai_copilot_budget_cap_usd']) or result['ai_copilot_budget_cap_usd'])
-                    result['ai_copilot_calls_cap_monthly'] = float(
-                        state.get('calls_cap_monthly', result['ai_copilot_calls_cap_monthly']) or result['ai_copilot_calls_cap_monthly'])
-                    if result['ai_copilot_budget_used_usd'] <= 0.0:
-                        result['ai_copilot_budget_used_usd'] = float(
-                            state.get('monthly_spend_usd', 0.0) or 0.0)
-                    result['ai_copilot_calls_used_monthly'] = float(
-                        state.get('monthly_calls', 0) or 0)
-                    break
-        except (OSError, UnicodeError, json.JSONDecodeError, AttributeError, TypeError, ValueError):
-            pass
+        result = _shared_read_ai_copilot_usage(
+            ENV_PATH,
+            AI_COPILOT_STATE_PATH,
+            quiet=True,
+            backup_state_path=f'{AI_COPILOT_STATE_PATH}.bak',
+        )
 
         try:
             api_usage = self._read_ai_spend_from_api()

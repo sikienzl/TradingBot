@@ -13,6 +13,8 @@ import sys
 from collections import deque
 from datetime import UTC, datetime, timedelta
 
+from .pnl_prometheus_format import format_prometheus_metrics
+
 MIN_DRAWDOWN_PCT_BASE_USD = 1.0
 BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
 ENV_PATH = '/opt/trading_2/.env'
@@ -456,8 +458,20 @@ def read_portfolio_start_value(log_path=BOT_LOG_PATH):
     return 0.0
 
 
-def read_ai_copilot_usage(env_path=ENV_PATH, state_path=AI_COPILOT_STATE_PATH):
-    """Read AI co-pilot caps and monthly usage state for monitoring."""
+def read_ai_copilot_usage(
+    env_path=ENV_PATH,
+    state_path=AI_COPILOT_STATE_PATH,
+    *,
+    quiet=False,
+    backup_state_path=None,
+):
+    """Read AI co-pilot caps and monthly usage state for monitoring.
+
+    ``quiet`` suppresses the stderr diagnostics so the HTTP exporter, which
+    polls on a timer and intentionally stays silent, can reuse this reader.
+    ``backup_state_path`` is an optional ``.bak`` fallback that is tried when
+    the primary state file is missing or stale.
+    """
     result = {
         'ai_copilot_budget_cap_usd': 0.0,
         'ai_copilot_budget_used_usd': 0.0,
@@ -466,25 +480,25 @@ def read_ai_copilot_usage(env_path=ENV_PATH, state_path=AI_COPILOT_STATE_PATH):
     }
 
     try:
-        if os.path.exists(env_path):
-            with open(env_path, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#') or '=' not in line:
-                        continue
-                    key, value = line.split('=', 1)
-                    key = key.strip()
-                    value = value.strip().strip('"').strip("'")
-                    if key == 'AI_COPILOT_MAX_BUDGET_USD_PER_MONTH':
-                        result['ai_copilot_budget_cap_usd'] = float(value)
-                    elif key == 'AI_COPILOT_MAX_CALLS_PER_MONTH':
-                        result['ai_copilot_calls_cap_monthly'] = float(value)
-    except (OSError, UnicodeError) as exc:
-        print(f"Error reading AI co-pilot environment: {exc}", file=sys.stderr)
+        budget_cap = _read_env_value(
+            'AI_COPILOT_MAX_BUDGET_USD_PER_MONTH', env_path, quiet=quiet)
+        calls_cap = _read_env_value(
+            'AI_COPILOT_MAX_CALLS_PER_MONTH', env_path, quiet=quiet)
+        if budget_cap:
+            result['ai_copilot_budget_cap_usd'] = float(budget_cap)
+        if calls_cap:
+            result['ai_copilot_calls_cap_monthly'] = float(calls_cap)
+    except (TypeError, ValueError) as exc:
+        if not quiet:
+            print(f"Error reading AI co-pilot environment: {exc}", file=sys.stderr)
 
+    state_candidates = [state_path] if backup_state_path is None else [
+        state_path, backup_state_path]
     try:
-        if os.path.exists(state_path):
-            with open(state_path, 'r', encoding='utf-8') as f:
+        for candidate in state_candidates:
+            if not os.path.exists(candidate):
+                continue
+            with open(candidate, 'r', encoding='utf-8') as f:
                 state = json.load(f)
             now = datetime.now(UTC)
             month_key = f"{now.year:04d}-{now.month:02d}"
@@ -493,12 +507,15 @@ def read_ai_copilot_usage(env_path=ENV_PATH, state_path=AI_COPILOT_STATE_PATH):
                     state.get('budget_cap_usd', result['ai_copilot_budget_cap_usd']) or result['ai_copilot_budget_cap_usd'])
                 result['ai_copilot_calls_cap_monthly'] = float(
                     state.get('calls_cap_monthly', result['ai_copilot_calls_cap_monthly']) or result['ai_copilot_calls_cap_monthly'])
-                result['ai_copilot_budget_used_usd'] = float(
-                    state.get('monthly_spend_usd', 0.0) or 0.0)
+                if result['ai_copilot_budget_used_usd'] <= 0.0:
+                    result['ai_copilot_budget_used_usd'] = float(
+                        state.get('monthly_spend_usd', 0.0) or 0.0)
                 result['ai_copilot_calls_used_monthly'] = float(
                     state.get('monthly_calls', 0) or 0)
+                break
     except (OSError, UnicodeError, json.JSONDecodeError, AttributeError, TypeError, ValueError) as exc:
-        print(f"Error reading AI co-pilot state: {exc}", file=sys.stderr)
+        if not quiet:
+            print(f"Error reading AI co-pilot state: {exc}", file=sys.stderr)
 
     return result
 
@@ -696,316 +713,6 @@ def compute_recent_pnl_guard_state(trades, env_path=ENV_PATH):
         'negative_recent_pnl_and_low_pf' if guard_active else 'healthy_recent_window'
     )
     return state
-
-
-def format_prometheus_metrics(metrics):
-    """Format metrics as Prometheus lines"""
-    output = []
-    output.append(
-        '# HELP trading_realized_pnl_usd_all_time Total realized PnL in USD (all-time)')
-    output.append('# TYPE trading_realized_pnl_usd_all_time gauge')
-    output.append(
-        f'trading_realized_pnl_usd_all_time {metrics["all_time_realized_pnl"]}')
-
-    output.append(
-        '# HELP trading_realized_pnl_usd Total realized PnL in USD (last 24h)')
-    output.append('# TYPE trading_realized_pnl_usd gauge')
-    output.append(f'trading_realized_pnl_usd {metrics["total_realized_pnl"]}')
-
-    output.append(
-        '# HELP trading_closed_trades Total closed trades (last 24h)')
-    output.append('# TYPE trading_closed_trades gauge')
-    output.append(f'trading_closed_trades {metrics["total_trades"]}')
-
-    output.append(
-        '# HELP trading_winning_trades Number of winning trades (last 24h)')
-    output.append('# TYPE trading_winning_trades gauge')
-    output.append(f'trading_winning_trades {metrics["winning_trades"]}')
-
-    output.append(
-        '# HELP trading_losing_trades Number of losing trades (last 24h)')
-    output.append('# TYPE trading_losing_trades gauge')
-    output.append(f'trading_losing_trades {metrics["losing_trades"]}')
-
-    output.append(
-        '# HELP trading_break_even_trades Number of break-even trades (last 24h)')
-    output.append('# TYPE trading_break_even_trades gauge')
-    output.append(f'trading_break_even_trades {metrics["break_even_trades"]}')
-
-    output.append('# HELP trading_win_rate Win rate percentage (last 24h)')
-    output.append('# TYPE trading_win_rate gauge')
-    output.append(f'trading_win_rate {metrics["win_rate"]}')
-
-    output.append(
-        '# HELP trading_avg_pnl_per_trade Average PnL per trade (last 24h)')
-    output.append('# TYPE trading_avg_pnl_per_trade gauge')
-    output.append(f'trading_avg_pnl_per_trade {metrics["avg_pnl_per_trade"]}')
-
-    output.append(
-        '# HELP trading_profit_factor Profit factor (gross profits / gross losses) over last 24h')
-    output.append('# TYPE trading_profit_factor gauge')
-    output.append(f'trading_profit_factor {metrics["profit_factor"]}')
-
-    output.append(
-        '# HELP trading_sharpe_ratio Trade-level Sharpe ratio over last 24h')
-    output.append('# TYPE trading_sharpe_ratio gauge')
-    output.append(f'trading_sharpe_ratio {metrics["sharpe_ratio"]}')
-
-    output.append(
-        '# HELP trading_max_drawdown_usd Maximum drawdown in USD over last 24h')
-    output.append('# TYPE trading_max_drawdown_usd gauge')
-    output.append(f'trading_max_drawdown_usd {metrics["max_drawdown_usd"]}')
-
-    output.append(
-        '# HELP trading_max_drawdown_pct Maximum drawdown in percent over last 24h')
-    output.append('# TYPE trading_max_drawdown_pct gauge')
-    output.append(f'trading_max_drawdown_pct {metrics["max_drawdown_pct"]}')
-
-    output.append(
-        '# HELP trading_portfolio_value_eur Latest portfolio total value from bot log (EUR)')
-    output.append('# TYPE trading_portfolio_value_eur gauge')
-    output.append(
-        f'trading_portfolio_value_eur {metrics.get("portfolio_value_eur", 0.0)}')
-
-    output.append(
-        '# HELP trading_portfolio_cash_eur Latest portfolio cash from bot log (EUR)')
-    output.append('# TYPE trading_portfolio_cash_eur gauge')
-    output.append(
-        f'trading_portfolio_cash_eur {metrics.get("portfolio_cash_eur", 0.0)}')
-
-    output.append(
-        '# HELP trading_portfolio_start_value_eur Initial dry-run portfolio value from startup log (EUR)')
-    output.append('# TYPE trading_portfolio_start_value_eur gauge')
-    output.append(
-        f'trading_portfolio_start_value_eur {metrics.get("portfolio_start_value_eur", 0.0)}')
-
-    # Snapshot freshness metrics are only emitted by the HTTP exporter, which
-    # attaches them to its metrics dict; the one-shot script omits them.
-    if 'metrics_generated_unixtime' in metrics:
-        output.append(
-            '# HELP trading_metrics_generated_unixtime Unix timestamp when the exporter generated this metrics payload')
-        output.append('# TYPE trading_metrics_generated_unixtime gauge')
-        output.append(
-            f'trading_metrics_generated_unixtime {metrics.get("metrics_generated_unixtime", 0.0)}')
-
-    if 'portfolio_snapshot_timestamp_unixtime' in metrics:
-        output.append(
-            '# HELP trading_portfolio_snapshot_unixtime Unix timestamp of the latest portfolio snapshot parsed from the bot log')
-        output.append('# TYPE trading_portfolio_snapshot_unixtime gauge')
-        output.append(
-            f'trading_portfolio_snapshot_unixtime {metrics.get("portfolio_snapshot_timestamp_unixtime", 0.0)}')
-
-    if 'portfolio_snapshot_age_seconds' in metrics:
-        output.append(
-            '# HELP trading_portfolio_snapshot_age_seconds Age in seconds of the latest portfolio snapshot parsed from the bot log')
-        output.append('# TYPE trading_portfolio_snapshot_age_seconds gauge')
-        output.append(
-            f'trading_portfolio_snapshot_age_seconds {metrics.get("portfolio_snapshot_age_seconds", 0.0)}')
-
-    output.append(
-        '# HELP trading_current_holding_value_eur Current mark-to-market holding value per coin in EUR')
-    output.append('# TYPE trading_current_holding_value_eur gauge')
-    for coin, value in sorted(metrics.get('holdings_value_eur', {}).items()):
-        output.append(
-            f'trading_current_holding_value_eur{{coin="{coin}"}} {value}')
-
-    output.append(
-        '# HELP trading_current_holding_cost_basis_eur Original buy amount per currently held coin in EUR')
-    output.append('# TYPE trading_current_holding_cost_basis_eur gauge')
-    for coin, value in sorted(metrics.get('holdings_cost_basis_eur', {}).items()):
-        output.append(
-            f'trading_current_holding_cost_basis_eur{{coin="{coin}"}} {value}')
-
-    output.append(
-        '# HELP trading_current_holding_amount_coin Current held coin amount per open position')
-    output.append('# TYPE trading_current_holding_amount_coin gauge')
-    for coin, value in sorted(metrics.get('holdings_amount_coin', {}).items()):
-        output.append(
-            f'trading_current_holding_amount_coin{{coin="{coin}"}} {value}')
-
-    output.append(
-        '# HELP trading_current_holding_unrealized_pnl_eur Unrealized PnL per currently held coin in EUR')
-    output.append('# TYPE trading_current_holding_unrealized_pnl_eur gauge')
-    for coin, value in sorted(metrics.get('holdings_unrealized_pnl_eur', {}).items()):
-        output.append(
-            f'trading_current_holding_unrealized_pnl_eur{{coin="{coin}"}} {value}')
-
-    output.append(
-        '# HELP trading_current_holdings_unrealized_pnl_total_eur Total unrealized PnL across current holdings in EUR')
-    output.append(
-        '# TYPE trading_current_holdings_unrealized_pnl_total_eur gauge')
-    output.append(
-        f'trading_current_holdings_unrealized_pnl_total_eur {sum(metrics.get("holdings_unrealized_pnl_eur", {}).values())}')
-
-    output.append(
-        '# HELP trading_open_positions_count Number of currently open positions')
-    output.append('# TYPE trading_open_positions_count gauge')
-    output.append(
-        f'trading_open_positions_count {metrics.get("open_positions_count", 0)}')
-
-    output.append(
-        '# HELP trading_ai_copilot_budget_cap_usd Configured AI co-pilot monthly budget cap in USD')
-    output.append('# TYPE trading_ai_copilot_budget_cap_usd gauge')
-    output.append(
-        f'trading_ai_copilot_budget_cap_usd {metrics.get("ai_copilot_budget_cap_usd", 0.0)}')
-
-    output.append(
-        '# HELP trading_ai_copilot_budget_used_usd AI co-pilot monthly spend in USD (current month)')
-    output.append('# TYPE trading_ai_copilot_budget_used_usd gauge')
-    output.append(
-        f'trading_ai_copilot_budget_used_usd {metrics.get("ai_copilot_budget_used_usd", 0.0)}')
-
-    output.append(
-        '# HELP trading_ai_copilot_calls_used_monthly AI co-pilot monthly API calls used (current month)')
-    output.append('# TYPE trading_ai_copilot_calls_used_monthly gauge')
-    output.append(
-        f'trading_ai_copilot_calls_used_monthly {metrics.get("ai_copilot_calls_used_monthly", 0.0)}')
-
-    output.append(
-        '# HELP trading_ai_copilot_calls_cap_monthly Configured AI co-pilot monthly API call cap')
-    output.append('# TYPE trading_ai_copilot_calls_cap_monthly gauge')
-    output.append(
-        f'trading_ai_copilot_calls_cap_monthly {metrics.get("ai_copilot_calls_cap_monthly", 0.0)}')
-
-    output.append(
-        '# HELP trading_ai_copilot_shadow_suggestion_value Latest AI shadow suggestion value by parameter and recency rank')
-    output.append('# TYPE trading_ai_copilot_shadow_suggestion_value gauge')
-    for item in metrics.get('ai_copilot_shadow_suggestions', []):
-        output.append(
-            'trading_ai_copilot_shadow_suggestion_value{'
-            f'suggestion_id="{item["suggestion_id"]}",'
-            f'mode="{item["mode"]}",'
-            f'parameter="{item["parameter"]}",'
-            f'rank="{item["rank"]}"'
-            f'}} {item["value"]}'
-        )
-
-    output.append(
-        '# HELP trading_ai_copilot_shadow_suggestion_confidence Latest AI shadow suggestion confidence by parameter and recency rank')
-    output.append(
-        '# TYPE trading_ai_copilot_shadow_suggestion_confidence gauge')
-    for item in metrics.get('ai_copilot_shadow_suggestions', []):
-        output.append(
-            'trading_ai_copilot_shadow_suggestion_confidence{'
-            f'suggestion_id="{item["suggestion_id"]}",'
-            f'mode="{item["mode"]}",'
-            f'parameter="{item["parameter"]}",'
-            f'rank="{item["rank"]}"'
-            f'}} {item["confidence"]}'
-        )
-
-    output.append(
-        '# HELP trading_ai_copilot_shadow_suggestion_age_minutes Minutes since the latest AI shadow suggestion by parameter and recency rank')
-    output.append(
-        '# TYPE trading_ai_copilot_shadow_suggestion_age_minutes gauge')
-    for item in metrics.get('ai_copilot_shadow_suggestions', []):
-        output.append(
-            'trading_ai_copilot_shadow_suggestion_age_minutes{'
-            f'suggestion_id="{item["suggestion_id"]}",'
-            f'mode="{item["mode"]}",'
-            f'parameter="{item["parameter"]}",'
-            f'rank="{item["rank"]}"'
-            f'}} {item["age_minutes"]}'
-        )
-
-    output.append(
-        '# HELP trading_recent_pnl_guard_enabled Whether recent PnL guard is enabled (1=true, 0=false)')
-    output.append('# TYPE trading_recent_pnl_guard_enabled gauge')
-    output.append(
-        f'trading_recent_pnl_guard_enabled {metrics.get("recent_pnl_guard_enabled", 0.0)}')
-
-    output.append(
-        '# HELP trading_recent_pnl_guard_active Whether recent PnL guard is currently active (1=true, 0=false)')
-    output.append('# TYPE trading_recent_pnl_guard_active gauge')
-    output.append(
-        f'trading_recent_pnl_guard_active {metrics.get("recent_pnl_guard_active", 0.0)}')
-
-    output.append(
-        '# HELP trading_recent_pnl_guard_window Number of recent sells considered by the guard')
-    output.append('# TYPE trading_recent_pnl_guard_window gauge')
-    output.append(
-        f'trading_recent_pnl_guard_window {metrics.get("recent_pnl_guard_window", 0.0)}')
-
-    output.append(
-        '# HELP trading_recent_pnl_guard_min_trades Minimum recent closed trades required for guard evaluation')
-    output.append('# TYPE trading_recent_pnl_guard_min_trades gauge')
-    output.append(
-        f'trading_recent_pnl_guard_min_trades {metrics.get("recent_pnl_guard_min_trades", 0.0)}')
-
-    output.append(
-        '# HELP trading_recent_pnl_guard_recent_closed_trades Recent closed sells currently evaluated by the guard')
-    output.append('# TYPE trading_recent_pnl_guard_recent_closed_trades gauge')
-    output.append(
-        f'trading_recent_pnl_guard_recent_closed_trades {metrics.get("recent_pnl_guard_recent_closed_trades", 0.0)}')
-
-    output.append(
-        '# HELP trading_recent_pnl_guard_recent_realized_pnl Recent realized PnL in base currency used by the guard')
-    output.append('# TYPE trading_recent_pnl_guard_recent_realized_pnl gauge')
-    output.append(
-        f'trading_recent_pnl_guard_recent_realized_pnl {metrics.get("recent_pnl_guard_recent_realized_pnl", 0.0)}')
-
-    output.append(
-        '# HELP trading_recent_pnl_guard_recent_profit_factor Recent profit factor used by the guard')
-    output.append('# TYPE trading_recent_pnl_guard_recent_profit_factor gauge')
-    output.append(
-        f'trading_recent_pnl_guard_recent_profit_factor {metrics.get("recent_pnl_guard_recent_profit_factor", 0.0)}')
-
-    output.append(
-        '# HELP trading_recent_pnl_guard_min_realized_pnl Minimum recent realized PnL threshold configured for the guard')
-    output.append('# TYPE trading_recent_pnl_guard_min_realized_pnl gauge')
-    output.append(
-        f'trading_recent_pnl_guard_min_realized_pnl {metrics.get("recent_pnl_guard_min_realized_pnl", 0.0)}')
-
-    output.append(
-        '# HELP trading_recent_pnl_guard_max_profit_factor Maximum recent profit factor threshold configured for the guard')
-    output.append('# TYPE trading_recent_pnl_guard_max_profit_factor gauge')
-    output.append(
-        f'trading_recent_pnl_guard_max_profit_factor {metrics.get("recent_pnl_guard_max_profit_factor", 0.0)}')
-
-    output.append(
-        '# HELP trading_recent_pnl_guard_reason Recent PnL guard status reason (labelled gauge set to 1 for active reason)')
-    output.append('# TYPE trading_recent_pnl_guard_reason gauge')
-    output.append(
-        f'trading_recent_pnl_guard_reason{{reason="{str(metrics.get("recent_pnl_guard_reason", "unknown")).replace(chr(92), chr(92) * 2).replace(chr(34), chr(92) + chr(34))}"}} 1')
-
-    output.append(
-        '# HELP trading_coin_realized_pnl_usd Realized PnL per coin in USD (last 24h)')
-    output.append('# TYPE trading_coin_realized_pnl_usd gauge')
-    for coin, pnl in sorted(metrics['coin_pnl'].items()):
-        output.append(f'trading_coin_realized_pnl_usd{{coin="{coin}"}} {pnl}')
-
-    output.append(
-        '# HELP trading_coin_closed_trades Closed trades per coin (last 24h)')
-    output.append('# TYPE trading_coin_closed_trades gauge')
-    for coin, count in sorted(metrics['coin_closed'].items()):
-        output.append(f'trading_coin_closed_trades{{coin="{coin}"}} {count}')
-
-    output.append(
-        '# HELP trading_coin_win_rate Win rate per coin in percent (last 24h)')
-    output.append('# TYPE trading_coin_win_rate gauge')
-    for coin, rate in sorted(metrics['coin_win_rate'].items()):
-        output.append(f'trading_coin_win_rate{{coin="{coin}"}} {rate}')
-
-    output.append(
-        '# HELP trading_coin_break_even_trades Break-even trades per coin (last 24h)')
-    output.append('# TYPE trading_coin_break_even_trades gauge')
-    for coin, count in sorted(metrics['coin_break_even'].items()):
-        output.append(
-            f'trading_coin_break_even_trades{{coin="{coin}"}} {count}')
-
-    output.append(
-        '# HELP trading_coin_buy_volume_eur Buy volume per coin in EUR (last 24h)')
-    output.append('# TYPE trading_coin_buy_volume_eur gauge')
-    for coin, volume in sorted(metrics['coin_buy_volume'].items()):
-        output.append(f'trading_coin_buy_volume_eur{{coin="{coin}"}} {volume}')
-
-    output.append(
-        '# HELP trading_coin_buy_count Buy count per coin (last 24h)')
-    output.append('# TYPE trading_coin_buy_count gauge')
-    for coin, count in sorted(metrics['coin_buy_count'].items()):
-        output.append(f'trading_coin_buy_count{{coin="{coin}"}} {count}')
-
-    return '\n'.join(output)
 
 
 if __name__ == '__main__':
