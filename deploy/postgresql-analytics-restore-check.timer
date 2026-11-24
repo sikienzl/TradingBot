@@ -1,0 +1,11 @@
+[Unit]
+Description=TradingBot analytics PostgreSQL restore-test timer (weekly)
+Requires=postgresql-analytics-restore-check.service
+
+[Timer]
+# Run every Saturday at 04:30 local time
+OnCalendar=Sat *-*-* 04:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -33,6 +33,18 @@ class ClusterReleaseTest(unittest.TestCase):
                 }
             self.assertTrue(set(release.REQUIRED).issubset(names))
             self.assertIn("version.txt", names)
+            with tarfile.open(archive, "r:gz") as tar:
+                scripts = {
+                    "scripts/postgresql-analytics-backup",
+                    "scripts/postgresql-analytics-restore-check",
+                }
+                for name in scripts:
+                    member = tar.getmember(f"trading-cluster-{version}/{name}")
+                    self.assertEqual(member.mode, 0o755, name)
+                unit = tar.getmember(
+                    f"trading-cluster-{version}/deploy/postgresql-analytics-backup.timer"
+                )
+                self.assertEqual(unit.mode, 0o644)
         finally:
             for path in sorted(output.glob(f"trading-cluster-{version}*")):
                 path.unlink()
@@ -77,6 +89,10 @@ class ClusterReleaseTest(unittest.TestCase):
             "deploy/hailo-shadow.env.example",
             "src/hailo_service.py",
             "scripts/run_public_paper_daily_report.sh",
+            "scripts/postgresql-analytics-backup",
+            "scripts/postgresql-analytics-restore-check",
+            "deploy/postgresql-analytics-backup.timer",
+            "deploy/postgresql-analytics-restore-check.timer",
             "requirements-hailo-shadow.txt",
             "requirements-hailo-server.txt",
             "model/catboost_trading_model/catboost_model.cbm",
