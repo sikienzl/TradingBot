@@ -68,6 +68,9 @@ jobs:
              scripts/run_weekly_tuning_cycle.sh \
              scripts/apply_tuning_recommendation.py \
              scripts/recommend_tuning_change.py \
+             scripts/postgresql-analytics-backup \
+             scripts/postgresql-analytics-restore-check \
+             scripts/init_postgres_analytics.sql \
              scripts/start_sim_bot.sh \
              scripts/stop_sim_bot.sh \
              scripts/install_pi.sh \
@@ -77,13 +80,17 @@ jobs:
              scripts/fetch_research_signal.py \
              "${PKG}/scripts/"
           cp deploy/trading-bot.service \
-             pnl-exporter.service \
+             deploy/pnl-exporter.service \
              deploy/scorecard.service \
              deploy/scorecard.timer \
              deploy/scorecard-status.service \
              deploy/scorecard-status.timer \
              deploy/tuning-cycle.service \
              deploy/tuning-cycle.timer \
+             deploy/postgresql-analytics-backup.service \
+             deploy/postgresql-analytics-backup.timer \
+             deploy/postgresql-analytics-restore-check.service \
+             deploy/postgresql-analytics-restore-check.timer \
              deploy/node-exporter-textfile.service \
              deploy/prometheus.yml \
              deploy/trading-alerts.yml \
@@ -123,6 +130,10 @@ jobs:
             "${PKG}/scripts/run_weekly_tuning_cycle.sh"
             "${PKG}/deploy/tuning-cycle.service"
             "${PKG}/deploy/tuning-cycle.timer"
+            "${PKG}/scripts/postgresql-analytics-backup"
+            "${PKG}/scripts/postgresql-analytics-restore-check"
+            "${PKG}/deploy/postgresql-analytics-backup.timer"
+            "${PKG}/deploy/postgresql-analytics-restore-check.timer"
             "${PKG}/docs/USAGE.md"
             "${PKG}/docs/DEPLOYMENT.md"
             "${PKG}/deploy/prometheus.yml"
@@ -293,6 +304,8 @@ jobs:
           - Pi-optimised \`requirements-pi.txt\`
           - Systemd service & timer units (\`deploy/\`), including the
             weekly scorecard, research-signal and auto-tuning timers
+          - Analytics PostgreSQL backup wrappers and their timer units
+            (\`scripts/postgresql-analytics-*\`, \`deploy/postgresql-analytics-*\`)
           - One-shot installer (\`scripts/install_pi.sh\`)
 
           Cluster package (\`trading-cluster-${VERSION}.tar.gz\`):
@@ -302,6 +315,8 @@ jobs:
             inference, tunnel, shadow and public-paper services
           - Generic \`ansible/\` paper-dashboard starter (example inventories
             and vault templates only)
+          - Generic \`cluster-starter/\` two-node CM5/K3s starter (example
+            inventory and vault templates only)
           - \`requirements-hailo-server.txt\`, \`requirements-hailo-shadow.txt\`
             and \`requirements-dashboard.txt\`
           - CatBoost decision model; the LLM adapter and Hailo SDK/HEF artifacts are excluded
