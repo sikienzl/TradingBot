@@ -150,6 +150,10 @@ prepared; this file intentionally remains under **Unreleased** until then.
   release scripts.
 - Make CI tests more informative: drop `--maxfail=1` and report `src/`
   coverage (`--cov=src`, term-missing and XML).
+- Skip the Hailo end-to-end experiment test when the optional `hailo-export`
+  extra is absent, and add a dedicated CI job that installs the extra so the
+  real train-to-ONNX path is still exercised. The slim test matrix installs no
+  `torch`/`onnx`, so the test previously failed there while passing locally.
 
 ### Safety and rollout
 

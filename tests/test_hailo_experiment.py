@@ -85,6 +85,16 @@ def test_invalid_feature_is_rejected(tmp_path, value):
 
 
 def test_real_offline_run_and_immutable_outputs(tmp_path):
+    # This is the only test that drives the real pipeline: it trains an MLP and
+    # exports ONNX, which needs the optional `hailo-export` extra. Skip when the
+    # extra is absent so the suite stays runnable on a slim install, and let a
+    # dedicated CI job cover the end-to-end path.
+    pytest.importorskip(
+        "torch", reason="Hailo model export requires the hailo-export extra"
+    )
+    pytest.importorskip(
+        "onnx", reason="Hailo model export requires the hailo-export extra"
+    )
     data = tmp_path / "data.csv"
     make_data().to_csv(data, index=False)
     proposal = tmp_path / "proposal.json"
