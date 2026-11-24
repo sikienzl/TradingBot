@@ -35,6 +35,7 @@ LAYERS: dict[int, tuple[str, ...]] = {
     # metrics and model training.
     1: (
         "ai_copilot_log",
+        "ai_copilot_service",
         "analyze_trade_journal",
         "analytics",
         "backtesting",
@@ -94,7 +95,7 @@ TRADING_BOT_IMPORTERS: frozenset[str] = frozenset({"init_kraken_paper"})
 # Line-count ceilings for files that are known to be too large. Lower these
 # when a file shrinks; never raise them without an explicit decision.
 LINE_CEILINGS: dict[str, int] = {
-    "trading_bot.py": 3416,
+    "trading_bot.py": 3001,
     "public_paper_dashboard.py": 1100,
     "export_pnl_metrics.py": 366,
 }

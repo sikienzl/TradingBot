@@ -136,6 +136,22 @@ a version heading is assigned when a release is prepared.
   process and which are swallowed into rule-only mode — is unit-testable
   without an exchange. Covered by 31 new tests in
   `tests/test_bot_bootstrap.py`.
+- `src/ai_copilot_service.py`, the AI co-pilot cluster that used to live in
+  `CryptoTradingBot`: `estimate_ai_cost_usd` (the per-call USD cost),
+  `can_run_ai_copilot` (the nine gate reasons - disabled, missing model,
+  missing API key, error suspension, daily and monthly call quotas, monthly
+  budget quota, interval not reached and invalid attempt timestamp),
+  `ai_copilot_snapshot` (the journal window, per-coin aggregates, top
+  winners/losers and the performance, portfolio and guardrail summary with its
+  reset-on-error contract), `extract_json_object`, `call_ai_copilot` (the HTTP
+  call and its token usage), `clamp_ai_changes` (the min/max guardrail clamp)
+  and `maybe_run_ai_copilot_variant` (the full orchestration shared by the
+  live and benchmark variants: quota counters, budget cap applied after the
+  call, no-result / no-change / shadow / applied logging and error
+  suspension). The config, logger, portfolio and performance summary are
+  injected, so the complete guardrail matrix is unit-testable without an
+  exchange, an API key or a network. Covered by 72 new tests in
+  `tests/test_ai_copilot_service.py`.
 
 ### Changed
 
@@ -247,6 +263,23 @@ a version heading is assigned when a release is prepared.
   exceptions, log lines and bot attribute state; the moved bodies are also
   AST-identical apart from the `self.config` to `config` and
   `self.run_id`/`self.config_hash` to local renames.
+- `src/trading_bot.py` shrank from 3416 to 3001 lines now that the AI co-pilot
+  cluster lives in `src/ai_copilot_service.py`. The eight bot methods keep
+  their names and signatures as thin delegators, and
+  `_maybe_run_ai_copilot_variant()` keeps the empty-path fallback to
+  `config.ai_copilot_state_file` that the old state helpers provided, so the
+  existing tests that call bot methods or patch the co-pilot state files still
+  apply. The architecture ceiling was ratcheted to the new size and
+  `ai_copilot_service` was registered as a layer-1 module. The old and new
+  code were compared over 81 scenarios (all nine gate reasons and their
+  boundary combinations, the cost estimator, the JSON extractor with malformed
+  payloads, the clamp matrix across min/max and non-numeric values, the
+  snapshot with a populated journal, an empty journal and a corrupt CSV, and
+  the full variant orchestration including corrupt state recovery, quota
+  accumulation across repeated calls, budget suspension and the empty state
+  file fallback) and produced identical return values, config mutations, state
+  files, raised exceptions and log output; the moved bodies are also
+  AST-identical apart from the injected collaborators.
 
 ### Fixed
 
