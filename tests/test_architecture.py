@@ -50,6 +50,7 @@ LAYERS: dict[int, tuple[str, ...]] = {
         "market_data",
         "portfolio",
         "pnl_exporter",
+        "pnl_metrics",
         "pnl_prometheus_format",
         "predict",
         "predict_catboost",
@@ -86,7 +87,7 @@ TRADING_BOT_IMPORTERS: frozenset[str] = frozenset({"init_kraken_paper"})
 LINE_CEILINGS: dict[str, int] = {
     "trading_bot.py": 4306,
     "public_paper_dashboard.py": 1100,
-    "export_pnl_metrics.py": 731,
+    "export_pnl_metrics.py": 559,
 }
 
 

@@ -48,6 +48,15 @@ a version heading is assigned when a release is prepared.
   reused by both PnL exporters. Covered by 24 new tests in
   `tests/test_pnl_prometheus_format.py`, including the invariant that every
   emitted series also declares its HELP and TYPE header.
+- `src/pnl_metrics.py`, the trade-journal aggregator that used to be the 141-line
+  `calculate_pnl_metrics()` in `src/export_pnl_metrics.py` (cyclomatic complexity
+  25, the last function above the lint threshold there). A `PnLAccumulator` folds
+  one journal row at a time — buy volume, win/loss/break-even counts, per-coin
+  maps, the peak-to-trough equity drawdown and the sample Sharpe ratio — and
+  `metrics()` renders the report the renderers consume. Like the formatter, the
+  module performs no I/O, so both PnL exporters share it. Covered by 26 new tests
+  in `tests/test_pnl_metrics.py`, including the malformed-row paths and the
+  quirk that a naive journal timestamp still contributes to all-time PnL.
 
 ### Changed
 
@@ -65,6 +74,12 @@ a version heading is assigned when a release is prepared.
 - `src/export_pnl_metrics.py` shrank from 1024 to 731 lines and
   `src/pnl_exporter.py` from 281 to 246; the architecture ceiling for the
   former was ratcheted to the new size.
+- `src/export_pnl_metrics.py` shrank further, from 731 to 559 lines, now that the
+  aggregator lives in `src/pnl_metrics.py`; it re-exports
+  `calculate_pnl_metrics`, so `pnl_exporter` and the CLI entry point are
+  untouched, and the ceiling was ratcheted again. The two implementations were
+  compared over 400 randomised journals (including NaN/inf PnL, naive and
+  unparseable timestamps, and unknown actions) and produced identical reports.
 - The duplicated uptrend and downtrend-reversal candidate loggers are now one
   `log_blocked_gate_candidates()` helper with a gate label, and the
   no-candidates summary moved to its own `_log_no_entry_candidates()` method.
