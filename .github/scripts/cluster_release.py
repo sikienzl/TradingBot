@@ -47,6 +47,7 @@ PACKAGED_FILES = (
     ".env.example",
     "requirements.txt",
     "requirements-hailo-shadow.txt",
+    "requirements-hailo-server.txt",
     "requirements-dashboard.txt",
 )
 # Environment templates are included only when they are *.example templates.
@@ -83,6 +84,7 @@ REQUIRED = (
     "scripts/run_public_paper_daily_report.sh",
     "scripts/public_paper_daily_report.py",
     "requirements-hailo-shadow.txt",
+    "requirements-hailo-server.txt",
     "requirements-dashboard.txt",
     "SERVER_README.md",
     "ansible/README.md",

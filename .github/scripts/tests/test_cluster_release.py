@@ -78,6 +78,7 @@ class ClusterReleaseTest(unittest.TestCase):
             "src/hailo_service.py",
             "scripts/run_public_paper_daily_report.sh",
             "requirements-hailo-shadow.txt",
+            "requirements-hailo-server.txt",
             "model/catboost_trading_model/catboost_model.cbm",
             ".env.paper_kraken.example",
             "ansible/README.md",
