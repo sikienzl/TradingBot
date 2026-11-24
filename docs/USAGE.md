@@ -77,7 +77,7 @@ provision hardware or deploy to hosts.
 |---|---|
 | `src/trading_bot.py` | Main bot loop, backtester, risk guardrails |
 | `src/get_data.py` | Fetch OHLCV data from Kraken |
-| `src/data_preperation.py` | Feature engineering, training data export |
+| `src/data_preparation.py` | Feature engineering, training data export |
 | `src/predict.py` | LLM ensemble inference (optional) |
 | `src/predict_catboost.py` | CatBoost tabular inference |
 | `src/train_trading_model.py` | Fine-tune the LLM (GPU required) |
@@ -111,7 +111,7 @@ Swagger UI is available at `http://127.0.0.1:8000/docs`.
 ### 1. Data collection
 ```sh
 python3 -m src.get_data
-python3 -m src.data_preperation
+python3 -m src.data_preparation
 ```
 Outputs `full_crypto_data.csv` and `training_data.csv`.
 

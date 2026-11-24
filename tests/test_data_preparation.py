@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.data_preperation import diagnose_data, prepare_training_data
+from src.data_preparation import diagnose_data, prepare_training_data
 
 
 @pytest.fixture
