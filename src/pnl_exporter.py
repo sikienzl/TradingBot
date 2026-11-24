@@ -13,17 +13,15 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from .export_pnl_metrics import (
-    _read_env_value as _shared_read_env_value,
+from .ai_copilot_log import (
+    read_ai_shadow_suggestions as _shared_read_ai_shadow_suggestions,
 )
+from .env_file import read_env_value as _shared_read_env_value
 from .export_pnl_metrics import (
     _scan_portfolio_start_value_from_log as _shared_scan_portfolio_start_value,
 )
 from .export_pnl_metrics import (
     calculate_pnl_metrics as _shared_calculate_pnl_metrics,
-)
-from .export_pnl_metrics import (
-    compute_recent_pnl_guard_state as _shared_compute_recent_pnl_guard_state,
 )
 from .export_pnl_metrics import (
     format_prometheus_metrics as _shared_format_prometheus_metrics,
@@ -32,20 +30,22 @@ from .export_pnl_metrics import (
     read_ai_copilot_usage as _shared_read_ai_copilot_usage,
 )
 from .export_pnl_metrics import (
-    read_ai_shadow_suggestions as _shared_read_ai_shadow_suggestions,
-)
-from .export_pnl_metrics import (
     read_latest_portfolio_snapshot as _shared_read_latest_portfolio_snapshot,
 )
 from .export_pnl_metrics import (
     read_trades as _shared_read_trades,
 )
+from .exporter_paths import (
+    AI_COPILOT_STATE_PATH,
+    BOT_LOG_PATH,
+    ENV_PATH,
+    PORTFOLIO_STATE_PATH,
+)
+from .recent_pnl_guard import (
+    compute_recent_pnl_guard_state as _shared_compute_recent_pnl_guard_state,
+)
 
 JOURNAL_PATH = '/opt/trading_2/trade_journal.csv'
-BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
-ENV_PATH = '/opt/trading_2/.env'
-AI_COPILOT_STATE_PATH = '/opt/trading_2/ai_copilot_state.json'
-PORTFOLIO_STATE_PATH = '/opt/trading_2/.portfolio_state.json'
 START_VALUE_CACHE = {
     'log_mtime': None,
     'value': 0.0,
