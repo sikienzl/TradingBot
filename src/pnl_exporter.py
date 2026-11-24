@@ -3,7 +3,6 @@
 Simple Prometheus exporter for Trading Bot PnL metrics
 Listens on http://localhost:9200/metrics
 """
-import csv
 import json
 import os
 import re
@@ -17,6 +16,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 if __package__:
     from .export_pnl_metrics import (
+        _read_env_value as _shared_read_env_value,
+    )
+    from .export_pnl_metrics import (
+        _scan_portfolio_start_value_from_log as _shared_scan_portfolio_start_value,
+    )
+    from .export_pnl_metrics import (
         calculate_pnl_metrics as _shared_calculate_pnl_metrics,
     )
     from .export_pnl_metrics import (
@@ -30,9 +35,18 @@ if __package__:
     )
     from .export_pnl_metrics import (
         read_latest_portfolio_snapshot as _shared_read_latest_portfolio_snapshot,
+    )
+    from .export_pnl_metrics import (
+        read_trades as _shared_read_trades,
     )
 else:
     from export_pnl_metrics import (
+        _read_env_value as _shared_read_env_value,
+    )
+    from export_pnl_metrics import (
+        _scan_portfolio_start_value_from_log as _shared_scan_portfolio_start_value,
+    )
+    from export_pnl_metrics import (
         calculate_pnl_metrics as _shared_calculate_pnl_metrics,
     )
     from export_pnl_metrics import (
@@ -46,6 +60,9 @@ else:
     )
     from export_pnl_metrics import (
         read_latest_portfolio_snapshot as _shared_read_latest_portfolio_snapshot,
+    )
+    from export_pnl_metrics import (
+        read_trades as _shared_read_trades,
     )
 
 JOURNAL_PATH = '/opt/trading_2/trade_journal.csv'
@@ -77,20 +94,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
         return _shared_compute_recent_pnl_guard_state(trades)
 
     def _read_env_value(self, env_key):
-        try:
-            if os.path.exists(ENV_PATH):
-                with open(ENV_PATH, 'r', encoding='utf-8', errors='ignore') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith('#') or '=' not in line:
-                            continue
-                        key, value = line.split('=', 1)
-                        if key.strip() != env_key:
-                            continue
-                        return value.strip().strip('"').strip("'")
-        except OSError:
-            pass
-        return ''
+        return _shared_read_env_value(env_key, ENV_PATH, quiet=True)
 
     def _read_ai_spend_from_api(self):
         now = time.time()
@@ -170,14 +174,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
 
     def read_trades(self):
         """Read all trades from journal"""
-        trades = []
-        try:
-            with open(JOURNAL_PATH, 'r') as f:
-                reader = csv.DictReader(f)
-                trades = list(reader)
-        except (OSError, UnicodeError, csv.Error):
-            pass
-        return trades
+        return _shared_read_trades(JOURNAL_PATH, quiet=True)
 
 
     def _extract_log_line_timestamp(self, line):
@@ -222,19 +219,8 @@ class MetricsHandler(BaseHTTPRequestHandler):
             if START_VALUE_CACHE['log_mtime'] == mtime:
                 return START_VALUE_CACHE['value']
 
-            value = 0.0
-            marker = 'Portfolio initialized from exchange (dry-run mode). Cash:'
-            if os.path.exists(BOT_LOG_PATH):
-                with open(BOT_LOG_PATH, 'r', encoding='utf-8', errors='ignore') as f:
-                    for line in f:
-                        if marker not in line:
-                            continue
-                        try:
-                            cash_part = line.split('Cash:', 1)[1].strip()
-                            value = float(cash_part.split(' ')[0])
-                            break
-                        except (IndexError, ValueError):
-                            continue
+            scanned = _shared_scan_portfolio_start_value(BOT_LOG_PATH)
+            value = scanned if scanned is not None else 0.0
 
             if value <= 0.0 and os.path.exists(PORTFOLIO_STATE_PATH):
                 try:

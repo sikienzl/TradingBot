@@ -32,15 +32,20 @@ SHADOW_SUGGESTION_META_RE = re.compile(
 )
 
 
-def read_trades(journal_path):
-    """Read all trades from journal"""
+def read_trades(journal_path, *, quiet=False):
+    """Read all trades from journal.
+
+    ``quiet`` suppresses the stderr diagnostic so the HTTP exporter, which
+    polls on a timer and intentionally stays silent, can reuse this helper.
+    """
     trades = []
     try:
         with open(journal_path, 'r') as f:
             reader = csv.DictReader(f)
             trades = list(reader)
     except (OSError, UnicodeError, csv.Error) as e:
-        print(f"Error reading trades: {e}", file=sys.stderr)
+        if not quiet:
+            print(f"Error reading trades: {e}", file=sys.stderr)
         return []
     return trades
 
@@ -414,20 +419,33 @@ def _aggregate_portfolio_holdings(
     snapshot['open_positions_count'] = len(snapshot['holdings_amount_coin'])
 
 
+def _scan_portfolio_start_value_from_log(log_path):
+    """Return the cash value from the first portfolio-initialisation log line.
+
+    Returns ``None`` when the marker line is absent or unparseable so callers
+    can apply their own fallback (direct read vs. cached read).
+    """
+    marker = 'Portfolio initialized from exchange (dry-run mode). Cash:'
+    if not os.path.exists(log_path):
+        return None
+    with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+        for line in f:
+            if marker not in line:
+                continue
+            try:
+                cash_part = line.split('Cash:', 1)[1].strip()
+                return float(cash_part.split(' ')[0])
+            except (IndexError, ValueError):
+                continue
+    return None
+
+
 def read_portfolio_start_value(log_path=BOT_LOG_PATH):
     """Read initial dry-run portfolio cash from first initialization log line."""
-    marker = 'Portfolio initialized from exchange (dry-run mode). Cash:'
     try:
-        if os.path.exists(log_path):
-            with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    if marker not in line:
-                        continue
-                    try:
-                        cash_part = line.split('Cash:', 1)[1].strip()
-                        return float(cash_part.split(' ')[0])
-                    except (IndexError, ValueError):
-                        continue
+        value = _scan_portfolio_start_value_from_log(log_path)
+        if value is not None:
+            return value
 
         if os.path.exists(PORTFOLIO_STATE_PATH):
             with open(PORTFOLIO_STATE_PATH, 'r', encoding='utf-8', errors='ignore') as f:
@@ -568,7 +586,7 @@ def read_ai_shadow_suggestions(log_path=BOT_LOG_PATH):
     return result
 
 
-def _read_env_value(env_key, env_path=ENV_PATH):
+def _read_env_value(env_key, env_path=ENV_PATH, *, quiet=False):
     try:
         if os.path.exists(env_path):
             with open(env_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -581,7 +599,8 @@ def _read_env_value(env_key, env_path=ENV_PATH):
                         continue
                     return value.strip().strip('"').strip("'")
     except (OSError, UnicodeError) as exc:
-        print(f"Error reading environment file: {exc}", file=sys.stderr)
+        if not quiet:
+            print(f"Error reading environment file: {exc}", file=sys.stderr)
     return ''
 
 
