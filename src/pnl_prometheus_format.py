@@ -1,7 +1,7 @@
 """Render PnL metric dictionaries as Prometheus exposition text.
 
 The module is pure: it takes the metrics dictionary produced by
-:func:`src.export_pnl_metrics.calculate_pnl_metrics` (plus the portfolio,
+:func:`src.pnl_metrics.calculate_pnl_metrics` (plus the portfolio,
 AI co-pilot and recent-PnL-guard keys that the callers attach) and emits the
 ``# HELP`` / ``# TYPE`` / sample lines that Prometheus scrapes. Keeping the
 rendering separate from the readers makes both sides testable on their own.

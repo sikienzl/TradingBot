@@ -6,16 +6,15 @@ Reads trade_journal.csv and exports current balance status as Prometheus metrics
 import ast
 import csv
 import json
-import math
 import os
 import re
 import sys
 from collections import deque
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
+from .pnl_metrics import calculate_pnl_metrics
 from .pnl_prometheus_format import format_prometheus_metrics
 
-MIN_DRAWDOWN_PCT_BASE_USD = 1.0
 BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
 ENV_PATH = '/opt/trading_2/.env'
 AI_COPILOT_STATE_PATH = '/opt/trading_2/ai_copilot_state.json'
@@ -50,177 +49,6 @@ def read_trades(journal_path, *, quiet=False):
             print(f"Error reading trades: {e}", file=sys.stderr)
         return []
     return trades
-
-
-def parse_timestamp(timestamp_str):
-    """Parse ISO timestamps with or without microseconds."""
-    ts = (timestamp_str or '').strip()
-    if not ts:
-        return None
-    try:
-        return datetime.fromisoformat(ts)
-    except ValueError:
-        try:
-            return datetime.fromisoformat(ts.split('.')[0])
-        except ValueError:
-            return None
-
-
-def extract_return_pct(trade):
-    """Extract trade return in decimal form when available."""
-    for key in ('pnl_pct', 'pnl_percent', 'return_pct', 'return'):
-        raw = trade.get(key)
-        if raw in (None, ''):
-            continue
-        try:
-            val = float(raw)
-            return val / 100.0 if abs(val) > 1.0 else val
-        except ValueError:
-            continue
-    return 0.0
-
-
-def calculate_pnl_metrics(trades, time_window_hours=24):
-    """Calculate PnL metrics from trades"""
-    now = datetime.now(UTC)
-    cutoff = now - timedelta(hours=time_window_hours)
-
-    all_time_realized_pnl = 0.0
-    total_realized_pnl = 0.0
-    total_trades = 0
-    winning_trades = 0
-    losing_trades = 0
-    break_even_trades = 0
-    gross_profit = 0.0
-    gross_loss = 0.0
-    per_trade_returns = []
-
-    coin_pnl = {}
-    coin_closed = {}
-    coin_wins = {}
-    coin_break_even = {}
-    coin_buy_volume = {}
-    coin_buy_count = {}
-
-    equity = 0.0
-    peak_equity = 0.0
-    max_drawdown_usd = 0.0
-    max_drawdown_pct = 0.0
-
-    for trade in trades:
-        try:
-            timestamp_str = trade.get('timestamp', '')
-            if not timestamp_str:
-                continue
-
-            ts = parse_timestamp(timestamp_str)
-            if ts is None:
-                continue
-
-            action = trade.get('action', '').lower()
-            coin = (trade.get('coin') or 'UNKNOWN').upper()
-
-            if action == 'buy':
-                if ts < cutoff:
-                    continue
-                try:
-                    buy_volume = float(trade.get('amount_base', '0') or 0.0)
-                except ValueError:
-                    buy_volume = 0.0
-                coin_buy_volume[coin] = coin_buy_volume.get(
-                    coin, 0.0) + max(buy_volume, 0.0)
-                coin_buy_count[coin] = coin_buy_count.get(coin, 0) + 1
-                continue
-
-            if action != 'sell':
-                continue
-
-            pnl_str = trade.get('pnl_base', '0')
-            try:
-                pnl = float(pnl_str)
-            except ValueError:
-                continue
-
-            all_time_realized_pnl += pnl
-
-            if ts < cutoff:
-                continue
-
-            total_trades += 1
-            total_realized_pnl += pnl
-
-            coin_pnl[coin] = coin_pnl.get(coin, 0.0) + pnl
-            coin_closed[coin] = coin_closed.get(coin, 0) + 1
-            coin_break_even.setdefault(coin, 0)
-
-            if pnl > 0:
-                winning_trades += 1
-                gross_profit += pnl
-                coin_wins[coin] = coin_wins.get(coin, 0) + 1
-            elif pnl < 0:
-                losing_trades += 1
-                gross_loss += pnl
-            else:
-                break_even_trades += 1
-                coin_break_even[coin] = coin_break_even.get(coin, 0) + 1
-
-            per_trade_returns.append(extract_return_pct(trade))
-
-            equity += pnl
-            peak_equity = max(peak_equity, equity)
-            drawdown_usd = peak_equity - equity
-            max_drawdown_usd = max(max_drawdown_usd, drawdown_usd)
-            if peak_equity > 0:
-                # Prevent unrealistic percentages when peak equity is near zero.
-                drawdown_pct = drawdown_usd / \
-                    max(peak_equity, MIN_DRAWDOWN_PCT_BASE_USD)
-                max_drawdown_pct = max(max_drawdown_pct, drawdown_pct)
-        except (AttributeError, IndexError, KeyError, TypeError, ValueError, OverflowError):
-            continue
-
-    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
-    avg_pnl = total_realized_pnl / total_trades if total_trades > 0 else 0
-
-    if len(per_trade_returns) > 1:
-        mean_ret = sum(per_trade_returns) / len(per_trade_returns)
-        variance = sum((r - mean_ret) ** 2 for r in per_trade_returns) / \
-            (len(per_trade_returns) - 1)
-        std_dev = math.sqrt(variance)
-        sharpe_ratio = (mean_ret / std_dev) * \
-            math.sqrt(len(per_trade_returns)) if std_dev > 0 else 0.0
-    else:
-        sharpe_ratio = 0.0
-
-    if gross_loss < 0:
-        profit_factor = gross_profit / abs(gross_loss)
-    else:
-        profit_factor = gross_profit if gross_profit > 0 else 0.0
-
-    coin_win_rate = {}
-    for coin, closed in coin_closed.items():
-        wins = coin_wins.get(coin, 0)
-        coin_win_rate[coin] = (wins / closed * 100.0) if closed > 0 else 0.0
-
-    return {
-        'all_time_realized_pnl': all_time_realized_pnl,
-        'total_realized_pnl': total_realized_pnl,
-        'total_trades': total_trades,
-        'winning_trades': winning_trades,
-        'losing_trades': losing_trades,
-        'break_even_trades': break_even_trades,
-        'win_rate': win_rate,
-        'avg_pnl_per_trade': avg_pnl,
-        'profit_factor': profit_factor,
-        'sharpe_ratio': sharpe_ratio,
-        'max_drawdown_usd': max_drawdown_usd,
-        'max_drawdown_pct': max_drawdown_pct * 100.0,
-        'coin_pnl': coin_pnl,
-        'coin_closed': coin_closed,
-        'coin_win_rate': coin_win_rate,
-        'coin_break_even': coin_break_even,
-        'coin_buy_volume': coin_buy_volume,
-        'coin_buy_count': coin_buy_count,
-    }
 
 
 def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH, *, on_portfolio_value=None):
