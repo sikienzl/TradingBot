@@ -27,8 +27,7 @@ prepared; this file intentionally remains under **Unreleased** until then.
 - Add an offline historical OHLCV replay using shared rule recommendations,
   next-candle execution, transaction costs, and a chronological holdout.
 - Add an informational mypy type-check job to CI (non-blocking) plus a
-  `[tool.mypy]` section and `mypy`/`ruff` in the `dev` extra; the dual
-  `if __package__:` import pattern is exempted via `no-redef`.
+  `[tool.mypy]` section and `mypy`/`ruff` in the `dev` extra.
 
 ### Changed
 
@@ -126,6 +125,22 @@ prepared; this file intentionally remains under **Unreleased** until then.
   so behaviour is unchanged).
 - Remove the stale `train_trading_model_backup.py` and ignore `.scannerwork/`
   and `.github/copilot-instructions.md`.
+- Rename the misspelled `src/data_preperation.py` module to
+  `src/data_preparation.py` (test module and documentation references
+  included).
+- Stop tracking the hatch-vcs generated `src/_version.py`; it is written by the
+  build hook and no runtime module imports it.
+- Resolve `src/` imports through the repository root instead of per-file
+  workarounds: removed the `sys.path.insert(0, ROOT)` hacks from `scripts/` and
+  the duplicated `if __package__:` / `else` import branches from `src/`, which
+  now uses absolute `from src.x import ...` throughout (relative imports only
+  inside the package). Entry points were aligned accordingly: the
+  `trading-bot` and `pnl-exporter` systemd units and the Raspberry Pi wrapper
+  set `PYTHONPATH` and start `python -m src.<module>`, and the docs invoke
+  scripts that import `src/` as `python -m scripts.<module>`. No editable
+  install is required, because server and Pi deployments receive the code as a
+  tarball without `.git`, where hatch-vcs versioning cannot run. The mypy
+  `no-redef` exemption for the removed import pattern was dropped.
 - Centralize Ruff configuration in `pyproject.toml` (excludes plus a
   cyclomatic-complexity gate at `max-complexity = 25`) so local `ruff check .`
   matches CI; existing hotspots carry `# noqa: C901` to freeze current
@@ -147,5 +162,11 @@ prepared; this file intentionally remains under **Unreleased** until then.
 - The PnL consolidation and method splits are behavior-preserving refactors:
   exported metric values and trading decisions are unchanged, verified by the
   existing test suite.
+- The import cleanup changes how the services are launched, not what they do:
+  `python src/pnl_exporter.py` (a plain file path) no longer works because the
+  module now uses relative imports, so the refreshed `trading-bot` and
+  `pnl-exporter` unit files must be installed together with the code — an old
+  unit combined with new code fails at startup. Both units already set
+  `PYTHONPATH`, and `systemctl daemon-reload` is required after updating them.
 - Run in dry-run/simulation first and compare results by `run_id` and
   `config_hash`; these reports do not guarantee profitability.
