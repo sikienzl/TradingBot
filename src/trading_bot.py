@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections import Counter, defaultdict
+from collections.abc import Container
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -25,6 +26,17 @@ from dotenv import load_dotenv  # noqa: F401  (re-exported: tests patch src.trad
 from src.analytics import PostgresAnalyticsWriter
 from src.backtesting import Backtester, simple_strategy
 from src.bot_config import BotConfig
+from src.entry_selection import allows_entry_signal as _entry_allows_signal
+from src.entry_selection import classify_entry_market_mode as _entry_classify_mode
+from src.entry_selection import filter_reason_code as _entry_filter_reason_code
+from src.entry_selection import (
+    log_blocked_buy_attempt_candidates as _entry_log_blocked_attempts,
+)
+from src.entry_selection import log_blocked_gate_candidates as _entry_log_blocked_gate
+from src.entry_selection import (
+    log_fallback_entry_diagnostics as _entry_log_fallback_diagnostics,
+)
+from src.entry_selection import select_entry_candidates as _entry_select_candidates
 from src.indicator_service import (
     calculate_atr,
     calculate_macd,
@@ -2167,44 +2179,16 @@ class CryptoTradingBot:
 
     def _entry_market_mode(self, market_analysis: dict[str, dict]) -> str:
         """Classifies the market to suppress aggressive entry filling in weak environments."""
-        if not market_analysis:
-            return 'normal'
-
-        severity_rank = {'normal': 0, 'cautious': 1, 'defensive': 2}
-
-        regime_mode = 'normal'
-        if self.config.simulate_data:
-            regime = (self.config.simulation_regime or 'neutral').lower()
-            if regime in {'crash', 'downtrend'}:
-                regime_mode = 'defensive'
-            elif regime in {'recovery', 'sideways', 'mixed'}:
-                regime_mode = 'cautious'
-
-        bearish_signals = {'SELL', 'WEAK SELL', 'HOLD (Down-Trend)'}
-        bullish_signals = {'BUY', 'STRONG BUY', 'HOLD (Up-Trend)'}
-        bearish = sum(
-            1 for data in market_analysis.values()
-            if data.get('recommendation') in bearish_signals
+        return _entry_classify_mode(
+            market_analysis,
+            simulate_data=self.config.simulate_data,
+            simulation_regime=self.config.simulation_regime,
         )
-        bullish = sum(
-            1 for data in market_analysis.values()
-            if data.get('recommendation') in bullish_signals
-        )
-        total = max(1, len(market_analysis))
-        bearish_share = bearish / total
-
-        signal_mode = 'normal'
-        if bearish_share >= 0.60 or bearish >= bullish + 2:
-            signal_mode = 'defensive'
-        elif bearish_share >= 0.40 or bearish > bullish:
-            signal_mode = 'cautious'
-
-        return max((regime_mode, signal_mode), key=severity_rank.__getitem__)
 
     @staticmethod
     def _filter_reason_code(reason: str) -> str:
         """Normalizes verbose filter reasons into stable summary keys."""
-        return str(reason).split(' ', 1)[0]
+        return _entry_filter_reason_code(reason)
 
     def _log_blocked_uptrend_candidates(
         self,
@@ -2213,67 +2197,14 @@ class CryptoTradingBot:
         limit: int = 5,
     ) -> None:
         """Logs concrete rejection details for blocked rules-based up-trend entries."""
-        blocked_candidates = []
-        for coin, data in market_analysis.items():
-            if data.get('recommendation') != 'HOLD (Up-Trend)':
-                continue
-            passes_filter, filter_reason = uptrend_filter_results.get(
-                coin, (True, 'not_evaluated'))
-            if passes_filter:
-                continue
-            buy_proba = data.get('tabular_buy_proba')
-            sell_proba = data.get('tabular_sell_proba')
-            proba_edge = None
-            if buy_proba is not None and sell_proba is not None:
-                try:
-                    if not np.isnan(buy_proba) and not np.isnan(sell_proba):
-                        proba_edge = float(buy_proba) - float(sell_proba)
-                except TypeError:
-                    proba_edge = None
-            blocked_candidates.append({
-                'coin': coin,
-                'reason': filter_reason,
-                'reason_code': self._filter_reason_code(filter_reason),
-                'rsi': data.get('rsi'),
-                'buy_proba': buy_proba,
-                'sell_proba': sell_proba,
-                'proba_edge': proba_edge,
-                'signal_source': data.get('signal_source', 'n/a'),
-                'score': data.get('score', 0),
-                'rule_score': data.get('rule_score', 0),
-            })
-
-        if not blocked_candidates:
-            return
-
-        reason_mix = dict(Counter(
-            candidate['reason_code'] for candidate in blocked_candidates
-        ))
-        logger.info(
-            '  🚧 Uptrend entry gate blocked %d candidate(s): %s',
-            len(blocked_candidates),
-            reason_mix,
+        _entry_log_blocked_gate(
+            market_analysis,
+            uptrend_filter_results,
+            recommendation='HOLD (Up-Trend)',
+            gate_label='Uptrend entry gate',
+            limit=limit,
+            logger=logger,
         )
-        for candidate in blocked_candidates[:limit]:
-            rsi = candidate['rsi']
-            buy_proba = candidate['buy_proba']
-            sell_proba = candidate['sell_proba']
-            proba_edge = candidate['proba_edge']
-            logger.info(
-                '    - %s: reason=%s, RSI=%s, buy_proba=%s, sell_proba=%s, edge=%s, source=%s, score=%s, rule_score=%s',
-                candidate['coin'],
-                candidate['reason'],
-                f'{float(rsi):.2f}' if rsi is not None and not np.isnan(
-                    rsi) else 'n/a',
-                f'{float(buy_proba):.3f}' if buy_proba is not None and not np.isnan(
-                    buy_proba) else 'n/a',
-                f'{float(sell_proba):.3f}' if sell_proba is not None and not np.isnan(
-                    sell_proba) else 'n/a',
-                f'{float(proba_edge):.3f}' if proba_edge is not None else 'n/a',
-                candidate['signal_source'],
-                candidate['score'],
-                candidate['rule_score'],
-            )
 
     def _log_blocked_downtrend_reversal_candidates(
         self,
@@ -2282,67 +2213,14 @@ class CryptoTradingBot:
         limit: int = 5,
     ) -> None:
         """Logs concrete rejection details for blocked down-trend reversal entries."""
-        blocked_candidates = []
-        for coin, data in market_analysis.items():
-            if data.get('recommendation') != 'HOLD (Down-Trend)':
-                continue
-            passes_filter, filter_reason = downtrend_filter_results.get(
-                coin, (True, 'not_evaluated'))
-            if passes_filter:
-                continue
-            buy_proba = data.get('tabular_buy_proba')
-            sell_proba = data.get('tabular_sell_proba')
-            proba_edge = None
-            if buy_proba is not None and sell_proba is not None:
-                try:
-                    if not np.isnan(buy_proba) and not np.isnan(sell_proba):
-                        proba_edge = float(buy_proba) - float(sell_proba)
-                except TypeError:
-                    proba_edge = None
-            blocked_candidates.append({
-                'coin': coin,
-                'reason': filter_reason,
-                'reason_code': self._filter_reason_code(filter_reason),
-                'rsi': data.get('rsi'),
-                'buy_proba': buy_proba,
-                'sell_proba': sell_proba,
-                'proba_edge': proba_edge,
-                'signal_source': data.get('signal_source', 'n/a'),
-                'score': data.get('score', 0),
-                'rule_score': data.get('rule_score', 0),
-            })
-
-        if not blocked_candidates:
-            return
-
-        reason_mix = dict(Counter(
-            candidate['reason_code'] for candidate in blocked_candidates
-        ))
-        logger.info(
-            '  🚧 Downtrend reversal gate blocked %d candidate(s): %s',
-            len(blocked_candidates),
-            reason_mix,
+        _entry_log_blocked_gate(
+            market_analysis,
+            downtrend_filter_results,
+            recommendation='HOLD (Down-Trend)',
+            gate_label='Downtrend reversal gate',
+            limit=limit,
+            logger=logger,
         )
-        for candidate in blocked_candidates[:limit]:
-            rsi = candidate['rsi']
-            buy_proba = candidate['buy_proba']
-            sell_proba = candidate['sell_proba']
-            proba_edge = candidate['proba_edge']
-            logger.info(
-                '    - %s: reason=%s, RSI=%s, buy_proba=%s, sell_proba=%s, edge=%s, source=%s, score=%s, rule_score=%s',
-                candidate['coin'],
-                candidate['reason'],
-                f'{float(rsi):.2f}' if rsi is not None and not np.isnan(
-                    rsi) else 'n/a',
-                f'{float(buy_proba):.3f}' if buy_proba is not None and not np.isnan(
-                    buy_proba) else 'n/a',
-                f'{float(sell_proba):.3f}' if sell_proba is not None and not np.isnan(
-                    sell_proba) else 'n/a',
-                f'{float(proba_edge):.3f}' if proba_edge is not None else 'n/a',
-                candidate['signal_source'],
-                candidate['score'],
-                candidate['rule_score'],
-            )
 
     def _log_fallback_entry_diagnostics(
         self,
@@ -2355,71 +2233,16 @@ class CryptoTradingBot:
         limit: int = 5,
     ) -> None:
         """Logs why fallback entries were blocked or fully suppressed."""
-        blocked_candidates = []
-        for coin in fallback_base_candidates:
-            passes_filter, filter_reason = fallback_filter_results.get(
-                coin, (True, 'not_evaluated'))
-            if passes_filter:
-                continue
-            data = market_analysis.get(coin, {})
-            blocked_candidates.append({
-                'coin': coin,
-                'reason': filter_reason,
-                'reason_code': self._filter_reason_code(filter_reason),
-                'rsi': data.get('rsi'),
-                'signal_source': data.get('signal_source', 'n/a'),
-                'score': data.get('score', 0),
-                'rule_score': data.get('rule_score', 0),
-            })
-
-        if blocked_candidates:
-            reason_mix = dict(Counter(
-                candidate['reason_code'] for candidate in blocked_candidates
-            ))
-            logger.info(
-                '  🚧 Fallback RSI gate blocked %d candidate(s): %s',
-                len(blocked_candidates),
-                reason_mix,
-            )
-            for candidate in blocked_candidates[:limit]:
-                rsi = candidate['rsi']
-                logger.info(
-                    '    - %s: reason=%s, RSI=%s, source=%s, score=%s, rule_score=%s',
-                    candidate['coin'],
-                    candidate['reason'],
-                    f'{float(rsi):.2f}' if rsi is not None and not np.isnan(
-                        rsi) else 'n/a',
-                    candidate['signal_source'],
-                    candidate['score'],
-                    candidate['rule_score'],
-                )
-
-        if fallback_allowed or not fallback_base_candidates:
-            return
-
-        logger.info(
-            '  🛑 Fallback entry suppressed (%s): %d candidate(s) met all non-RSI fallback conditions in entry_mode=%s.',
+        _entry_log_fallback_diagnostics(
+            market_analysis,
+            fallback_base_candidates,
+            fallback_filter_results,
+            fallback_allowed,
             fallback_suppression_reason,
-            len(fallback_base_candidates),
             entry_market_mode,
+            limit=limit,
+            logger=logger,
         )
-        for coin in fallback_base_candidates[:limit]:
-            data = market_analysis.get(coin, {})
-            signal_confidence = data.get('signal_confidence')
-            confidence_text = ''
-            if signal_confidence is not None:
-                confidence_text = f", confidence={float(signal_confidence) * 100:.0f}%"
-            logger.info(
-                '    - %s: rec=%s, score=%s, rule_score=%s, RSI=%s, source=%s%s',
-                coin,
-                data.get('recommendation', 'n/a'),
-                data.get('score', 0),
-                data.get('rule_score', 0),
-                f"{float(data.get('rsi', np.nan)):.2f}" if not np.isnan(
-                    data.get('rsi', np.nan)) else 'n/a',
-                data.get('signal_source', 'n/a'),
-                confidence_text,
-            )
 
     def _log_blocked_buy_attempt_candidates(
         self,
@@ -2427,31 +2250,7 @@ class CryptoTradingBot:
         limit: int = 5,
     ) -> None:
         """Logs why shortlisted buy candidates still failed during the execution path."""
-        if not blocked_attempts:
-            return
-
-        reason_mix = dict(Counter(
-            self._filter_reason_code(attempt.get('reason', 'unknown'))
-            for attempt in blocked_attempts
-        ))
-        logger.info(
-            '  🚫 Buy attempt blocked %d candidate(s): %s',
-            len(blocked_attempts),
-            reason_mix,
-        )
-        for attempt in blocked_attempts[:limit]:
-            logger.info(
-                '    - %s: reason=%s, source=%s, score=%s, recommendation=%s, position_size=%s, cash=%s, cooldown_remaining=%s',
-                attempt.get('coin', 'n/a'),
-                attempt.get('reason', 'unknown'),
-                attempt.get('signal_source', 'n/a'),
-                attempt.get('score', 'n/a'),
-                attempt.get('recommendation', 'n/a'),
-                attempt.get('position_size_text', 'n/a'),
-                attempt.get('cash_text', 'n/a'),
-                attempt.get('cooldown_text', 'n/a'),
-            )
-
+        _entry_log_blocked_attempts(blocked_attempts, limit=limit, logger=logger)
     @staticmethod
     def _is_rules_uptrend_trade(trade_info: dict) -> bool:
         recommendation = str(trade_info.get('recommendation', ''))
@@ -2539,10 +2338,11 @@ class CryptoTradingBot:
         excluded_signals: set[str],
     ) -> bool:
         """Keeps explicit downtrend-reversal approvals eligible even when generic exits block downtrend entries."""
-        if recommendation != 'HOLD (Down-Trend)':
-            return recommendation not in excluded_signals
-        return downtrend_reversal_allowed
-
+        return _entry_allows_signal(
+            recommendation,
+            downtrend_reversal_allowed=downtrend_reversal_allowed,
+            excluded_signals=excluded_signals,
+        )
     @staticmethod
     def _is_downtrend_reversal_trade(trade_info: dict) -> bool:
         """Returns True for trades opened via the guarded downtrend reversal path."""
@@ -3858,7 +3658,7 @@ class CryptoTradingBot:
         self,
         coin: str,
         data: dict[str, Any],
-        excluded_pairs: set[tuple[str, str]],
+        excluded_pairs: Container[tuple[str, str]],
     ) -> bool:
         """True unless this (coin, signal_source) pair is dynamically excluded."""
         source = str(data.get('signal_source', 'rules')).strip().lower()
@@ -3989,13 +3789,8 @@ class CryptoTradingBot:
                 ', '.join(sorted(degraded_entry_sources)),
             )
         recent_pnl_guard = self._recent_pnl_guard_state()
-        recent_pnl_guard_active = bool(
-            recent_pnl_guard.get('active', False))
+        recent_pnl_guard_active = bool(recent_pnl_guard.get('active', False))
         self._log_recent_pnl_guard_status(recent_pnl_guard)
-
-
-        entry_guard_results: dict[str, bool] = {}
-
 
         downtrend_filter_results = {
             coin: self._passes_downtrend_reversal_filter(data)
@@ -4007,18 +3802,27 @@ class CryptoTradingBot:
         }
         entry_market_mode = self._entry_market_mode(market_analysis)
 
-        # Only suggest coins not yet held.
-        strict_buy_candidates_before_guard = [
-            coin for coin, data in market_analysis.items()
-            if coin not in occupied_positions
-            and data.get('recommendation') in ['STRONG BUY', 'BUY']
-            and data.get('score', 0) >= self.config.min_entry_score
-            and self._entry_pair_allowed(coin, data, dynamic_excluded_entry_pairs)
-            and self._entry_guards_allow(coin, data, entry_guard_results)
-        ]
+        selection = _entry_select_candidates(
+            market_analysis,
+            config=self.config,
+            occupied_positions=occupied_positions,
+            available_trade_slots=available_trade_slots,
+            dynamic_excluded_entry_pairs=dynamic_excluded_entry_pairs,
+            degraded_entry_sources=degraded_entry_sources,
+            recent_pnl_guard_active=recent_pnl_guard_active,
+            downtrend_filter_results=downtrend_filter_results,
+            uptrend_filter_results=uptrend_filter_results,
+            entry_market_mode=entry_market_mode,
+            entry_pair_allowed=self._entry_pair_allowed,
+            entry_guards_allow=self._entry_guards_allow,
+            fallback_entry_filter=self._passes_fallback_entry_filter,
+            logger=logger,
+        )
+        top_buy_recommendations = selection['selected']
+
         if recent_pnl_guard_active:
             blocked_by_recent_guard = [
-                coin for coin in strict_buy_candidates_before_guard
+                coin for coin in selection['strict_candidates_before_guard']
                 if str(market_analysis[coin].get(
                     'signal_source', 'rules')).strip().lower() != 'catboost'
             ]
@@ -4030,157 +3834,18 @@ class CryptoTradingBot:
                 len(blocked_by_recent_guard),
                 ', '.join(blocked_by_recent_guard[:10]) or "none",
             )
-        strict_buy_candidates = [
-            coin for coin in strict_buy_candidates_before_guard
-            if not recent_pnl_guard_active
-            or str(market_analysis[coin].get(
-                'signal_source', 'rules')).strip().lower() == 'catboost'
-        ]
-        top_buy_recommendations = strict_buy_candidates[:min(
-            self.config.top_n_for_analysis, available_trade_slots)]
-
-        # Fallback: fill remaining slots with solid non-SELL candidates.
-        # If exit_on_downtrend is active, exclude down-trend coins from entries.
-        _excluded_signals_fallback = ['SELL', 'WEAK SELL']
-        if self.config.exit_on_downtrend:
-            _excluded_signals_fallback.append('HOLD (Down-Trend)')
-        def _candidates_within_filters(min_score: float) -> list[str]:
-            """Coins passing the shared entry filters for a given minimum score."""
-            return [
-                coin for coin, data in market_analysis.items()
-                if coin not in occupied_positions
-                and coin not in top_buy_recommendations
-                if data.get('score', 0) >= min_score
-                and self._entry_guards_allow(coin, data, entry_guard_results)
-                and str(data.get('signal_source', 'rules')).strip().lower() not in degraded_entry_sources
-                and self._allows_entry_signal(
-                    str(data.get('recommendation', '')),
-                    downtrend_filter_results.get(
-                        coin, (False, 'not_evaluated'))[0],
-                    set(_excluded_signals_fallback),
-                )
-                and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                and self._entry_pair_allowed(coin, data, dynamic_excluded_entry_pairs)
-            ]
-
-        fallback_base_candidates = _candidates_within_filters(
-            self.config.fallback_min_score)
-        fallback_filter_results = {
-            coin: self._passes_fallback_entry_filter(
-                coin, market_analysis.get(coin, {}))
-            for coin in fallback_base_candidates
-        }
-        fallback_candidates = []
-        fallback_allowed = (
-            self.config.enable_fallback_entry
-            and not recent_pnl_guard_active
-            and available_trade_slots > len(top_buy_recommendations)
-            and (
-                not self.config.defensive_entry_mode_enabled
-                or entry_market_mode != 'defensive'
-            )
-        )
-        fallback_suppression_reason = 'allowed'
-        if not self.config.enable_fallback_entry:
-            fallback_suppression_reason = 'fallback_disabled'
-        elif available_trade_slots <= len(top_buy_recommendations):
-            fallback_suppression_reason = 'no_free_slots'
-        elif self.config.defensive_entry_mode_enabled and entry_market_mode == 'defensive':
-            fallback_suppression_reason = 'entry_mode_defensive'
-        if fallback_allowed:
-            fallback_candidates = [
-                coin for coin in fallback_base_candidates
-                if fallback_filter_results.get(coin, (False, 'not_evaluated'))[0]
-            ]
-            if fallback_candidates:
-                missing_slots = available_trade_slots - \
-                    len(top_buy_recommendations)
-                top_buy_recommendations.extend(
-                    fallback_candidates[:missing_slots])
-                best_coin = top_buy_recommendations[0]
-                best_data = market_analysis.get(best_coin, {})
-                logger.info(
-                    f"ℹ️ Fallback entry activated (slots filled): lead candidate {best_coin} ({best_data.get('recommendation', 'n/a')}, score {best_data.get('score', 0)}).")
-
-        # Optional more aggressive slot filling: use neutral candidates even without RSI filter,
-        # down-trend coins are also excluded when exit_on_downtrend is active.
-        force_fill_candidates = []
-        force_fill_allowed = (
-            self.config.force_fill_slots
-            and not recent_pnl_guard_active
-            and available_trade_slots > len(top_buy_recommendations)
-            and (
-                not self.config.defensive_entry_mode_enabled
-                or entry_market_mode == 'normal'
-            )
-        )
-        if force_fill_allowed:
-            force_fill_candidates = _candidates_within_filters(
-                self.config.force_fill_min_score)
-            if force_fill_candidates:
-                missing_slots = available_trade_slots - \
-                    len(top_buy_recommendations)
-                top_buy_recommendations.extend(
-                    force_fill_candidates[:missing_slots])
-                logger.info(
-                    f"⚙️ Force-fill active: {min(len(force_fill_candidates), missing_slots)} additional candidates added (min score {self.config.force_fill_min_score}).")
 
         logger.info(
             f"🔍 Market analysis complete. Top {len(top_buy_recommendations)} buy recommendations:")
 
         if not top_buy_recommendations and market_analysis:
-            recommendation_mix = dict(Counter(
-                data.get('recommendation', 'UNKNOWN')
-                for data in market_analysis.values()
-            ))
-            downtrend_reversal_eligible = sum(
-                1
-                for coin, data in market_analysis.items()
-                if data.get('recommendation') == 'HOLD (Down-Trend)'
-                and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-            )
-            logger.info(
-                "ℹ️ No entry candidates this round: strict=%d, fallback=%d, force_fill=%d, downtrend_reversal_eligible=%d, entry_mode=%s, recommendation_mix=%s",
-                len(strict_buy_candidates),
-                len(fallback_candidates),
-                len(force_fill_candidates),
-                downtrend_reversal_eligible,
-                entry_market_mode,
-                recommendation_mix,
-            )
-            self._log_blocked_uptrend_candidates(
+            self._log_no_entry_candidates(
                 market_analysis,
-                uptrend_filter_results,
-            )
-            self._log_blocked_downtrend_reversal_candidates(
-                market_analysis,
+                selection,
                 downtrend_filter_results,
-            )
-            self._log_fallback_entry_diagnostics(
-                market_analysis,
-                fallback_base_candidates,
-                fallback_filter_results,
-                fallback_allowed,
-                fallback_suppression_reason,
+                uptrend_filter_results,
                 entry_market_mode,
             )
-            for coin, data in list(market_analysis.items())[:5]:
-                signal_confidence = data.get('signal_confidence')
-                confidence_text = ''
-                if signal_confidence is not None:
-                    confidence_text = f", confidence={float(signal_confidence) * 100:.0f}%"
-                logger.info(
-                    "  - %s: rec=%s, rule=%s, score=%s, rule_score=%s, RSI=%.2f, source=%s%s",
-                    coin,
-                    data.get('recommendation', 'n/a'),
-                    data.get('rule_recommendation', 'n/a'),
-                    data.get('score', 0),
-                    data.get('rule_score', 0),
-                    float(data.get('rsi', np.nan)),
-                    data.get('signal_source', 'n/a'),
-                    confidence_text,
-                )
 
         for i, coin in enumerate(top_buy_recommendations):
             data = market_analysis.get(coin, {})
@@ -4191,7 +3856,67 @@ class CryptoTradingBot:
                         f"RSI: {data.get('rsi', np.nan):.2f})")
         return top_buy_recommendations
 
-
+    def _log_no_entry_candidates(
+        self,
+        market_analysis: dict[str, Any],
+        selection: dict[str, Any],
+        downtrend_filter_results: dict[str, tuple[bool, str]],
+        uptrend_filter_results: dict[str, tuple[bool, str]],
+        entry_market_mode: str,
+    ) -> None:
+        """Explains an empty entry shortlist: signal mix, gates and diagnostics."""
+        recommendation_mix = dict(Counter(
+            data.get('recommendation', 'UNKNOWN')
+            for data in market_analysis.values()
+        ))
+        downtrend_reversal_eligible = sum(
+            1
+            for coin, data in market_analysis.items()
+            if data.get('recommendation') == 'HOLD (Down-Trend)'
+            and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+        )
+        logger.info(
+            "ℹ️ No entry candidates this round: strict=%d, fallback=%d, force_fill=%d, "
+            "downtrend_reversal_eligible=%d, entry_mode=%s, recommendation_mix=%s",
+            len(selection['strict_buy_candidates']),
+            len(selection['fallback_candidates']),
+            len(selection['force_fill_candidates']),
+            downtrend_reversal_eligible,
+            entry_market_mode,
+            recommendation_mix,
+        )
+        self._log_blocked_uptrend_candidates(
+            market_analysis,
+            uptrend_filter_results,
+        )
+        self._log_blocked_downtrend_reversal_candidates(
+            market_analysis,
+            downtrend_filter_results,
+        )
+        self._log_fallback_entry_diagnostics(
+            market_analysis,
+            selection['fallback_base_candidates'],
+            selection['fallback_filter_results'],
+            selection['fallback_allowed'],
+            selection['fallback_suppression_reason'],
+            entry_market_mode,
+        )
+        for coin, data in list(market_analysis.items())[:5]:
+            signal_confidence = data.get('signal_confidence')
+            confidence_text = ''
+            if signal_confidence is not None:
+                confidence_text = f", confidence={float(signal_confidence) * 100:.0f}%"
+            logger.info(
+                "  - %s: rec=%s, rule=%s, score=%s, rule_score=%s, RSI=%.2f, source=%s%s",
+                coin,
+                data.get('recommendation', 'n/a'),
+                data.get('rule_recommendation', 'n/a'),
+                data.get('score', 0),
+                data.get('rule_score', 0),
+                float(data.get('rsi', np.nan)),
+                data.get('signal_source', 'n/a'),
+                confidence_text,
+            )
     def _execute_signal_exits(
         self,
         current_market_data: dict[str, Any],
