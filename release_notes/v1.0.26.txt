@@ -1,0 +1,58 @@
+v1.0.26 - Reproducible Pi and cluster release packages
+
+Date: 2026-11-24
+
+Changes
+
+Release packaging
+- One v* tag now publishes TWO artifacts in one GitHub Release:
+  trading-bot-pi-<version>.tar.gz (single Raspberry Pi) and
+  trading-cluster-<version>.tar.gz (two-node CM5 cluster). The cluster archive
+  is built deterministically by .github/scripts/cluster_release.py (sorted
+  members, fixed metadata, gzip mtime 0), records version and commit in
+  version.txt and ships a .sha256 sidecar, so a third party can rebuild and
+  verify it.
+- The cluster archive carries everything the cluster rollout needs: src/, the
+  docker/ Dockerfiles, deploy/ units and env templates, docs/, the generic
+  ansible/ paper-dashboard starter (example inventories and vault templates
+  only), requirements-hailo-server.txt, requirements-hailo-shadow.txt and
+  requirements-dashboard.txt, plus the CatBoost decision model. The LLM
+  adapter, Hailo SDK packages and HEF files are excluded by design; images
+  are built on the nodes.
+- The Pi archive now contains everything scripts/install_pi.sh and the
+  packaged READMEs expect: the docs/ guides and the weekly auto-tuning units
+  and scripts (deploy/tuning-cycle.service/.timer,
+  scripts/run_weekly_tuning_cycle.sh, apply_tuning_recommendation.py,
+  recommend_tuning_change.py), which previously only produced installer
+  warnings.
+- Tracked executable scripts keep their executable bit (git mode 100755) in
+  the cluster archive instead of being flattened to 0644, so unpacked
+  wrappers run directly.
+
+Operations
+- Added the analytics PostgreSQL backup wrappers that
+  deploy/postgresql-analytics-backup.service and
+  -restore-check.service execute:
+  scripts/postgresql-analytics-backup (custom-format pg_dump from the
+  container to the NAS mount, .sha256 sidecar, retention pruning) and
+  scripts/postgresql-analytics-restore-check (restores the newest dump into a
+  throwaway database, verifies the trading_analytics schema, drops it again).
+  Database name and user are read from the container environment, so no
+  credentials live on the host. New daily/weekly timer units schedule both
+  jobs.
+
+Privacy and safety
+- Packaging is allowlist-based and enforced by tests: real (non-example)
+  ansible inventories, vault files and TLS key material, .env files,
+  trade_journal.csv and data/ are rejected even if force-added to git; a
+  content scan blocks private-key blocks, $ANSIBLE_VAULT blobs, GitHub/AWS
+  tokens and filled-in YAML password/secret assignments. Only placeholder
+  templates (REPLACE_WITH_..., {{ vault_... }}, empty values) pass.
+
+Notes
+- No trading behaviour, thresholds or PnL-guard logic changed in this
+  release; it is packaging and operations only.
+- Install the refreshed systemd unit files together with the code and run
+  systemctl daemon-reload afterwards.
+- Run in dry-run/simulation first when adopting the new backup jobs; verify
+  each run with systemctl status and the journal before relying on the timers.

@@ -5,6 +5,8 @@ a version heading is assigned when a release is prepared.
 
 ## Unreleased
 
+## v1.0.26 - 2026-11-24
+
 ### Added
 
 - Publish a second package per release tag: `v*` now produces
