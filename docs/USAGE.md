@@ -230,7 +230,7 @@ Use only one start/stop operator for a given PID file.
 
 Simulation regime comparison helper:
 ```sh
-python3 scripts/compare_simulation_regimes.py --coins BTC,ETH,SOL,CHZ,VVV
+python3 -m scripts.compare_simulation_regimes --coins BTC,ETH,SOL,CHZ,VVV
 ```
 This runs the bot's own market analysis against multiple synthetic regimes and prints the top recommendations side by side.
 
@@ -414,7 +414,7 @@ host with the `hailo-export` dependencies installed, use a chronological CSV
 from `scripts/collect_hailo_training.py` and a new output directory:
 
 ```sh
-python3 scripts/run_hailo_experiment.py \
+python3 -m scripts.run_hailo_experiment \
   --data data/kraken_hailo_training.csv \
   --proposal proposal.json \
   --output-dir results/hailo-experiment-001

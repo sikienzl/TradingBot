@@ -3,13 +3,10 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 from datetime import UTC, datetime
 from typing import Any
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
 
 
 def _discover_repo_candidates() -> list[str]:

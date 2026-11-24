@@ -64,7 +64,7 @@ Quick examples:
 
 ```sh
 DRY_RUN=true SIMULATE_DATA=true SIMULATION_REGIME=crash python3 -m src.trading_bot --backtest
-SIMULATE_DATA=true SIMULATION_REGIME=uptrend python3 scripts/compare_simulation_regimes.py --coins BTC,ETH,SOL
+SIMULATE_DATA=true SIMULATION_REGIME=uptrend python3 -m scripts.compare_simulation_regimes --coins BTC,ETH,SOL
 PI_HOST=local bash scripts/run_compare_simulation_standard_profiles_on_pi.sh
 ```
 

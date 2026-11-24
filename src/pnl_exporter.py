@@ -14,56 +14,30 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-if __package__:
-    from .export_pnl_metrics import (
-        _read_env_value as _shared_read_env_value,
-    )
-    from .export_pnl_metrics import (
-        _scan_portfolio_start_value_from_log as _shared_scan_portfolio_start_value,
-    )
-    from .export_pnl_metrics import (
-        calculate_pnl_metrics as _shared_calculate_pnl_metrics,
-    )
-    from .export_pnl_metrics import (
-        compute_recent_pnl_guard_state as _shared_compute_recent_pnl_guard_state,
-    )
-    from .export_pnl_metrics import (
-        format_prometheus_metrics as _shared_format_prometheus_metrics,
-    )
-    from .export_pnl_metrics import (
-        read_ai_shadow_suggestions as _shared_read_ai_shadow_suggestions,
-    )
-    from .export_pnl_metrics import (
-        read_latest_portfolio_snapshot as _shared_read_latest_portfolio_snapshot,
-    )
-    from .export_pnl_metrics import (
-        read_trades as _shared_read_trades,
-    )
-else:
-    from export_pnl_metrics import (
-        _read_env_value as _shared_read_env_value,
-    )
-    from export_pnl_metrics import (
-        _scan_portfolio_start_value_from_log as _shared_scan_portfolio_start_value,
-    )
-    from export_pnl_metrics import (
-        calculate_pnl_metrics as _shared_calculate_pnl_metrics,
-    )
-    from export_pnl_metrics import (
-        compute_recent_pnl_guard_state as _shared_compute_recent_pnl_guard_state,
-    )
-    from export_pnl_metrics import (
-        format_prometheus_metrics as _shared_format_prometheus_metrics,
-    )
-    from export_pnl_metrics import (
-        read_ai_shadow_suggestions as _shared_read_ai_shadow_suggestions,
-    )
-    from export_pnl_metrics import (
-        read_latest_portfolio_snapshot as _shared_read_latest_portfolio_snapshot,
-    )
-    from export_pnl_metrics import (
-        read_trades as _shared_read_trades,
-    )
+from .export_pnl_metrics import (
+    _read_env_value as _shared_read_env_value,
+)
+from .export_pnl_metrics import (
+    _scan_portfolio_start_value_from_log as _shared_scan_portfolio_start_value,
+)
+from .export_pnl_metrics import (
+    calculate_pnl_metrics as _shared_calculate_pnl_metrics,
+)
+from .export_pnl_metrics import (
+    compute_recent_pnl_guard_state as _shared_compute_recent_pnl_guard_state,
+)
+from .export_pnl_metrics import (
+    format_prometheus_metrics as _shared_format_prometheus_metrics,
+)
+from .export_pnl_metrics import (
+    read_ai_shadow_suggestions as _shared_read_ai_shadow_suggestions,
+)
+from .export_pnl_metrics import (
+    read_latest_portfolio_snapshot as _shared_read_latest_portfolio_snapshot,
+)
+from .export_pnl_metrics import (
+    read_trades as _shared_read_trades,
+)
 
 JOURNAL_PATH = '/opt/trading_2/trade_journal.csv'
 BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'

@@ -12,7 +12,7 @@ Group=trading
 WorkingDirectory=/opt/trading_2
 EnvironmentFile=/opt/trading_2/.env
 Environment=PYTHONPATH=/opt/trading_2
-ExecStart=/opt/trading_2/.venv/bin/python /opt/trading_2/src/trading_bot.py
+ExecStart=/opt/trading_2/.venv/bin/python -m src.trading_bot
 Restart=on-failure
 RestartSec=30
 StandardOutput=append:/opt/trading_2/logs/bot.log

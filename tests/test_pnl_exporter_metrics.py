@@ -134,10 +134,10 @@ def test_http_snapshot_tracks_latest_valid_timestamp_and_age(monkeypatch, tmp_pa
     )
 
 
-def test_http_exporter_can_import_as_standalone_script(tmp_path):
-    script_dir = Path(pnl_exporter.__file__).parent
+def test_http_exporter_imports_as_src_package_module():
+    repo_root = Path(pnl_exporter.__file__).resolve().parent.parent
     subprocess.run(
-        [sys.executable, "-c", f"import sys; sys.path.insert(0, {str(script_dir)!r}); import pnl_exporter"],
-        cwd=tmp_path,
+        [sys.executable, "-c", "import src.pnl_exporter"],
+        cwd=repo_root,
         check=True,
     )

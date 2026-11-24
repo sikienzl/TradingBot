@@ -13,10 +13,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-if __package__:
-    from src.bot_config import BotConfig
-else:  # pragma: no cover - direct script execution fallback
-    from bot_config import BotConfig
+from src.bot_config import BotConfig
 
 logger = logging.getLogger(__name__)
 

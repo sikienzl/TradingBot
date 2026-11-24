@@ -3,14 +3,7 @@ import argparse
 import logging
 import math
 import os
-import sys
 from collections import Counter
-from pathlib import Path
-
-SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from src.trading_bot import BotConfig, CryptoTradingBot
 from src.trading_bot import logger as bot_logger

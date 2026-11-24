@@ -591,10 +591,10 @@ still-forming candle:
 
 ```sh
 rtk proxy pip install '.[hailo-export]'
-rtk proxy python3 scripts/collect_hailo_training.py data/kraken_hailo_training.csv
+rtk proxy python3 -m scripts.collect_hailo_training data/kraken_hailo_training.csv
 rtk proxy python3 -m src.train_hailo_model --data-path data/kraken_hailo_training.csv \
   --output-dir model/hailo_trading_model
-rtk proxy python3 scripts/prepare_hailo_calibration.py \
+rtk proxy python3 -m scripts.prepare_hailo_calibration \
   data/kraken_hailo_training.csv model/hailo_trading_model
 ```
 

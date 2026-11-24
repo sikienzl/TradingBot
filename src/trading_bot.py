@@ -23,30 +23,17 @@ import numpy as np
 import pandas as pd
 from dotenv import load_dotenv  # noqa: F401  (re-exported: tests patch src.trading_bot.load_dotenv)
 
-if __package__:
-    from src.analytics import PostgresAnalyticsWriter
-    from src.backtesting import Backtester, simple_strategy
-    from src.bot_config import BotConfig
-    from src.journal_guards import (
-        _compute_degraded_entry_sources,
-        _compute_dynamic_lossmaker_entry_pairs,
-        _compute_recent_pnl_guard_state,
-    )
-    from src.portfolio import Portfolio
-    from src.simulation import SimulationEngine
-    from src.strategy_rules import rule_recommendation as get_rule_recommendation
-else:
-    from analytics import PostgresAnalyticsWriter
-    from backtesting import Backtester, simple_strategy
-    from bot_config import BotConfig
-    from journal_guards import (
-        _compute_degraded_entry_sources,
-        _compute_dynamic_lossmaker_entry_pairs,
-        _compute_recent_pnl_guard_state,
-    )
-    from portfolio import Portfolio
-    from simulation import SimulationEngine
-    from strategy_rules import rule_recommendation as get_rule_recommendation
+from src.analytics import PostgresAnalyticsWriter
+from src.backtesting import Backtester, simple_strategy
+from src.bot_config import BotConfig
+from src.journal_guards import (
+    _compute_degraded_entry_sources,
+    _compute_dynamic_lossmaker_entry_pairs,
+    _compute_recent_pnl_guard_state,
+)
+from src.portfolio import Portfolio
+from src.simulation import SimulationEngine
+from src.strategy_rules import rule_recommendation as get_rule_recommendation
 
 logger = logging.getLogger(__name__)
 

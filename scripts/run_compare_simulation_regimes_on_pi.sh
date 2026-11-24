@@ -9,7 +9,7 @@ PI_SCRIPT=${PI_SCRIPT:-$PI_APP_DIR/scripts/compare_simulation_regimes.py}
 
 run_local() {
     cd "$PI_APP_DIR"
-    sudo -u "$PI_SERVICE_USER" "$PI_PYTHON" "$PI_SCRIPT" "$@"
+    sudo -u "$PI_SERVICE_USER" env PYTHONPATH="$PI_APP_DIR" "$PI_PYTHON" "$PI_SCRIPT" "$@"
 }
 
 if [[ "$PI_HOST" == "local" || "$PI_HOST" == "localhost" ]]; then
@@ -37,5 +37,5 @@ pi_script=$4
 shift 4
 
 cd "$pi_app_dir"
-sudo -u "$pi_service_user" "$pi_python" "$pi_script" "$@"
+sudo -u "$pi_service_user" env PYTHONPATH="$pi_app_dir" "$pi_python" "$pi_script" "$@"
 EOF
