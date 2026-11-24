@@ -984,15 +984,44 @@ bash scripts/create_pi_release.sh
 git tag v0.1.1 && git push origin v0.1.1
 ```
 
-The `.github/workflows/release.yml` workflow automatically builds the Pi tarball and publishes a GitHub Release whenever a `v*` tag is pushed.
+The `.github/workflows/release.yml` workflow publishes one GitHub Release per
+`v*` tag with two deployment packages, because a single Raspberry Pi and the
+two-node CM5 cluster are deployed differently:
+
+- `trading-bot-pi-<version>.tar.gz` - single Raspberry Pi: runtime scripts,
+  `requirements-pi.txt`, systemd units and the one-shot `scripts/install_pi.sh`.
+- `trading-cluster-<version>.tar.gz` - CM5 cluster: `src/`, the `docker/`
+  Dockerfiles, cluster units and env templates, `requirements-hailo-shadow.txt`
+  and `requirements-dashboard.txt`, plus a `version.txt` with the version and
+  commit. Built by `.github/scripts/cluster_release.py`, which is deterministic
+  (sorted members, fixed metadata) so the checksum is reproducible. The LLM
+  adapter, Hailo SDK packages and HEF files are excluded by design; images are
+  built on the nodes.
+
+Both archives ship with a `.sha256` file. The packaging allowlist and the
+required-file check are covered by `.github/scripts/tests/test_cluster_release.py`.
 
 ### Download a Specific Release Manually
+
+Single Raspberry Pi:
 
 ```bash
 VERSION=v0.1.0
 curl -LO "https://github.com/sikienzl/TradingBot/releases/download/${VERSION}/trading-bot-pi-${VERSION}.tar.gz"
 curl -LO "https://github.com/sikienzl/TradingBot/releases/download/${VERSION}/trading-bot-pi-${VERSION}.tar.gz.sha256"
 sha256sum -c "trading-bot-pi-${VERSION}.tar.gz.sha256"
+```
+
+CM5 cluster (source archive; rebuild the images on the nodes as described in
+"Current cluster shadow deployment"):
+
+```bash
+VERSION=v0.1.0
+curl -LO "https://github.com/sikienzl/TradingBot/releases/download/${VERSION}/trading-cluster-${VERSION}.tar.gz"
+curl -LO "https://github.com/sikienzl/TradingBot/releases/download/${VERSION}/trading-cluster-${VERSION}.tar.gz.sha256"
+sha256sum -c "trading-cluster-${VERSION}.tar.gz.sha256"
+tar -xzf "trading-cluster-${VERSION}.tar.gz"
+cat "trading-cluster-${VERSION}/version.txt"
 ```
 
 ---

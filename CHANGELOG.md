@@ -5,6 +5,16 @@ a version heading is assigned when a release is prepared.
 
 ## Unreleased
 
+### Added
+
+- Publish a second package per release tag: `v*` now produces
+  `trading-cluster-<version>.tar.gz` next to the Pi tarball, so the two-node CM5
+  cluster (Dockerfiles, Hailo inference/tunnel/shadow units, dashboard) has an
+  artifact of its own instead of only a Pi package. The cluster archive is built
+  deterministically by `.github/scripts/cluster_release.py`, records version and
+  commit in `version.txt`, and excludes the LLM adapter, Hailo SDK packages and
+  HEF files.
+
 ## v1.0.25 - 2026-11-24
 
 ### Added

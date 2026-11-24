@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # create_pi_release.sh
 #
-# Builds a Raspberry Pi runtime package, creates a git tag, and pushes a
-# GitHub release (using the GitHub Releases API via curl).
+# Builds a Raspberry Pi runtime package, creates a git tag, and (optionally)
+# pushes a GitHub release (using the GitHub Releases API via curl).
+#
+# Note: pushing a v* tag also triggers .github/workflows/release.yml, which
+# publishes a GitHub Release with BOTH the Pi package and the CM5 cluster
+# source package. Prefer tagging and letting CI publish; only set GITHUB_TOKEN
+# here if you want this script to upload the Pi assets itself.
 #
 # Usage:
 #   bash scripts/create_pi_release.sh [VERSION]
@@ -307,7 +312,7 @@ info "Release notes generated: ${NOTES_FILE}"
 if git rev-parse "$TAG" >/dev/null 2>&1; then
   echo "WARN: Tag $TAG already exists locally, skipping tag creation."
 else
-  git tag -a "$TAG" -m "Raspberry Pi release ${TAG}"
+  git tag -a "$TAG" -m "Release ${TAG}"
   info "Tag ${TAG} created."
 fi
 
