@@ -56,6 +56,30 @@ from src.execution_service import (
     # Re-exported: tests import src.trading_bot._order_fill_details.
     order_fill_details as _order_fill_details,  # noqa: F401
 )
+from src.exit_policy import (
+    core_exit_reason as _exit_core_exit_reason,
+)
+from src.exit_policy import (
+    downtrend_reversal_exit_reason as _exit_downtrend_reversal_exit_reason,
+)
+from src.exit_policy import (
+    effective_stop_loss_level as _exit_effective_stop_loss_level,
+)
+from src.exit_policy import (
+    is_downtrend_reversal_trade as _exit_is_downtrend_reversal_trade,
+)
+from src.exit_policy import (
+    is_rules_uptrend_trade as _exit_is_rules_uptrend_trade,
+)
+from src.exit_policy import (
+    maybe_partial_take_profit as _exit_maybe_partial_take_profit,
+)
+from src.exit_policy import (
+    partial_tp_remainder_exit_reason as _exit_partial_tp_remainder_exit_reason,
+)
+from src.exit_policy import (
+    uptrend_rules_exit_reason as _exit_uptrend_rules_exit_reason,
+)
 from src.indicator_service import (
     calculate_atr,
     calculate_macd,
@@ -2018,29 +2042,9 @@ class CryptoTradingBot:
         return False, 'gated_by_rules'
 
     def _effective_stop_loss_level(self, trade_info: dict, current_price: float, atr: float) -> float:
-        """Builds a dynamic stop level combining base ATR stop, trailing stop and break-even protection."""
-        buy_price = float(trade_info.get('buy_price', 0.0))
-        if buy_price <= 0:
-            return current_price
-
-        peak_price = float(trade_info.get('peak_price', buy_price))
-        peak_price = max(peak_price, current_price, buy_price)
-        trade_info['peak_price'] = peak_price
-
-        stop_loss_level = buy_price - self.config.atr_stop_mult * atr
-
-        if self.config.trailing_stop_enabled:
-            trailing_level = peak_price - self.config.trailing_stop_atr_mult * atr
-            stop_loss_level = max(stop_loss_level, trailing_level)
-
-        if self.config.break_even_enabled and buy_price > 0:
-            runup_pct = (peak_price - buy_price) / buy_price * 100.0
-            if runup_pct >= self.config.break_even_trigger_pct:
-                break_even_level = buy_price * \
-                    (1.0 + self.config.break_even_buffer_pct / 100.0)
-                stop_loss_level = max(stop_loss_level, break_even_level)
-
-        return stop_loss_level
+        """Delegates to :func:`src.exit_policy.effective_stop_loss_level`."""
+        return _exit_effective_stop_loss_level(
+            self.config, trade_info, current_price, atr)
 
     def _passes_entry_momentum_filter(self, coin_data: dict) -> tuple[bool, str]:
         """Checks if an entry candidate has acceptable short-term momentum."""
@@ -2238,9 +2242,8 @@ class CryptoTradingBot:
         _entry_log_blocked_attempts(blocked_attempts, limit=limit, logger=logger)
     @staticmethod
     def _is_rules_uptrend_trade(trade_info: dict) -> bool:
-        recommendation = str(trade_info.get('recommendation', ''))
-        signal_source = str(trade_info.get('signal_source', ''))
-        return recommendation == 'HOLD (Up-Trend)' and signal_source == 'rules'
+        """Delegates to :func:`src.exit_policy.is_rules_uptrend_trade`."""
+        return _exit_is_rules_uptrend_trade(trade_info)
 
     def _passes_downtrend_reversal_filter(self, coin_data: dict) -> tuple[bool, str]:
         """Allows down-trend fallback entries only for oversold coins with improving tabular odds."""
@@ -2330,8 +2333,8 @@ class CryptoTradingBot:
         )
     @staticmethod
     def _is_downtrend_reversal_trade(trade_info: dict) -> bool:
-        """Returns True for trades opened via the guarded downtrend reversal path."""
-        return str(trade_info.get('recommendation', '')) == 'HOLD (Down-Trend)'
+        """Delegates to :func:`src.exit_policy.is_downtrend_reversal_trade`."""
+        return _exit_is_downtrend_reversal_trade(trade_info)
 
     def _build_tabular_features(
         self,
@@ -3174,44 +3177,22 @@ class CryptoTradingBot:
         partial_fraction: float,
         atr: float,
     ) -> bool:
-        """Execute a partial take-profit sell; return True if the caller should skip the rest."""
-        if (
-            self.config.partial_take_profit_enabled
-            and not partial_tp_taken
-            and 0.0 < partial_fraction < 1.0
-            and current_price >= partial_take_profit_level
-        ):
-            partial_amount_coin = amount_coin * partial_fraction
-            if partial_amount_coin > 1e-12:
-                partial_reason = (
-                    f"💸 PARTIAL-TAKE-PROFIT ({partial_fraction*100:.0f}% @ "
-                    f"{partial_take_profit_level:.4f})"
-                )
-                logger.info(
-                    f"{partial_reason} → Teilverkauf {coin} @ {current_price:.4f}")
-                if self._execute_trade(
-                    coin,
-                    "sell",
-                    current_price,
-                    partial_amount_coin * current_price,
-                    atr=atr,
-                    reason=partial_reason,
-                    partial_take_profit=True,
-                ):
-                    if coin in self.portfolio.open_trades and not self._public_paper_mode():
-                        self.portfolio.open_trades[coin]['partial_tp_taken'] = True
-                        self.portfolio.open_trades[coin]['partial_tp_timestamp'] = datetime.now(
-                        )
-                        if self.config.dry_run:
-                            self.portfolio.save_state()
-                    return True
-                logger.warning(
-                    "Partial take-profit sell failed for %s; continuing "
-                    "with remaining exit checks.",
-                    coin,
-                )
-            return False
-        return False
+        """Delegates to :func:`src.exit_policy.maybe_partial_take_profit`."""
+        return _exit_maybe_partial_take_profit(
+            self.config,
+            self.portfolio,
+            self._execute_trade,
+            self._public_paper_mode,
+            coin,
+            trade_info,
+            partial_tp_taken,
+            amount_coin,
+            current_price,
+            partial_take_profit_level,
+            partial_fraction,
+            atr,
+            now=datetime.now,
+        )
 
     def _partial_tp_remainder_exit_reason(
         self,
@@ -3221,31 +3202,16 @@ class CryptoTradingBot:
         partial_tp_timestamp,
         market_analysis: dict | None,
     ) -> str | None:
-        """Exit reason for the leftover position after a partial take-profit."""
-        if partial_tp_taken and partial_tp_timestamp:
-            partial_tp_elapsed_seconds = (
-                datetime.now() - partial_tp_timestamp).total_seconds()
-            if (
-                self.config.partial_take_profit_remainder_max_hold_seconds > 0
-                and partial_tp_elapsed_seconds >= self.config.partial_take_profit_remainder_max_hold_seconds
-            ):
-                exit_reason = (
-                    "⏱️ PARTIAL-TP-REMAINDER-TIMEOUT "
-                    f"({int(partial_tp_elapsed_seconds)}s >= "
-                    f"{self.config.partial_take_profit_remainder_max_hold_seconds}s)"
-                )
-            elif (
-                self.config.partial_take_profit_exit_on_weak_signal
-                and market_analysis is not None
-            ):
-                signal = market_analysis.get(
-                    coin, {}).get('recommendation', '')
-                if signal in {'SELL', 'WEAK SELL', 'HOLD (Down-Trend)'}:
-                    exit_reason = (
-                        '📉 PARTIAL-TP-REMAINDER-WEAK-SIGNAL '
-                        f'(recommendation: {signal})'
-                    )
-        return exit_reason
+        """Delegates to :func:`src.exit_policy.partial_tp_remainder_exit_reason`."""
+        return _exit_partial_tp_remainder_exit_reason(
+            self.config,
+            exit_reason,
+            coin,
+            partial_tp_taken,
+            partial_tp_timestamp,
+            market_analysis,
+            now=datetime.now,
+        )
 
     def _downtrend_reversal_exit_reason(
         self,
@@ -3256,46 +3222,16 @@ class CryptoTradingBot:
         pnl_pct: float,
         market_analysis: dict | None,
     ) -> str | None:
-        """Exit reason for downtrend-reversal trades (max-hold, fast, weak-signal)."""
-        is_downtrend_reversal_trade = self._is_downtrend_reversal_trade(
-            trade_info)
-        if (
-            exit_reason is None
-            and is_downtrend_reversal_trade
-            and self.config.downtrend_reversal_fast_exit_enabled
-            and market_analysis is not None
-        ):
-            current_signal = market_analysis.get(
-                coin, {}).get('recommendation', '')
-            if (
-                self.config.downtrend_reversal_max_hold_seconds > 0
-                and hold_seconds >= self.config.downtrend_reversal_max_hold_seconds
-            ):
-                exit_reason = (
-                    '⏱️ DOWNTREND-REVERSAL-MAX-HOLD '
-                    f'({int(hold_seconds)}s >= {self.config.downtrend_reversal_max_hold_seconds}s)'
-                )
-            elif (
-                hold_seconds >= self.config.downtrend_reversal_fast_exit_seconds
-                and pnl_pct <= self.config.downtrend_reversal_flat_max_profit_pct
-                and current_signal in {'HOLD (Down-Trend)', 'WEAK SELL', 'SELL'}
-            ):
-                exit_reason = (
-                    '📉 DOWNTREND-REVERSAL-FAST-EXIT '
-                    f'({pnl_pct:+.2f}% <= {self.config.downtrend_reversal_flat_max_profit_pct:.2f}% '
-                    f'after {int(hold_seconds)}s, signal: {current_signal})'
-                )
-            elif (
-                hold_seconds >= self.config.downtrend_reversal_weak_signal_exit_seconds
-                and pnl_pct <= self.config.downtrend_reversal_weak_signal_max_profit_pct
-                and current_signal in {'HOLD (Down-Trend)', 'WEAK SELL', 'SELL'}
-            ):
-                exit_reason = (
-                    '📉 DOWNTREND-REVERSAL-WEAK-SIGNAL-EXIT '
-                    f'({pnl_pct:+.2f}% <= {self.config.downtrend_reversal_weak_signal_max_profit_pct:.2f}% '
-                    f'after {int(hold_seconds)}s, signal: {current_signal})'
-                )
-        return exit_reason
+        """Delegates to :func:`src.exit_policy.downtrend_reversal_exit_reason`."""
+        return _exit_downtrend_reversal_exit_reason(
+            self.config,
+            exit_reason,
+            coin,
+            trade_info,
+            hold_seconds,
+            pnl_pct,
+            market_analysis,
+        )
 
     def _uptrend_rules_exit_reason(
         self,
@@ -3306,42 +3242,16 @@ class CryptoTradingBot:
         pnl_pct: float,
         market_analysis: dict | None,
     ) -> str | None:
-        """Exit reason for rules-based uptrend trades (max-hold, fast-exit)."""
-        is_rules_uptrend_trade = self._is_rules_uptrend_trade(trade_info)
-        if (
-            exit_reason is None
-            and is_rules_uptrend_trade
-            and self.config.uptrend_rules_fast_exit_enabled
-            and market_analysis is not None
-        ):
-            current_signal = market_analysis.get(
-                coin, {}).get('recommendation', '')
-            fast_exit_seconds = self.config.uptrend_rules_fast_exit_seconds_by_coin.get(
-                coin, self.config.uptrend_rules_fast_exit_seconds)
-            flat_max_profit_pct = self.config.uptrend_rules_flat_max_profit_pct_by_coin.get(
-                coin, self.config.uptrend_rules_flat_max_profit_pct)
-            uptrend_rules_max_hold_seconds = self.config.uptrend_rules_max_hold_seconds_by_coin.get(
-                coin, self.config.uptrend_rules_max_hold_seconds)
-            if (
-                uptrend_rules_max_hold_seconds > 0
-                and hold_seconds >= uptrend_rules_max_hold_seconds
-            ):
-                exit_reason = (
-                    '⏱️ UPTREND-RULES-MAX-HOLD '
-                    f'({int(hold_seconds)}s >= {uptrend_rules_max_hold_seconds}s)'
-                )
-            elif (
-                fast_exit_seconds > 0
-                and hold_seconds >= fast_exit_seconds
-                and pnl_pct <= flat_max_profit_pct
-                and current_signal not in {'BUY', 'STRONG BUY'}
-            ):
-                exit_reason = (
-                    '📉 UPTREND-RULES-FAST-EXIT '
-                    f'({pnl_pct:+.2f}% <= {flat_max_profit_pct:.2f}% '
-                    f'after {int(hold_seconds)}s, signal: {current_signal})'
-                )
-        return exit_reason
+        """Delegates to :func:`src.exit_policy.uptrend_rules_exit_reason`."""
+        return _exit_uptrend_rules_exit_reason(
+            self.config,
+            exit_reason,
+            coin,
+            trade_info,
+            hold_seconds,
+            pnl_pct,
+            market_analysis,
+        )
 
     def _core_exit_reason(
         self,
@@ -3355,24 +3265,19 @@ class CryptoTradingBot:
         pnl_pct: float,
         market_analysis: dict | None,
     ) -> str | None:
-        """Core stop-loss, take-profit, max-hold and signal-based exit checks."""
-        if current_price <= stop_loss_level:
-            exit_reason = f"🚨 ATR-STOP-LOSS (Stop: {stop_loss_level:.4f})"
-        elif (not self.config.partial_take_profit_enabled) and current_price >= take_profit_level:
-            exit_reason = f"🎉 ATR-TAKE-PROFIT (TP: {take_profit_level:.4f})"
-        elif max_hold_seconds > 0 and hold_seconds >= max_hold_seconds:
-            exit_reason = f"⏰ MAX-HOLD-TIME reached ({int(hold_seconds)}s >= {max_hold_seconds}s)"
-        elif self.config.exit_on_downtrend and market_analysis is not None:
-            signal = market_analysis.get(
-                coin, {}).get('recommendation', '')
-            if signal == 'HOLD (Down-Trend)':
-                exit_reason = f"📉 Down-trend signal detected (recommendation: {signal})"
-        elif pnl_pct < 0 and market_analysis is not None:
-            signal = market_analysis.get(
-                coin, {}).get('recommendation', '')
-            if signal not in {'BUY', 'STRONG BUY', 'HOLD (Up-Trend)'}:
-                exit_reason = f"🔻 PnL-NEG-WEAK-SIGNAL ({pnl_pct:+.2f}% | signal: {signal})"
-        return exit_reason
+        """Delegates to :func:`src.exit_policy.core_exit_reason`."""
+        return _exit_core_exit_reason(
+            self.config,
+            exit_reason,
+            coin,
+            current_price,
+            stop_loss_level,
+            take_profit_level,
+            max_hold_seconds,
+            hold_seconds,
+            pnl_pct,
+            market_analysis,
+        )
 
     def _manage_open_trades(self, current_market_data: dict[str, dict], market_analysis: dict | None = None):
         """Monitors open trades for stop-loss, take-profit, time and signal exits."""
