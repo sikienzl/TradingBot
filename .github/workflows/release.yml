@@ -1,4 +1,4 @@
-name: Release – Raspberry Pi Package
+name: Release – Pi and Cluster Packages
 
 on:
   push:
@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   build-and-release:
-    name: Build Pi tarball & publish release
+    name: Build Pi and cluster packages & publish release
     runs-on: ubuntu-latest
 
     steps:
@@ -138,6 +138,14 @@ jobs:
 
           echo "PKG=${PKG}" >> "$GITHUB_ENV"
 
+      - name: Build cluster source package
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          python .github/scripts/cluster_release.py "$VERSION" dist/cluster \
+            --commit "${GITHUB_SHA}"
+          sha256sum --check "dist/cluster/trading-cluster-${VERSION}.tar.gz.sha256"
+          echo "CLUSTER_PKG=dist/cluster/trading-cluster-${VERSION}.tar.gz" >> "$GITHUB_ENV"
+
       - name: Generate release notes
         id: notes
         run: |
@@ -203,6 +211,10 @@ jobs:
           cat <<EOF > release_body.md
           ## Crypto Trading Bot ${VERSION}
 
+          One tag, two deployment packages: \`trading-bot-pi-${VERSION}.tar.gz\` for a
+          single Raspberry Pi and \`trading-cluster-${VERSION}.tar.gz\` for the two-node
+          CM5 cluster (Dockerfiles, Hailo inference service, shadow bot, dashboard).
+
           ### Highlights
 
           ${HIGHLIGHTS}
@@ -239,12 +251,43 @@ jobs:
           2. \`sudo systemctl start trading-bot\`
           3. \`sudo journalctl -u trading-bot -f\`
 
+          ### Cluster (two-node CM5) install
+
+          The cluster package is a source archive: images are built on the nodes, so no
+          container images, credentials, Hailo SDK packages or compiled HEFs are included.
+
+          \`\`\`bash
+          # 1. Download and verify
+          curl -LO https://github.com/${{ github.repository }}/releases/download/${VERSION}/trading-cluster-${VERSION}.tar.gz
+          curl -LO https://github.com/${{ github.repository }}/releases/download/${VERSION}/trading-cluster-${VERSION}.tar.gz.sha256
+          sha256sum -c trading-cluster-${VERSION}.tar.gz.sha256
+          # 2. Extract
+          tar -xzf trading-cluster-${VERSION}.tar.gz && cd trading-cluster-${VERSION}
+          # 3. Build the shadow bot image (align the account with the host trading UID/GID)
+          docker build --build-arg TRADING_UID="\$(id -u)" --build-arg TRADING_GID="\$(id -g)" \\
+            -f docker/hailo-shadow.Dockerfile -t trading-hailo-shadow:${VERSION} .
+          \`\`\`
+
+          Follow \`SERVER_README.md\` ("Current cluster shadow deployment") for the
+          inference host, SSH tunnel and private environment files. The archive records
+          the version and commit in \`version.txt\`.
+
           ### What's included
+
+          Pi package (\`trading-bot-pi-${VERSION}.tar.gz\`):
 
           - Runtime Python scripts
           - Pi-optimised \`requirements-pi.txt\`
           - Systemd service & timer units (\`deploy/\`)
           - One-shot installer (\`scripts/install_pi.sh\`)
+
+          Cluster package (\`trading-cluster-${VERSION}.tar.gz\`):
+
+          - \`src/\`, \`docker/\` Dockerfiles and \`docs/\`
+          - Cluster units and env templates (\`deploy/\`), including the Hailo
+            inference, tunnel, shadow and public-paper services
+          - \`requirements-hailo-shadow.txt\` and \`requirements-dashboard.txt\`
+          - CatBoost decision model; the LLM adapter and Hailo SDK/HEF artifacts are excluded
 
           EOF
 
@@ -294,12 +337,14 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.VERSION }}
           target_commitish: ${{ github.sha }}
-          name: "Crypto Trading Bot ${{ steps.version.outputs.VERSION }}"
+          name: "Crypto Trading Bot ${{ steps.version.outputs.VERSION }} (Pi + CM5 cluster)"
           prerelease: ${{ steps.version.outputs.PRERELEASE }}
           body_path: release_body.md
           files: |
             ${{ env.PKG }}.tar.gz
             ${{ env.PKG }}.tar.gz.sha256
+            ${{ env.CLUSTER_PKG }}
+            ${{ env.CLUSTER_PKG }}.sha256
             ${{ env.WHL }}
             ${{ env.SDIST }}
             scripts/install_pi.sh

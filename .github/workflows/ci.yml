@@ -59,6 +59,9 @@ jobs:
           fi
           python -m py_compile "${files[@]}"
 
+      - name: Release tooling tests
+        run: python -m unittest discover -s .github/scripts/tests -v
+
       - name: Lint check (ruff)
         id: ruff
         shell: bash
