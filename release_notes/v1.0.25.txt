@@ -1,0 +1,64 @@
+v1.0.25 - Diagnostics, refactoring and order-state/training-leakage fixes
+
+Date: 2026-11-24
+
+Changes
+
+Correctness
+- Fix order-state handling and a training-leakage path; journal rows now carry a
+  per-process run_id and a SHA-256 fingerprint of non-secret bot settings, so
+  results can be compared per run and per configuration.
+- Record observed maximum favorable/adverse excursion (mfe_pct, mae_pct) for
+  closed trades and preserve dry-run position extremes across restarts.
+- Extend existing CSV journals atomically with the new columns and mark
+  historical rows as legacy; PostgreSQL schemas gain the same columns through
+  additive migrations.
+- Fail the public paper daily observation (exit 1) when neither the journal nor
+  the bot log shows activity within --max-data-age-hours, so a stopped collector
+  can no longer look like an idle day. The JSON is still written and latest.json
+  keeps the last healthy report.
+
+Analysis
+- Offline historical OHLCV replay with shared rule recommendations, next-candle
+  execution, transaction costs and a chronological holdout.
+- Journal breakdowns by run/configuration and exit reason; coin/source samples
+  below 20 trades are flagged as descriptive only.
+- Journal freshness, strict BUY candidates withheld by the recent-PnL guard and
+  the age of the last closed trade are reported without bypassing the guard.
+- Confidence-threshold selection is chronological: select on the first 70% of
+  trades, report on the final 30% holdout.
+
+Structure
+- Behaviour-preserving splits of the oversized methods in trading_bot.py,
+  export_pnl_metrics.py, public_paper_dashboard.py and historical_backtest.py;
+  duplicated PnL metric code consolidated into export_pnl_metrics.py.
+- BotConfig.__init__ split into nine focused loader methods with module-level
+  env-parsing helpers.
+- Ruff configuration centralized in pyproject.toml with a cyclomatic-complexity
+  gate at 25; informational mypy job added to CI and its baseline reduced from 81
+  to 11 findings.
+- src/ imports resolved through the repository root: the sys.path hacks and the
+  duplicated package/flat import branches are gone.
+
+Hailo (preparation only)
+- Optional remote Hailo-8 inference backend with a fixed feature/metadata
+  contract, MLP-to-ONNX exporter, authenticated service and systemd template;
+  fail closed on prediction errors. CatBoost remains the default.
+- Rebuildable Hailo DFC compiler Dockerfile and compilation wrapper; SDK packages
+  are supplied separately and are not distributed.
+
+Notes
+- Launch commands changed, behaviour did not: `python src/pnl_exporter.py` no
+  longer works because the module uses relative imports. The trading-bot and
+  pnl-exporter systemd units and the Raspberry Pi wrapper now set PYTHONPATH and
+  start `python -m src.<module>`; docs use `python -m scripts.<module>` where
+  src/ is imported. Install the refreshed unit files together with the code -
+  an old unit combined with new code fails at startup - and run
+  `systemctl daemon-reload` afterwards. No editable install is required, since
+  server and Pi deployments receive a tarball without .git where hatch-vcs
+  versioning cannot run.
+- No entry/exit thresholds or PnL-guard behaviour were changed. Hailo support is
+  preparation-only: no trading HEF is compiled, no cluster service is deployed
+  and the backend is not enabled by default. The historical replay is
+  offline-only and its holdout results are not a profitability guarantee.
+- Run in dry-run/simulation first and compare results by run_id and config_hash.

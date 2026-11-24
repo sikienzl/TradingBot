@@ -1,9 +1,11 @@
 # Changelog
 
-Notable changes are recorded here. Versions are assigned when a release is
-prepared; this file intentionally remains under **Unreleased** until then.
+Notable changes are recorded here. New work is collected under **Unreleased**;
+a version heading is assigned when a release is prepared.
 
 ## Unreleased
+
+## v1.0.25 - 2026-11-24
 
 ### Added
 
