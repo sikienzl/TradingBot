@@ -432,6 +432,17 @@ The regular report includes the completed previous UTC day and a separate
 current UTC day-to-now section. Passing `--date YYYY-MM-DD` explicitly reports
 only that completed UTC day, preserving historical comparisons.
 
+The report also carries a `staleness` block with the newest journal row or bot log
+line seen anywhere in the sources, independent of the report window. With
+`--max-data-age-hours N` (wrapper default 26 via `PUBLIC_PAPER_MAX_DATA_AGE_HOURS`)
+the run still writes the JSON for analysis but exits non-zero when no activity is
+newer than N hours, which means a stopped collector is reported instead of a
+quietly empty day. Because the wrapper stops on that failure, `latest.json` keeps
+the last healthy report. Omit the option, or set 0, for manual `--date` backfills so
+they never false-alarm. When only `--container` log access is available, the log
+source is window-limited and staleness stays `unknown` rather than misleading;
+journal rows then carry the signal.
+
 To schedule the previous UTC day at 00:10 UTC, install the **user** units
 `deploy/public-paper-daily-report.{service,timer}` into
 `~/.config/systemd/user/`, edit the service's `ExecStart` to this checkout's
