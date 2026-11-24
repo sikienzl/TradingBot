@@ -21,6 +21,15 @@ a version heading is assigned when a release is prepared.
   `torch`/`transformers` when they are not installed.
 - The CI unit-test job now measures branch coverage and includes `scripts/`,
   matching the command documented in `CONTRIBUTING.md`.
+- Three focused collaborators extracted from `src/trading_bot.py`, each with
+  its own unit tests: `src/indicator_service.py` (RSI/SMA/MACD/ATR maths),
+  `src/state_store.py` (auto-tune and AI co-pilot state files, cooldown and
+  quota normalisation) and `src/market_data.py` (OHLCV fetch and batched
+  ticker fetch with retry policy). The bot keeps thin delegators with the
+  previous method names, so behaviour and existing tests are unchanged.
+- Unit tests for the new modules: `tests/test_indicator_service.py`,
+  `tests/test_state_store.py` and `tests/test_market_data.py` (indicator
+  values, `.bak` recovery, atomic writes, retry/back-off and batch handling).
 
 ### Fixed
 
