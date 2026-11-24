@@ -34,13 +34,16 @@ LAYERS: dict[int, tuple[str, ...]] = {
     # Focused services: data access, indicators, persistence, prediction,
     # metrics and model training.
     1: (
+        "ai_copilot_log",
         "analyze_trade_journal",
         "analytics",
         "backtesting",
         "bot_config",
         "data_preparation",
         "entry_selection",
+        "env_file",
         "export_pnl_metrics",
+        "exporter_paths",
         "get_account_balance",
         "get_data",
         "go_no_go_scorecard",
@@ -55,6 +58,7 @@ LAYERS: dict[int, tuple[str, ...]] = {
         "predict",
         "predict_catboost",
         "predict_hailo_remote",
+        "recent_pnl_guard",
         "research_signal",
         "simulation",
         "state_store",
@@ -87,7 +91,7 @@ TRADING_BOT_IMPORTERS: frozenset[str] = frozenset({"init_kraken_paper"})
 LINE_CEILINGS: dict[str, int] = {
     "trading_bot.py": 4306,
     "public_paper_dashboard.py": 1100,
-    "export_pnl_metrics.py": 559,
+    "export_pnl_metrics.py": 366,
 }
 
 

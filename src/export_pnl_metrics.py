@@ -12,13 +12,18 @@ import sys
 from collections import deque
 from datetime import UTC, datetime
 
+from .ai_copilot_log import read_ai_shadow_suggestions
+from .env_file import read_env_value as _read_env_value
+from .exporter_paths import (
+    AI_COPILOT_STATE_PATH,
+    BOT_LOG_PATH,
+    ENV_PATH,
+    PORTFOLIO_STATE_PATH,
+)
 from .pnl_metrics import calculate_pnl_metrics
 from .pnl_prometheus_format import format_prometheus_metrics
+from .recent_pnl_guard import compute_recent_pnl_guard_state
 
-BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
-ENV_PATH = '/opt/trading_2/.env'
-AI_COPILOT_STATE_PATH = '/opt/trading_2/ai_copilot_state.json'
-PORTFOLIO_STATE_PATH = '/opt/trading_2/.portfolio_state.json'
 CURRENT_PRICE_RE = re.compile(
     r'📊\s+([A-Z0-9]+):\s+Buy\s+[0-9.]+\s+→\s+Current\s+([0-9.]+)'
 )
@@ -27,9 +32,6 @@ OPEN_TRADE_AMOUNT_BASE_RE = re.compile(
 )
 OPEN_TRADE_AMOUNT_COIN_RE = re.compile(
     r"'([A-Z0-9]+)'\s*:\s*\{[^}]*'amount_coin'\s*:\s*([0-9.eE+-]+)"
-)
-SHADOW_SUGGESTION_META_RE = re.compile(
-    r'^([a-z]+),\s+confidence=([0-9.]+),\s+reason='
 )
 
 
@@ -346,201 +348,6 @@ def read_ai_copilot_usage(
             print(f"Error reading AI co-pilot state: {exc}", file=sys.stderr)
 
     return result
-
-
-def read_ai_shadow_suggestions(log_path=BOT_LOG_PATH):
-    result = {'ai_copilot_shadow_suggestions': []}
-
-    if not os.path.exists(log_path):
-        return result
-
-    try:
-        with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
-            tail_lines = list(deque(f, maxlen=4000))
-
-        now = datetime.now(UTC)
-        suggestions = []
-        rank = 1
-
-        for line in reversed(tail_lines):
-            if 'AI co-pilot' not in line:
-                continue
-
-            try:
-                timestamp_raw, remainder = line.split(' - ', 1)
-                confidence = 0.0
-                mode = 'shadow'
-
-                if 'AI co-pilot shadow suggestion:' in remainder:
-                    payload = remainder.split(
-                        'AI co-pilot shadow suggestion:', 1)[1].strip()
-                    changes_text, meta_text = payload.split(' (risk=', 1)
-                    changes = ast.literal_eval(changes_text.strip())
-                    meta_text = meta_text.rstrip(')')
-                    meta_match = SHADOW_SUGGESTION_META_RE.match(meta_text)
-                    confidence = float(meta_match.group(2)
-                                       ) if meta_match else 0.0
-                elif 'AI co-pilot suggested unchanged values:' in remainder:
-                    payload = remainder.split(
-                        'AI co-pilot suggested unchanged values:', 1)[1].strip()
-                    changes = ast.literal_eval(payload)
-                    mode = 'unchanged'
-                elif 'AI co-pilot suggestion: no change' in remainder:
-                    payload = remainder.split(
-                        'AI co-pilot suggestion:', 1)[1].strip()
-                    meta_text = payload.split(' (risk=', 1)[1].rstrip(')')
-                    meta_match = SHADOW_SUGGESTION_META_RE.match(meta_text)
-                    confidence = float(meta_match.group(2)
-                                       ) if meta_match else 0.0
-                    changes = {'no_change': 0.0}
-                    mode = 'no_change'
-                else:
-                    continue
-
-                ts = datetime.strptime(
-                    timestamp_raw.strip(), '%Y-%m-%d %H:%M:%S,%f')
-                age_minutes = max(0.0, (now - ts).total_seconds() / 60.0)
-            except (IndexError, SyntaxError, ValueError):
-                continue
-
-            if not isinstance(changes, dict):
-                continue
-
-            for parameter, value in changes.items():
-                try:
-                    numeric_value = float(value)
-                except (TypeError, ValueError):
-                    continue
-                suggestions.append({
-                    'rank': rank,
-                    'suggestion_id': f'{rank}_{parameter}',
-                    'mode': mode,
-                    'parameter': str(parameter),
-                    'value': numeric_value,
-                    'confidence': confidence,
-                    'age_minutes': round(age_minutes, 2),
-                })
-            rank += 1
-            if rank > 3:
-                break
-
-        result['ai_copilot_shadow_suggestions'] = suggestions
-    except (OSError, UnicodeError) as exc:
-        print(f"Error reading AI co-pilot suggestions: {exc}", file=sys.stderr)
-
-    return result
-
-
-def _read_env_value(env_key, env_path=ENV_PATH, *, quiet=False):
-    try:
-        if os.path.exists(env_path):
-            with open(env_path, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#') or '=' not in line:
-                        continue
-                    key, value = line.split('=', 1)
-                    if key.strip() != env_key:
-                        continue
-                    return value.strip().strip('"').strip("'")
-    except (OSError, UnicodeError) as exc:
-        if not quiet:
-            print(f"Error reading environment file: {exc}", file=sys.stderr)
-    return ''
-
-
-def _env_bool(env_key, default=False, env_path=ENV_PATH):
-    value = _read_env_value(env_key, env_path)
-    if value == '':
-        return bool(default)
-    return value.strip().lower() in {'1', 'true', 'yes', 'on'}
-
-
-def _safe_int_env(env_key, default, env_path=ENV_PATH):
-    value = _read_env_value(env_key, env_path)
-    if value == '':
-        return int(default)
-    try:
-        return int(value)
-    except ValueError:
-        return int(default)
-
-
-def _safe_float_env(env_key, default, env_path=ENV_PATH):
-    value = _read_env_value(env_key, env_path)
-    if value == '':
-        return float(default)
-    try:
-        return float(value)
-    except ValueError:
-        return float(default)
-
-
-def compute_recent_pnl_guard_state(trades, env_path=ENV_PATH):
-    enabled = _env_bool('RECENT_PNL_GUARD_ENABLED', True, env_path=env_path)
-    window = max(1, _safe_int_env(
-        'RECENT_PNL_GUARD_WINDOW', 120, env_path=env_path))
-    min_trades = max(1, _safe_int_env(
-        'RECENT_PNL_GUARD_MIN_TRADES', 60, env_path=env_path))
-    min_realized_pnl = _safe_float_env(
-        'RECENT_PNL_GUARD_MIN_REALIZED_PNL', 0.0, env_path=env_path)
-    max_profit_factor = _safe_float_env(
-        'RECENT_PNL_GUARD_MAX_PROFIT_FACTOR', 1.0, env_path=env_path)
-
-    state = {
-        'recent_pnl_guard_enabled': 1.0 if enabled else 0.0,
-        'recent_pnl_guard_active': 0.0,
-        'recent_pnl_guard_window': float(window),
-        'recent_pnl_guard_min_trades': float(min_trades),
-        'recent_pnl_guard_recent_closed_trades': 0.0,
-        'recent_pnl_guard_recent_realized_pnl': 0.0,
-        'recent_pnl_guard_recent_profit_factor': 0.0,
-        'recent_pnl_guard_min_realized_pnl': float(min_realized_pnl),
-        'recent_pnl_guard_max_profit_factor': float(max_profit_factor),
-        'recent_pnl_guard_reason': 'disabled' if not enabled else 'insufficient_recent_trades',
-    }
-    if not enabled:
-        return state
-
-    sells = []
-    for trade in trades:
-        action = (trade.get('action') or '').strip().lower()
-        if action != 'sell':
-            continue
-        try:
-            pnl = float(trade.get('pnl_base', '0') or 0.0)
-        except ValueError:
-            continue
-        sells.append(pnl)
-
-    if not sells:
-        return state
-
-    recent = sells[-window:]
-    recent_closed = len(recent)
-    state['recent_pnl_guard_recent_closed_trades'] = float(recent_closed)
-    if recent_closed < min_trades:
-        return state
-
-    realized_pnl = float(sum(recent))
-    gross_profit = float(sum(p for p in recent if p > 0.0))
-    gross_loss_abs = float(sum(-p for p in recent if p < 0.0))
-    if gross_loss_abs > 0:
-        recent_pf = gross_profit / gross_loss_abs
-    elif gross_profit > 0:
-        recent_pf = float('inf')
-    else:
-        recent_pf = 0.0
-
-    state['recent_pnl_guard_recent_realized_pnl'] = realized_pnl
-    state['recent_pnl_guard_recent_profit_factor'] = recent_pf
-
-    guard_active = realized_pnl < min_realized_pnl and recent_pf <= max_profit_factor
-    state['recent_pnl_guard_active'] = 1.0 if guard_active else 0.0
-    state['recent_pnl_guard_reason'] = (
-        'negative_recent_pnl_and_low_pf' if guard_active else 'healthy_recent_window'
-    )
-    return state
 
 
 if __name__ == '__main__':

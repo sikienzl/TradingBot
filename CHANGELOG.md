@@ -57,6 +57,24 @@ a version heading is assigned when a release is prepared.
   module performs no I/O, so both PnL exporters share it. Covered by 26 new tests
   in `tests/test_pnl_metrics.py`, including the malformed-row paths and the
   quirk that a naive journal timestamp still contributes to all-time PnL.
+- The remaining readers in `src/export_pnl_metrics.py` are now four focused
+  modules, each with its own tests: `src/ai_copilot_log.py` (the co-pilot log
+  parser — the three suggestion markers, the recency tail and the rank limit,
+  split out of the 81-line `read_ai_shadow_suggestions()`, complexity 15),
+  `src/recent_pnl_guard.py` (the flat `recent_pnl_guard_*` gauges the exporters
+  publish, split out of the 65-line `compute_recent_pnl_guard_state()`,
+  complexity 18; the bot's own journal guard in `src/journal_guards.py` is a
+  different shape and stays separate), `src/env_file.py` (the four `.env`
+  readers the exporters use instead of the process environment) and
+  `src/exporter_paths.py` (the four deployment paths, which both exporters used
+  to declare separately).
+- `tests/test_ai_copilot_log.py` pins a pre-existing defect rather than fixing
+  it: the bot writes log timestamps with `logging.Formatter`'s naive `asctime`,
+  while `read_ai_shadow_suggestions()` subtracts them from
+  `datetime.now(UTC)`, so parsing a real co-pilot line raises `TypeError` that
+  the narrow `except (IndexError, SyntaxError, ValueError)` does not catch. It
+  was masked until the bare `except Exception` was narrowed. The behaviour is
+  unchanged here; the test documents it so a later fix is a deliberate change.
 
 ### Changed
 
@@ -80,6 +98,16 @@ a version heading is assigned when a release is prepared.
   untouched, and the ceiling was ratcheted again. The two implementations were
   compared over 400 randomised journals (including NaN/inf PnL, naive and
   unparseable timestamps, and unknown actions) and produced identical reports.
+- `src/export_pnl_metrics.py` shrank once more, from 559 to 366 lines, and is now
+  only the journal/portfolio log readers plus the one-shot CLI. It re-exports
+  `read_ai_shadow_suggestions`, `compute_recent_pnl_guard_state` and
+  `_read_env_value`, so `pnl_exporter` and the CLI entry point are untouched;
+  `pnl_exporter` now imports the moved helpers from their own modules and takes
+  the deployment paths from `src/exporter_paths.py` instead of redeclaring them.
+  The old and new readers were compared over 400 randomised log and `.env`
+  fixtures plus 5,748 individual assertions (all three suggestion markers,
+  malformed lines, the tail limit, quoted and unparsable env values, and every
+  guard branch) with no differences.
 - The duplicated uptrend and downtrend-reversal candidate loggers are now one
   `log_blocked_gate_candidates()` helper with a gate label, and the
   no-candidates summary moved to its own `_log_no_entry_candidates()` method.
