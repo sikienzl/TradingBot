@@ -68,13 +68,13 @@ a version heading is assigned when a release is prepared.
   readers the exporters use instead of the process environment) and
   `src/exporter_paths.py` (the four deployment paths, which both exporters used
   to declare separately).
-- `tests/test_ai_copilot_log.py` pins a pre-existing defect rather than fixing
-  it: the bot writes log timestamps with `logging.Formatter`'s naive `asctime`,
-  while `read_ai_shadow_suggestions()` subtracts them from
-  `datetime.now(UTC)`, so parsing a real co-pilot line raises `TypeError` that
-  the narrow `except (IndexError, SyntaxError, ValueError)` does not catch. It
-  was masked until the bare `except Exception` was narrowed. The behaviour is
-  unchanged here; the test documents it so a later fix is a deliberate change.
+- `tests/test_ai_copilot_log.py` covers the co-pilot log reader, including the
+  clock handling: the bot writes log timestamps with `logging.Formatter`'s naive
+  `asctime`, while `read_ai_shadow_suggestions()` subtracts them from
+  `datetime.now(UTC)`, so parsing a real co-pilot line raised `TypeError` that
+  the narrow `except (IndexError, SyntaxError, ValueError)` did not catch. It was
+  masked until the bare `except Exception` was narrowed. The extraction itself
+  left that behaviour untouched; the defect is fixed separately below.
 
 ### Changed
 
@@ -116,6 +116,17 @@ a version heading is assigned when a release is prepared.
 
 ### Fixed
 
+- `read_ai_shadow_suggestions()` crashed on every real co-pilot log line. The bot
+  writes `asctime` timestamps in local time with no offset, and the reader
+  subtracted them from `datetime.now(UTC)`, so the `TypeError` escaped the narrow
+  `except (IndexError, SyntaxError, ValueError)` and the whole exporter request
+  failed — one malformed-looking line in `bot.log` took the PnL endpoint down.
+  `_parse_log_timestamp()` now interprets the naive timestamp as local time and
+  converts it to UTC, the same assumption `pnl_exporter` already makes when it
+  turns a log timestamp into a unix time. The defect reached `main` when the
+  bare `except Exception` around the parser was narrowed and shipped in
+  v1.0.25-v1.0.27; the pinned test that documented it is now a regression test
+  that asserts the age is computed correctly.
 - `fetch_ohlcv_with_retry()` slept for the back-off delay after its final
   attempt, so an unreachable exchange stalled for an extra 20 seconds per
   symbol before giving up.

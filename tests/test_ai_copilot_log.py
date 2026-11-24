@@ -4,10 +4,10 @@ The bot writes its co-pilot decisions as plain log lines; the exporters turn the
 last few of them into Prometheus series. These tests pin the parsing of each
 marker, the malformed-line handling and the recency limits.
 
-``_parse_log_timestamp`` returns a naive datetime while the reader compares
-against ``datetime.now(UTC)``, which raises ``TypeError`` -- see
-``test_naive_log_timestamp_is_not_swallowed``. The happy-path tests patch the
-parser to make the timestamp aware so the rest of the pipeline is reachable.
+The bot's ``logging.Formatter`` emits naive local-time timestamps, so the reader
+has to interpret them as local time before comparing against
+``datetime.now(UTC)`` -- see ``test_naive_log_timestamp_is_read_as_local_time``.
+The helpers below render fixtures the same way the bot does.
 """
 from __future__ import annotations
 
@@ -28,18 +28,10 @@ NOW = datetime(2026, 11, 24, 12, 0, 0, tzinfo=UTC)
 
 
 def _log_line(when: datetime, message: str) -> str:
+    """Render *when* exactly like the bot does: naive local time, no offset."""
+    naive_local = when.astimezone().replace(tzinfo=None)
     return (
-        f"{when.strftime('%Y-%m-%d %H:%M:%S,%f')[:-3]} - INFO - {message}"
-    )
-
-
-@pytest.fixture
-def aware_timestamps(monkeypatch):
-    """Make the reader treat log timestamps as UTC so the clock maths works."""
-    monkeypatch.setattr(
-        ai_copilot_log,
-        "_parse_log_timestamp",
-        lambda raw: _parse_log_timestamp(raw).replace(tzinfo=UTC),
+        f"{naive_local.strftime('%Y-%m-%d %H:%M:%S,%f')[:-3]} - INFO - {message}"
     )
 
 
@@ -62,7 +54,7 @@ def test_missing_log_returns_empty_list(tmp_path):
         'ai_copilot_shadow_suggestions': []}
 
 
-def test_shadow_suggestion_is_parsed(aware_timestamps, frozen_now, tmp_path):
+def test_shadow_suggestion_is_parsed(frozen_now, tmp_path):
     path = _write_log(tmp_path, [
         _log_line(NOW - timedelta(minutes=5),
                   "AI co-pilot shadow suggestion: {'stop_loss_pct': -0.045, "
@@ -85,7 +77,7 @@ def test_shadow_suggestion_is_parsed(aware_timestamps, frozen_now, tmp_path):
     assert second['suggestion_id'] == '1_take_profit_pct'
 
 
-def test_unchanged_values_marker(aware_timestamps, frozen_now, tmp_path):
+def test_unchanged_values_marker(frozen_now, tmp_path):
     path = _write_log(tmp_path, [
         _log_line(NOW - timedelta(minutes=2),
                   "AI co-pilot suggested unchanged values: "
@@ -99,7 +91,7 @@ def test_unchanged_values_marker(aware_timestamps, frozen_now, tmp_path):
     assert only['confidence'] == 0.0
 
 
-def test_no_change_marker(aware_timestamps, frozen_now, tmp_path):
+def test_no_change_marker(frozen_now, tmp_path):
     path = _write_log(tmp_path, [
         _log_line(NOW - timedelta(minutes=1),
                   "AI co-pilot suggestion: no change (risk=medium, "
@@ -118,7 +110,7 @@ def test_no_change_marker(aware_timestamps, frozen_now, tmp_path):
 
 
 def test_newest_suggestions_win_and_rank_stops_at_three(
-        aware_timestamps, frozen_now, tmp_path):
+        frozen_now, tmp_path):
     lines = [
         _log_line(NOW - timedelta(minutes=30 * (i + 1), seconds=1),
                   f"AI co-pilot suggestion: no change (risk=low, "
@@ -133,7 +125,7 @@ def test_newest_suggestions_win_and_rank_stops_at_three(
     assert [s['confidence'] for s in suggestions] == [0.6, 0.5, 0.4]
 
 
-def test_only_the_log_tail_is_scanned(aware_timestamps, frozen_now, tmp_path,
+def test_only_the_log_tail_is_scanned(frozen_now, tmp_path,
                                       monkeypatch):
     monkeypatch.setattr(ai_copilot_log, 'LOG_TAIL_LINES', 3)
     path = _write_log(tmp_path, [
@@ -148,7 +140,7 @@ def test_only_the_log_tail_is_scanned(aware_timestamps, frozen_now, tmp_path,
     assert read_ai_shadow_suggestions(path)['ai_copilot_shadow_suggestions'] == []
 
 
-def test_future_timestamps_age_to_zero(aware_timestamps, frozen_now, tmp_path):
+def test_future_timestamps_age_to_zero(frozen_now, tmp_path):
     path = _write_log(tmp_path, [
         _log_line(NOW + timedelta(days=1),
                   "AI co-pilot suggestion: no change (risk=low, "
@@ -177,13 +169,12 @@ MALFORMED_LINES = [
 
 
 @pytest.mark.parametrize("line", MALFORMED_LINES)
-def test_malformed_lines_are_skipped(aware_timestamps, frozen_now, tmp_path,
-                                     line):
+def test_malformed_lines_are_skipped(frozen_now, tmp_path, line):
     path = _write_log(tmp_path, [line])
     assert read_ai_shadow_suggestions(path)['ai_copilot_shadow_suggestions'] == []
 
 
-def test_non_numeric_values_are_skipped(aware_timestamps, frozen_now, tmp_path):
+def test_non_numeric_values_are_skipped(frozen_now, tmp_path):
     path = _write_log(tmp_path, [
         _log_line(NOW - timedelta(minutes=1),
                   "AI co-pilot shadow suggestion: {'mode': 'aggressive', "
@@ -203,24 +194,27 @@ def test_unreadable_log_is_reported(tmp_path, capsys):
     assert "Error reading AI co-pilot suggestions" in capsys.readouterr().err
 
 
-# ------------------------------------------------------- pre-existing clock bug
+# ----------------------------------------------------------- log clock handling
 
 
-def test_naive_log_timestamp_is_not_swallowed(tmp_path):
-    """The bot logs naive timestamps; the reader compares against UTC.
+def test_naive_log_timestamp_is_read_as_local_time(frozen_now, tmp_path):
+    """The bot logs naive local timestamps; the reader must not crash.
 
-    ``datetime.strptime`` has no tzinfo, so subtracting it from
-    ``datetime.now(UTC)`` raises ``TypeError``, which the narrow ``except`` does
-    not catch. Pinned so a future fix is a deliberate change, not an accident.
+    ``logging.Formatter`` emits ``asctime`` without an offset, so a naive
+    timestamp used to be subtracted from ``datetime.now(UTC)`` and raise
+    ``TypeError`` straight out of the exporter request. It is now interpreted as
+    local time, which keeps the age correct whatever the host timezone is.
     """
     path = _write_log(tmp_path, [
-        _log_line(NOW.replace(tzinfo=None),
+        _log_line(NOW - timedelta(minutes=7, seconds=30),
                   "AI co-pilot shadow suggestion: {'stop_loss_pct': -0.045} "
                   "(risk=low, confidence=0.72, reason=r)"),
     ])
 
-    with pytest.raises(TypeError):
-        read_ai_shadow_suggestions(path)
+    (only,) = read_ai_shadow_suggestions(path)['ai_copilot_shadow_suggestions']
+
+    assert only['age_minutes'] == 7.5
+    assert only['confidence'] == 0.72
 
 
 # ------------------------------------------------------------- helper contracts
@@ -254,7 +248,13 @@ def test_suggestion_confidence(meta, expected):
 
 def test_parse_log_timestamp_accepts_milliseconds():
     assert _parse_log_timestamp(" 2026-11-24 12:00:00,123 ") == datetime(
-        2026, 11, 24, 12, 0, 0, 123000)
+        2026, 11, 24, 12, 0, 0, 123000).astimezone(UTC)
+
+
+def test_parse_log_timestamp_returns_aware_utc():
+    parsed = _parse_log_timestamp("2026-11-24 12:00:00,000")
+    assert parsed.tzinfo is UTC
+    assert parsed == datetime(2026, 11, 24, 12, 0, 0).astimezone(UTC)
 
 
 def test_suggestion_series_skips_unparsable_values():
