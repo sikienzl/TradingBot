@@ -5,6 +5,8 @@ a version heading is assigned when a release is prepared.
 
 ## Unreleased
 
+## v1.0.27 - 2026-11-24
+
 ### Fixed
 
 - The cluster archive now ships the generic `cluster-starter/` two-node CM5/K3s

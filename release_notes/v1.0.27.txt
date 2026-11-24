@@ -1,0 +1,56 @@
+v1.0.27 - Complete release packages
+
+Date: 2026-11-24
+
+Changes
+
+Release packaging
+- The cluster archive now ships the generic cluster-starter/ two-node
+  CM5/K3s starter. SERVER_README.md and the docs/ guides link into that
+  tree, but the published trading-cluster-<version>.tar.gz omitted it, so
+  the links resolved to nothing after unpacking. The same allowlist as the
+  standalone starter pre-release applies: tracked example inventories plus
+  the playbooks/, roles/ and tests/ trees. Real inventories, vault files,
+  dot-files and TLS material stay out, and the ansible credential scan now
+  covers starter YAML as well. A fresh archive contains 165 files
+  (134 before) and stays deterministic.
+- The Pi archive now ships the analytics PostgreSQL backup wrappers and
+  their service/timer units (scripts/postgresql-analytics-backup,
+  scripts/postgresql-analytics-restore-check,
+  deploy/postgresql-analytics-backup.service/.timer,
+  deploy/postgresql-analytics-restore-check.service/.timer) plus
+  scripts/init_postgres_analytics.sql. SERVER_README.md tells operators to
+  install exactly these files, and the package previously contained none of
+  them.
+- pnl-exporter.service moved from the repository root into deploy/, matching
+  every other systemd unit. Both installers already copy it from deploy/,
+  the Pi staging had a special-case copy for it and the cluster archive was
+  missing the unit entirely.
+
+Operations
+- The backup section of SERVER_README.md now states that the wrappers ship
+  in both packages and only apply where a PostgreSQL analytics container and
+  the NAS mount exist. Each wrapper checks for the expected mount and a
+  running container and exits rather than writing anywhere, so a single-host
+  install can leave the timers disabled.
+
+Quality
+- The cluster-starter unit tests now run in the CI quality job instead of
+  only in the manually triggered starter pre-release workflow.
+- Release tooling tests pin the new starter packaging: starter files
+  included, real inventories/vaults/dot-files excluded, starter YAML
+  credential scan active, starter entry points in REQUIRED.
+
+Privacy and safety
+- No personal data, host addresses or credentials are part of either
+  package. The starter ships only REPLACE_WITH_... placeholders and
+  {{ vault_... }} references; the allowlist plus the content scan reject
+  real inventories, vault blobs, private keys and filled-in credential
+  assignments even if someone force-adds them to git.
+
+Notes
+- No trading behaviour, thresholds or PnL-guard logic changed in this
+  release; it is packaging and operations only.
+- Because pnl-exporter.service now lives in deploy/, install the refreshed
+  systemd unit files together with the code and run systemctl daemon-reload
+  afterwards. Nothing else about an existing install changes.
