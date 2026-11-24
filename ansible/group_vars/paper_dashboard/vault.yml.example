@@ -1,0 +1,7 @@
+---
+# Copy to vault.yml, populate on the controller, then encrypt with ansible-vault.
+# These values are deployment-specific and must never be committed in plaintext.
+vault_public_paper_dashboard_bind_host: REPLACE_WITH_HOST_BIND_ADDRESS
+vault_public_paper_dashboard_allowed_networks:
+  - REPLACE_WITH_PRIVATE_CLIENT_CIDR
+vault_public_paper_dashboard_password: REPLACE_WITH_LONG_RANDOM_PASSWORD

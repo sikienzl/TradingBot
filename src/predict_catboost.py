@@ -1,6 +1,5 @@
 import json
 import os
-from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -14,7 +13,7 @@ class CatBoostTradingPredictor:
         self.model_dir = model_dir
         self.research_signal_path = research_signal_path
         self.model = CatBoostClassifier()
-        self.features = []
+        self.features: list[str] = []
         self.label_map = {"verkaufen": 0, "halten": 1, "kaufen": 2}
         self.inv_label_map = {v: k for k, v in self.label_map.items()}
         self.recommended_confidence_threshold = 0.45
@@ -44,7 +43,7 @@ class CatBoostTradingPredictor:
         )
         self.margin_threshold = float(metadata.get("margin_threshold", 0.03))
 
-    def predict(self, row_df: pd.DataFrame, confidence_threshold: Optional[float] = None) -> Dict:
+    def predict(self, row_df: pd.DataFrame, confidence_threshold: float | None = None) -> dict:
         threshold = float(
             self.recommended_confidence_threshold
             if confidence_threshold is None
@@ -105,6 +104,6 @@ class CatBoostTradingPredictor:
             "margin": margin,
         }
 
-    def predict_from_features(self, features: Dict[str, float], confidence_threshold: Optional[float] = None) -> Dict:
+    def predict_from_features(self, features: dict[str, float], confidence_threshold: float | None = None) -> dict:
         row_df = pd.DataFrame([features])
         return self.predict(row_df, confidence_threshold=confidence_threshold)

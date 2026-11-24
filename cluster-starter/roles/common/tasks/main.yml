@@ -1,0 +1,12 @@
+---
+- name: Install base administration tools
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - git
+      - sudo
+      - unattended-upgrades
+      - vim
+    state: present
+    update_cache: true

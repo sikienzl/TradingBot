@@ -1,0 +1,40 @@
+---
+- name: Validate storage parameters and explicit formatting consent
+  ansible.builtin.assert:
+    that:
+      - storage_device is match('^/dev/disk/by-id/[^/]+$')
+      - "'REPLACE_WITH' not in storage_device"
+      - storage_mount_path is match('^/[^\\s,]+$')
+      - "'REPLACE_WITH' not in storage_mount_path"
+      - storage_expected_serial | length > 0
+      - "'REPLACE_WITH' not in storage_expected_serial"
+      - storage_mode in ['existing', 'format']
+      - storage_mode != 'format' or storage_format_approved | bool
+      - storage_mode != 'format' or storage_format_confirm_serial == storage_expected_serial
+    fail_msg: Specify an exact whole-disk by-id path, serial, mount, mode, and format approval.
+- name: Install Btrfs tools
+  ansible.builtin.apt:
+    name: btrfs-progs
+    state: present
+    update_cache: true
+- name: Inspect disk and reject unsafe formatting targets
+  ansible.builtin.script:
+    cmd: "{{ role_path }}/files/inspect_disk.py {{ storage_device | quote }} {{ storage_expected_serial | quote }} {{ storage_mode | quote }}"
+    executable: /usr/bin/python3
+  register: storage_inspection
+  changed_when: false
+  check_mode: false
+- name: Create Btrfs only on a verified blank whole disk
+  ansible.builtin.command:
+    argv:
+      - mkfs.btrfs
+      - "{{ storage_device }}"
+  when: (storage_inspection.stdout | from_json).format_needed | bool
+  changed_when: true
+- name: Mount and persist the Btrfs filesystem
+  ansible.posix.mount:
+    path: "{{ storage_mount_path }}"
+    src: "{{ storage_device }}"
+    fstype: btrfs
+    opts: defaults,nofail
+    state: mounted

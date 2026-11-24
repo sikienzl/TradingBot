@@ -1,7 +1,11 @@
 import numpy as np
 import pandas as pd
 
-from src.train_catboost_model import create_profit_labels, generate_walk_forward_splits
+from src.train_catboost_model import (
+    create_profit_labels,
+    generate_walk_forward_splits,
+    train_val_split_time,
+)
 
 
 def test_generate_walk_forward_splits_monotonic_windows():
@@ -47,3 +51,32 @@ def test_create_profit_labels_applies_roundtrip_costs():
 
     assert np.isclose(out.loc[0, "future_net_return"], expected_net)
     assert out.loc[0, "label"] == "halten"
+
+
+def test_train_val_split_purges_labels_that_cross_validation_boundary():
+    df = pd.DataFrame(
+        {
+            "coin": ["BTC"] * 12,
+            "timestamp": pd.date_range("2024-01-01", periods=12, freq="1h"),
+            "label": [0] * 12,
+        }
+    )
+
+    train, validation = train_val_split_time(df, train_ratio=0.5, horizon=2)
+
+    assert len(validation) == 6
+    assert train["timestamp"].max() == pd.Timestamp("2024-01-01 03:00:00")
+
+
+def test_train_val_split_purges_per_coin_without_timestamps():
+    df = pd.DataFrame(
+        {
+            "coin": ["BTC", "ETH"] * 6,
+            "label": [0] * 12,
+        }
+    )
+
+    train, validation = train_val_split_time(df, train_ratio=0.5, horizon=1)
+
+    assert len(validation) == 6
+    assert train["coin"].tolist() == ["BTC", "ETH"] * 2

@@ -14,6 +14,9 @@ __pycache__/
 dist/
 build/
 
+# Build-generated version file (written by hatch-vcs)
+src/_version.py
+
 # Logs
 *.log
 backtest_log.txt
@@ -27,17 +30,42 @@ data/research_signal_raw_test.json
 # Model artifacts
 catboost_info/
 old_data/
+model/hailo_trading_model/
+*.hef
+*.onnx
+*.har
+*.npy
+*.npz
+calibration.alls
+/hailo-sdk/
+/hailo-compiler*.tar
+/hailo-compiler*.tar.gz
+/hailo-shadow.env
 
 # Results & checkpoints
 results/
 
 # Bot state (runtime-generated)
 auto_tune_state*.json
+.portfolio_state.json
 
 # Testing
 .pytest_cache/
 .coverage
+/coverage.xml
 
-# IDE
+# IDE / analysis tooling
 .vscode/
 .idea/
+.scannerwork/
+
+# Local agent instructions (personal, not shared)
+.github/copilot-instructions.md
+
+# Local Ansible inventory, secrets, and TLS material
+/ansible/inventory/hosts.yml
+/ansible/group_vars/paper_dashboard/vault.yml
+/ansible/.vault_pass.txt
+/ansible/files/*.crt
+/ansible/files/*.key
+/ansible/files/*.pem

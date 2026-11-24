@@ -5,14 +5,13 @@ Reads trade_journal.csv and exports current balance status as Prometheus metrics
 """
 import ast
 import csv
+import json
 import math
 import os
-import sys
-import json
 import re
+import sys
 from collections import deque
-from datetime import datetime, timedelta, timezone
-
+from datetime import UTC, datetime, timedelta
 
 MIN_DRAWDOWN_PCT_BASE_USD = 1.0
 BOT_LOG_PATH = '/opt/trading_2/logs/bot.log'
@@ -33,16 +32,20 @@ SHADOW_SUGGESTION_META_RE = re.compile(
 )
 
 
-def read_trades(journal_path):
-    """Read all trades from journal"""
+def read_trades(journal_path, *, quiet=False):
+    """Read all trades from journal.
+
+    ``quiet`` suppresses the stderr diagnostic so the HTTP exporter, which
+    polls on a timer and intentionally stays silent, can reuse this helper.
+    """
     trades = []
     try:
         with open(journal_path, 'r') as f:
             reader = csv.DictReader(f)
-            for row in reader:
-                trades.append(row)
-    except Exception as e:
-        print(f"Error reading trades: {e}", file=sys.stderr)
+            trades = list(reader)
+    except (OSError, UnicodeError, csv.Error) as e:
+        if not quiet:
+            print(f"Error reading trades: {e}", file=sys.stderr)
         return []
     return trades
 
@@ -57,7 +60,7 @@ def parse_timestamp(timestamp_str):
     except ValueError:
         try:
             return datetime.fromisoformat(ts.split('.')[0])
-        except Exception:
+        except ValueError:
             return None
 
 
@@ -77,7 +80,7 @@ def extract_return_pct(trade):
 
 def calculate_pnl_metrics(trades, time_window_hours=24):
     """Calculate PnL metrics from trades"""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     cutoff = now - timedelta(hours=time_window_hours)
 
     all_time_realized_pnl = 0.0
@@ -85,6 +88,7 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
     total_trades = 0
     winning_trades = 0
     losing_trades = 0
+    break_even_trades = 0
     gross_profit = 0.0
     gross_loss = 0.0
     per_trade_returns = []
@@ -92,6 +96,7 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
     coin_pnl = {}
     coin_closed = {}
     coin_wins = {}
+    coin_break_even = {}
     coin_buy_volume = {}
     coin_buy_count = {}
 
@@ -144,6 +149,7 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
 
             coin_pnl[coin] = coin_pnl.get(coin, 0.0) + pnl
             coin_closed[coin] = coin_closed.get(coin, 0) + 1
+            coin_break_even.setdefault(coin, 0)
 
             if pnl > 0:
                 winning_trades += 1
@@ -152,22 +158,22 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
             elif pnl < 0:
                 losing_trades += 1
                 gross_loss += pnl
+            else:
+                break_even_trades += 1
+                coin_break_even[coin] = coin_break_even.get(coin, 0) + 1
 
             per_trade_returns.append(extract_return_pct(trade))
 
             equity += pnl
-            if equity > peak_equity:
-                peak_equity = equity
+            peak_equity = max(peak_equity, equity)
             drawdown_usd = peak_equity - equity
-            if drawdown_usd > max_drawdown_usd:
-                max_drawdown_usd = drawdown_usd
+            max_drawdown_usd = max(max_drawdown_usd, drawdown_usd)
             if peak_equity > 0:
                 # Prevent unrealistic percentages when peak equity is near zero.
                 drawdown_pct = drawdown_usd / \
                     max(peak_equity, MIN_DRAWDOWN_PCT_BASE_USD)
-                if drawdown_pct > max_drawdown_pct:
-                    max_drawdown_pct = drawdown_pct
-        except Exception:
+                max_drawdown_pct = max(max_drawdown_pct, drawdown_pct)
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError, OverflowError):
             continue
 
     win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
@@ -199,6 +205,7 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
         'total_trades': total_trades,
         'winning_trades': winning_trades,
         'losing_trades': losing_trades,
+        'break_even_trades': break_even_trades,
         'win_rate': win_rate,
         'avg_pnl_per_trade': avg_pnl,
         'profit_factor': profit_factor,
@@ -208,12 +215,13 @@ def calculate_pnl_metrics(trades, time_window_hours=24):
         'coin_pnl': coin_pnl,
         'coin_closed': coin_closed,
         'coin_win_rate': coin_win_rate,
+        'coin_break_even': coin_break_even,
         'coin_buy_volume': coin_buy_volume,
         'coin_buy_count': coin_buy_count,
     }
 
 
-def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
+def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH, *, on_portfolio_value=None):
     """Read latest portfolio value and cash from bot log."""
     snapshot = {
         'portfolio_value_eur': 0.0,
@@ -231,81 +239,167 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
     try:
         with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
             tail_lines = list(deque(f, maxlen=800))
-
-        current_prices = {}
-        open_trade_amount_base = {}
-        open_trade_amount_coin = {}
-
-        for line in reversed(tail_lines):
-            if snapshot['portfolio_value_eur'] == 0.0 and 'Portfolio value:' in line:
-                try:
-                    value_part = line.split('Portfolio value:', 1)[1].strip()
-                    snapshot['portfolio_value_eur'] = float(
-                        value_part.split(' ')[0])
-                except Exception:
-                    pass
-
-            if snapshot['portfolio_cash_eur'] == 0.0 and '  - Cash:' in line:
-                try:
-                    cash_part = line.split('Cash:', 1)[1].strip()
-                    snapshot['portfolio_cash_eur'] = float(
-                        cash_part.split(' ')[0])
-                except Exception:
-                    pass
-
-            if not snapshot['holdings_amount_coin'] and '  - Holdings:' in line:
-                try:
-                    holdings_part = line.split('Holdings:', 1)[1].strip()
-                    parsed = ast.literal_eval(holdings_part)
-                    if isinstance(parsed, dict):
-                        snapshot['holdings_amount_coin'] = {
-                            str(coin).upper(): float(amount)
-                            for coin, amount in parsed.items()
-                            if float(amount) > 0.0
-                        }
-                except Exception:
-                    pass
-
-            if '  - Open trades details:' in line:
-                for coin, amount_coin in OPEN_TRADE_AMOUNT_COIN_RE.findall(line):
-                    current_coin = coin.upper()
-                    if current_coin not in open_trade_amount_coin:
-                        try:
-                            open_trade_amount_coin[current_coin] = float(
-                                amount_coin)
-                        except ValueError:
-                            pass
-                for coin, amount_base in OPEN_TRADE_AMOUNT_BASE_RE.findall(line):
-                    current_coin = coin.upper()
-                    if current_coin not in open_trade_amount_base:
-                        try:
-                            open_trade_amount_base[current_coin] = float(
-                                amount_base)
-                        except ValueError:
-                            pass
-
-            if '→ Current ' in line:
-                match = CURRENT_PRICE_RE.search(line)
-                if match:
-                    coin, current_price = match.groups()
-                    current_coin = coin.upper()
-                    if current_coin not in current_prices:
-                        try:
-                            current_prices[current_coin] = float(current_price)
-                        except ValueError:
-                            pass
-
-            if snapshot['portfolio_value_eur'] != 0.0 and snapshot['portfolio_cash_eur'] != 0.0:
-                if not snapshot['holdings_amount_coin']:
-                    break
-                if all(
-                    coin in current_prices or coin in open_trade_amount_base
-                    for coin in snapshot['holdings_amount_coin']
-                ):
-                    break
-    except Exception:
+        current_prices, open_trade_amount_base, open_trade_amount_coin = (
+            _scan_portfolio_tail(tail_lines, snapshot, on_portfolio_value))
+    except (OSError, UnicodeError):
         return snapshot
 
+    _aggregate_portfolio_holdings(
+        snapshot, current_prices, open_trade_amount_base,
+        open_trade_amount_coin)
+
+    return snapshot
+
+def _scan_portfolio_tail(
+    tail_lines: list[str],
+    snapshot: dict,
+    on_portfolio_value,
+) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+    """Scan the log tail for value, cash, holdings, open trades and prices.
+
+    Mutates *snapshot* in place and returns (current_prices,
+    open_trade_amount_base, open_trade_amount_coin).
+    """
+    current_prices: dict[str, float] = {}
+    open_trade_amount_base: dict[str, float] = {}
+    open_trade_amount_coin: dict[str, float] = {}
+    portfolio_value_found = False
+    portfolio_cash_found = False
+
+    for line in reversed(tail_lines):
+        if not portfolio_value_found and 'Portfolio value:' in line:
+            portfolio_value_found = _parse_portfolio_value_line(
+                line, snapshot, on_portfolio_value)
+
+        if not portfolio_cash_found and '  - Cash:' in line:
+            portfolio_cash_found = _parse_cash_line(line, snapshot)
+
+        if not snapshot['holdings_amount_coin'] and '  - Holdings:' in line:
+            _parse_holdings_line(line, snapshot)
+
+        if '  - Open trades details:' in line:
+            _parse_open_trades_line(
+                line, open_trade_amount_base, open_trade_amount_coin)
+
+        if '→ Current ' in line:
+            _parse_current_price_line(line, current_prices)
+
+        if _portfolio_scan_complete(
+            snapshot, current_prices, open_trade_amount_base,
+            portfolio_value_found, portfolio_cash_found,
+        ):
+            break
+    return current_prices, open_trade_amount_base, open_trade_amount_coin
+
+
+def _parse_portfolio_value_line(
+    line: str, snapshot: dict, on_portfolio_value
+) -> bool:
+    """Parse a 'Portfolio value:' line into *snapshot*. True if parsed."""
+    found = False
+    try:
+        value_part = line.split('Portfolio value:', 1)[1].strip()
+        snapshot['portfolio_value_eur'] = float(
+            value_part.split(' ')[0])
+        found = True
+        if on_portfolio_value is not None:
+            on_portfolio_value(line)
+    except (IndexError, ValueError) as e:
+        print(f"Error parsing portfolio value: {e}", file=sys.stderr)
+    return found
+
+
+def _parse_cash_line(line: str, snapshot: dict) -> bool:
+    """Parse a 'Cash:' line into *snapshot*. True if parsed."""
+    try:
+        cash_part = line.split('Cash:', 1)[1].strip()
+        snapshot['portfolio_cash_eur'] = float(
+            cash_part.split(' ')[0])
+        return True
+    except (IndexError, ValueError) as e:
+        print(f"Error parsing portfolio cash: {e}", file=sys.stderr)
+    return False
+
+
+def _parse_holdings_line(line: str, snapshot: dict) -> None:
+    """Parse a 'Holdings:' line into *snapshot*."""
+    try:
+        holdings_part = line.split('Holdings:', 1)[1].strip()
+        parsed = ast.literal_eval(holdings_part)
+        if isinstance(parsed, dict):
+            snapshot['holdings_amount_coin'] = {
+                str(coin).upper(): float(amount)
+                for coin, amount in parsed.items()
+                if float(amount) > 0.0
+            }
+    except (SyntaxError, TypeError, ValueError):
+        pass
+
+
+def _parse_open_trades_line(
+    line: str,
+    open_trade_amount_base: dict[str, float],
+    open_trade_amount_coin: dict[str, float],
+) -> None:
+    """Parse an 'Open trades details:' line into the amount dicts."""
+    for coin, amount_coin in OPEN_TRADE_AMOUNT_COIN_RE.findall(line):
+        current_coin = coin.upper()
+        if current_coin not in open_trade_amount_coin:
+            try:
+                open_trade_amount_coin[current_coin] = float(
+                    amount_coin)
+            except ValueError:
+                pass
+    for coin, amount_base in OPEN_TRADE_AMOUNT_BASE_RE.findall(line):
+        current_coin = coin.upper()
+        if current_coin not in open_trade_amount_base:
+            try:
+                open_trade_amount_base[current_coin] = float(
+                    amount_base)
+            except ValueError:
+                pass
+
+
+def _parse_current_price_line(
+    line: str, current_prices: dict[str, float]
+) -> None:
+    """Parse a current-price line into *current_prices*."""
+    match = CURRENT_PRICE_RE.search(line)
+    if match:
+        coin, current_price = match.groups()
+        current_coin = coin.upper()
+        if current_coin not in current_prices:
+            try:
+                current_prices[current_coin] = float(current_price)
+            except ValueError:
+                pass
+
+
+def _portfolio_scan_complete(
+    snapshot: dict,
+    current_prices: dict[str, float],
+    open_trade_amount_base: dict[str, float],
+    portfolio_value_found: bool,
+    portfolio_cash_found: bool,
+) -> bool:
+    """Return True once the tail scan has collected everything needed."""
+    if not (portfolio_value_found and portfolio_cash_found):
+        return False
+    if not snapshot['holdings_amount_coin']:
+        return True
+    return all(
+        coin in current_prices or coin in open_trade_amount_base
+        for coin in snapshot['holdings_amount_coin']
+    )
+
+
+def _aggregate_portfolio_holdings(
+    snapshot: dict,
+    current_prices: dict[str, float],
+    open_trade_amount_base: dict[str, float],
+    open_trade_amount_coin: dict[str, float],
+) -> None:
+    """Fill holdings value, cost basis and unrealized PnL into *snapshot*."""
     for coin, amount_coin in snapshot['holdings_amount_coin'].items():
         if coin in current_prices:
             snapshot['holdings_value_eur'][coin] = amount_coin * \
@@ -324,29 +418,40 @@ def read_latest_portfolio_snapshot(log_path=BOT_LOG_PATH):
         snapshot['holdings_unrealized_pnl_eur'][coin] = current_value - cost_basis
     snapshot['open_positions_count'] = len(snapshot['holdings_amount_coin'])
 
-    return snapshot
+
+def _scan_portfolio_start_value_from_log(log_path):
+    """Return the cash value from the first portfolio-initialisation log line.
+
+    Returns ``None`` when the marker line is absent or unparseable so callers
+    can apply their own fallback (direct read vs. cached read).
+    """
+    marker = 'Portfolio initialized from exchange (dry-run mode). Cash:'
+    if not os.path.exists(log_path):
+        return None
+    with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+        for line in f:
+            if marker not in line:
+                continue
+            try:
+                cash_part = line.split('Cash:', 1)[1].strip()
+                return float(cash_part.split(' ')[0])
+            except (IndexError, ValueError):
+                continue
+    return None
 
 
 def read_portfolio_start_value(log_path=BOT_LOG_PATH):
     """Read initial dry-run portfolio cash from first initialization log line."""
-    marker = 'Portfolio initialized from exchange (dry-run mode). Cash:'
     try:
-        if os.path.exists(log_path):
-            with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    if marker not in line:
-                        continue
-                    try:
-                        cash_part = line.split('Cash:', 1)[1].strip()
-                        return float(cash_part.split(' ')[0])
-                    except Exception:
-                        continue
+        value = _scan_portfolio_start_value_from_log(log_path)
+        if value is not None:
+            return value
 
         if os.path.exists(PORTFOLIO_STATE_PATH):
             with open(PORTFOLIO_STATE_PATH, 'r', encoding='utf-8', errors='ignore') as f:
                 state = json.load(f)
             return float(state.get('initial_portfolio_value') or 0.0)
-    except Exception:
+    except (OSError, UnicodeError, json.JSONDecodeError, AttributeError, TypeError, ValueError):
         return 0.0
     return 0.0
 
@@ -374,14 +479,14 @@ def read_ai_copilot_usage(env_path=ENV_PATH, state_path=AI_COPILOT_STATE_PATH):
                         result['ai_copilot_budget_cap_usd'] = float(value)
                     elif key == 'AI_COPILOT_MAX_CALLS_PER_MONTH':
                         result['ai_copilot_calls_cap_monthly'] = float(value)
-    except Exception:
-        pass
+    except (OSError, UnicodeError) as exc:
+        print(f"Error reading AI co-pilot environment: {exc}", file=sys.stderr)
 
     try:
         if os.path.exists(state_path):
             with open(state_path, 'r', encoding='utf-8') as f:
                 state = json.load(f)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             month_key = f"{now.year:04d}-{now.month:02d}"
             if state.get('month_key') == month_key:
                 result['ai_copilot_budget_cap_usd'] = float(
@@ -392,8 +497,8 @@ def read_ai_copilot_usage(env_path=ENV_PATH, state_path=AI_COPILOT_STATE_PATH):
                     state.get('monthly_spend_usd', 0.0) or 0.0)
                 result['ai_copilot_calls_used_monthly'] = float(
                     state.get('monthly_calls', 0) or 0)
-    except Exception:
-        pass
+    except (OSError, UnicodeError, json.JSONDecodeError, AttributeError, TypeError, ValueError) as exc:
+        print(f"Error reading AI co-pilot state: {exc}", file=sys.stderr)
 
     return result
 
@@ -408,7 +513,7 @@ def read_ai_shadow_suggestions(log_path=BOT_LOG_PATH):
         with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
             tail_lines = list(deque(f, maxlen=4000))
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         suggestions = []
         rank = 1
 
@@ -450,7 +555,7 @@ def read_ai_shadow_suggestions(log_path=BOT_LOG_PATH):
                 ts = datetime.strptime(
                     timestamp_raw.strip(), '%Y-%m-%d %H:%M:%S,%f')
                 age_minutes = max(0.0, (now - ts).total_seconds() / 60.0)
-            except Exception:
+            except (IndexError, SyntaxError, ValueError):
                 continue
 
             if not isinstance(changes, dict):
@@ -475,13 +580,13 @@ def read_ai_shadow_suggestions(log_path=BOT_LOG_PATH):
                 break
 
         result['ai_copilot_shadow_suggestions'] = suggestions
-    except Exception:
-        pass
+    except (OSError, UnicodeError) as exc:
+        print(f"Error reading AI co-pilot suggestions: {exc}", file=sys.stderr)
 
     return result
 
 
-def _read_env_value(env_key, env_path=ENV_PATH):
+def _read_env_value(env_key, env_path=ENV_PATH, *, quiet=False):
     try:
         if os.path.exists(env_path):
             with open(env_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -493,8 +598,9 @@ def _read_env_value(env_key, env_path=ENV_PATH):
                     if key.strip() != env_key:
                         continue
                     return value.strip().strip('"').strip("'")
-    except Exception:
-        pass
+    except (OSError, UnicodeError) as exc:
+        if not quiet:
+            print(f"Error reading environment file: {exc}", file=sys.stderr)
     return ''
 
 
@@ -621,6 +727,11 @@ def format_prometheus_metrics(metrics):
     output.append('# TYPE trading_losing_trades gauge')
     output.append(f'trading_losing_trades {metrics["losing_trades"]}')
 
+    output.append(
+        '# HELP trading_break_even_trades Number of break-even trades (last 24h)')
+    output.append('# TYPE trading_break_even_trades gauge')
+    output.append(f'trading_break_even_trades {metrics["break_even_trades"]}')
+
     output.append('# HELP trading_win_rate Win rate percentage (last 24h)')
     output.append('# TYPE trading_win_rate gauge')
     output.append(f'trading_win_rate {metrics["win_rate"]}')
@@ -667,6 +778,29 @@ def format_prometheus_metrics(metrics):
     output.append('# TYPE trading_portfolio_start_value_eur gauge')
     output.append(
         f'trading_portfolio_start_value_eur {metrics.get("portfolio_start_value_eur", 0.0)}')
+
+    # Snapshot freshness metrics are only emitted by the HTTP exporter, which
+    # attaches them to its metrics dict; the one-shot script omits them.
+    if 'metrics_generated_unixtime' in metrics:
+        output.append(
+            '# HELP trading_metrics_generated_unixtime Unix timestamp when the exporter generated this metrics payload')
+        output.append('# TYPE trading_metrics_generated_unixtime gauge')
+        output.append(
+            f'trading_metrics_generated_unixtime {metrics.get("metrics_generated_unixtime", 0.0)}')
+
+    if 'portfolio_snapshot_timestamp_unixtime' in metrics:
+        output.append(
+            '# HELP trading_portfolio_snapshot_unixtime Unix timestamp of the latest portfolio snapshot parsed from the bot log')
+        output.append('# TYPE trading_portfolio_snapshot_unixtime gauge')
+        output.append(
+            f'trading_portfolio_snapshot_unixtime {metrics.get("portfolio_snapshot_timestamp_unixtime", 0.0)}')
+
+    if 'portfolio_snapshot_age_seconds' in metrics:
+        output.append(
+            '# HELP trading_portfolio_snapshot_age_seconds Age in seconds of the latest portfolio snapshot parsed from the bot log')
+        output.append('# TYPE trading_portfolio_snapshot_age_seconds gauge')
+        output.append(
+            f'trading_portfolio_snapshot_age_seconds {metrics.get("portfolio_snapshot_age_seconds", 0.0)}')
 
     output.append(
         '# HELP trading_current_holding_value_eur Current mark-to-market holding value per coin in EUR')
@@ -851,6 +985,13 @@ def format_prometheus_metrics(metrics):
     output.append('# TYPE trading_coin_win_rate gauge')
     for coin, rate in sorted(metrics['coin_win_rate'].items()):
         output.append(f'trading_coin_win_rate{{coin="{coin}"}} {rate}')
+
+    output.append(
+        '# HELP trading_coin_break_even_trades Break-even trades per coin (last 24h)')
+    output.append('# TYPE trading_coin_break_even_trades gauge')
+    for coin, count in sorted(metrics['coin_break_even'].items()):
+        output.append(
+            f'trading_coin_break_even_trades{{coin="{coin}"}} {count}')
 
     output.append(
         '# HELP trading_coin_buy_volume_eur Buy volume per coin in EUR (last 24h)')

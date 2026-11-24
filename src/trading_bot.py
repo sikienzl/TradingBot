@@ -1,239 +1,77 @@
-import os
-import sys
-import logging
 import csv
+import hashlib
+import io
 import json
-import shutil
+import logging
 import math
-import importlib
-from typing import Any, Dict, List, Optional, Set, Tuple
-import pandas as pd
+import os
+import shutil
+import signal
+import stat
+import sys
+import tempfile
 import time
-from datetime import datetime, timedelta, timezone
+import urllib.error
+import urllib.request
+import uuid
+from collections import Counter, defaultdict
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
+
 import ccxt
 import numpy as np
-from dotenv import load_dotenv
-from collections import Counter, defaultdict
-import urllib.request
-import urllib.error
-import re
+import pandas as pd
+from dotenv import load_dotenv  # noqa: F401  (re-exported: tests patch src.trading_bot.load_dotenv)
 
+from src.analytics import PostgresAnalyticsWriter
+from src.backtesting import Backtester, simple_strategy
+from src.bot_config import BotConfig
+from src.journal_guards import (
+    _compute_degraded_entry_sources,
+    _compute_dynamic_lossmaker_entry_pairs,
+    _compute_recent_pnl_guard_state,
+)
+from src.portfolio import Portfolio
+from src.simulation import SimulationEngine
+from src.strategy_rules import rule_recommendation as get_rule_recommendation
 
 logger = logging.getLogger(__name__)
 
 
-_SAFE_IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+def _handle_sigterm(_signum: int, _frame: Any) -> None:
+    raise KeyboardInterrupt
 
 
-def _compute_dynamic_lossmaker_entry_pairs(
-    df: pd.DataFrame,
-    window: int,
-    min_sells: int,
-    max_win_rate_pct: float,
-    min_pnl_loss: float,
-    min_max_hold_exit_ratio: float,
-    max_avg_hold_seconds: float,
-) -> Set[Tuple[str, str]]:
-    """Returns recent coin/source pairs that should be temporarily suppressed."""
-    if df.empty:
-        return set()
-
-    required_columns = {"action", "coin", "pnl_base"}
-    if not required_columns.issubset(df.columns):
-        return set()
-
-    sells = df.loc[
-        df["action"].fillna("").astype(str).str.lower() == "sell"
-    ].copy()
-    if sells.empty:
-        return set()
-
-    recent_window = sells.tail(max(1, int(window))).copy()
-    if recent_window.empty:
-        return set()
-
-    recent_window["coin"] = recent_window["coin"].fillna(
-        "").astype(str).str.upper()
-    recent_window["signal_source"] = recent_window.get(
-        "signal_source",
-        pd.Series(index=recent_window.index, dtype=object),
-    ).fillna("rules").astype(str).str.lower()
-    recent_window["pnl_base"] = pd.to_numeric(
-        recent_window["pnl_base"], errors="coerce"
-    ).fillna(0.0)
-    recent_window["hold_seconds"] = pd.to_numeric(
-        recent_window.get(
-            "hold_seconds",
-            pd.Series(index=recent_window.index, dtype=float),
-        ),
-        errors="coerce",
-    ).fillna(0.0)
-    recent_reasons = recent_window.get(
-        "reason",
-        pd.Series(index=recent_window.index, dtype=object),
-    ).fillna("").astype(str)
-
-    blocked_pairs: Set[Tuple[str, str]] = set()
-    for (coin, signal_source), group in recent_window.groupby(["coin", "signal_source"], dropna=False):
-        if not coin or not signal_source:
-            continue
-        if len(group) < max(1, int(min_sells)):
-            continue
-
-        pnl = pd.to_numeric(group["pnl_base"], errors="coerce").fillna(0.0)
-        pnl_sum = float(pnl.sum())
-        if pnl_sum > -float(min_pnl_loss):
-            continue
-
-        win_rate_pct = float((pnl > 0).mean() * 100.0)
-        if win_rate_pct > float(max_win_rate_pct):
-            continue
-
-        avg_hold_seconds = float(
-            pd.to_numeric(group["hold_seconds"],
-                          errors="coerce").fillna(0.0).mean()
-        )
-
-        reasons = recent_reasons.loc[group.index]
-        max_hold_exit_ratio = float(
-            reasons.str.contains("MAX-HOLD-TIME", case=False, na=False).mean()
-        )
-        if (
-            max_hold_exit_ratio < float(min_max_hold_exit_ratio)
-            and avg_hold_seconds > float(max_avg_hold_seconds)
-        ):
-            continue
-
-        blocked_pairs.add((str(coin).upper(), str(signal_source).lower()))
-
-    return blocked_pairs
+def _install_sigterm_handler() -> None:
+    signal.signal(signal.SIGTERM, _handle_sigterm)
 
 
-def _compute_degraded_entry_sources(
-    df: pd.DataFrame,
-    window: int,
-    min_sells: int,
-    min_pnl_loss: float,
-    max_profit_factor: float,
-    max_avg_hold_seconds: float,
-) -> Set[str]:
-    """Returns signal sources that recently underperform with short-hold churn."""
-    if df.empty:
-        return set()
-
-    required_columns = {"action", "pnl_base"}
-    if not required_columns.issubset(df.columns):
-        return set()
-
-    sells = df.loc[
-        df["action"].fillna("").astype(str).str.lower() == "sell"
-    ].copy()
-    if sells.empty:
-        return set()
-
-    recent_window = sells.tail(max(1, int(window))).copy()
-    if recent_window.empty:
-        return set()
-
-    recent_window["signal_source"] = recent_window.get(
-        "signal_source",
-        pd.Series(index=recent_window.index, dtype=object),
-    ).fillna("rules").astype(str).str.lower()
-    recent_window["pnl_base"] = pd.to_numeric(
-        recent_window["pnl_base"], errors="coerce"
-    ).fillna(0.0)
-    recent_window["hold_seconds"] = pd.to_numeric(
-        recent_window.get(
-            "hold_seconds",
-            pd.Series(index=recent_window.index, dtype=float),
-        ),
-        errors="coerce",
-    ).fillna(0.0)
-
-    degraded_sources: Set[str] = set()
-    for source, group in recent_window.groupby("signal_source", dropna=False):
-        if not source:
-            continue
-        if len(group) < max(1, int(min_sells)):
-            continue
-
-        pnl = pd.to_numeric(group["pnl_base"], errors="coerce").fillna(0.0)
-        pnl_sum = float(pnl.sum())
-        if pnl_sum > -float(min_pnl_loss):
-            continue
-
-        gross_profit = float(pnl[pnl > 0].sum())
-        gross_loss = float(-pnl[pnl < 0].sum())
-        profit_factor = (
-            gross_profit / gross_loss) if gross_loss > 0 else 999.0
-        if profit_factor > float(max_profit_factor):
-            continue
-
-        avg_hold_seconds = float(
-            pd.to_numeric(group["hold_seconds"],
-                          errors="coerce").fillna(0.0).mean()
-        )
-        if avg_hold_seconds > float(max_avg_hold_seconds):
-            continue
-
-        degraded_sources.add(str(source).lower())
-
-    return degraded_sources
+_TRADE_JOURNAL_FIELDS = [
+    'timestamp', 'iteration', 'coin', 'action', 'price', 'amount_coin',
+    'amount_base', 'pnl_base', 'pnl_pct', 'hold_seconds',
+    'signal_source', 'signal_confidence', 'recommendation', 'reason', 'dry_run',
+    'run_id', 'config_hash', 'mfe_pct', 'mae_pct',
+    'execution_cost_mode', 'entry_cost_mode', 'reference_price', 'fee_base',
+    'slippage_base', 'gross_pnl_base', 'net_pnl_base',
+]
 
 
-def _compute_recent_pnl_guard_state(
-    df: pd.DataFrame,
-    window: int,
-    min_trades: int,
-    min_realized_pnl: float,
-    max_profit_factor: float,
-) -> Dict[str, Any]:
-    """Returns whether recent realized performance is weak enough to tighten entries."""
-    result: Dict[str, Any] = {
-        "active": False,
-        "recent_trades": 0,
-        "recent_realized_pnl": 0.0,
-        "recent_profit_factor": 999.0,
-        "reason": "insufficient_data",
-    }
-
-    if df.empty or "action" not in df.columns or "pnl_base" not in df.columns:
-        return result
-
-    sells = df.loc[
-        df["action"].fillna("").astype(str).str.lower() == "sell"
-    ].copy()
-    if sells.empty:
-        return result
-
-    recent = sells.tail(max(1, int(window))).copy()
-    if recent.empty:
-        return result
-
-    pnl = pd.to_numeric(recent["pnl_base"], errors="coerce").fillna(0.0)
-    recent_trades = int(len(recent))
-    recent_realized_pnl = float(pnl.sum())
-    gross_profit = float(pnl[pnl > 0].sum())
-    gross_loss = float(-pnl[pnl < 0].sum())
-    recent_profit_factor = (
-        (gross_profit / gross_loss) if gross_loss > 0 else 999.0
+def _config_fingerprint(config: Any) -> str:
+    sensitive_name_parts = (
+        "key", "secret", "password", "token", "url", "user",
     )
-
-    result["recent_trades"] = recent_trades
-    result["recent_realized_pnl"] = recent_realized_pnl
-    result["recent_profit_factor"] = recent_profit_factor
-
-    if recent_trades < max(1, int(min_trades)):
-        result["reason"] = "below_min_trades"
-        return result
-
-    if recent_realized_pnl < float(min_realized_pnl) and recent_profit_factor <= float(max_profit_factor):
-        result["active"] = True
-        result["reason"] = "negative_recent_pnl_and_low_pf"
-    else:
-        result["reason"] = "healthy_recent_window"
-
-    return result
+    safe_config = {
+        name: value
+        for name, value in vars(config).items()
+        if not any(part in name.lower() for part in sensitive_name_parts)
+    }
+    serialized = json.dumps(
+        safe_config,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=lambda value: sorted(value) if isinstance(value, set) else str(value),
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def configure_logging(log_file: str = 'trading_bot.log', level: int = logging.INFO) -> None:
@@ -244,7 +82,7 @@ def configure_logging(log_file: str = 'trading_bot.log', level: int = logging.IN
 
     formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - %(message)s')
-    handlers: List[logging.Handler] = []
+    handlers: list[logging.Handler] = []
 
     try:
         file_handler = logging.FileHandler(log_file)
@@ -265,7 +103,8 @@ def configure_logging(log_file: str = 'trading_bot.log', level: int = logging.IN
     root_logger.setLevel(level)
     for handler in handlers:
         root_logger.addHandler(handler)
-    root_logger._trading_bot_logging_configured = True
+    # Flag is informational only; read back via getattr(..., False) above.
+    root_logger._trading_bot_logging_configured = True  # type: ignore[attr-defined]
 
 
 def _mask_secret(value: str) -> str:
@@ -277,869 +116,64 @@ def _mask_secret(value: str) -> str:
     return f"{value[:4]}...{value[-4:]}"
 
 
-class Portfolio:
-    """
-    Manages the portfolio, holdings and trading positions.
-    Includes simple PnL tracking per open position.
-    """
+def _order_fill_details(
+    order: dict[str, Any],
+    requested_amount: float,
+    fallback_price: float,
+) -> tuple[float, float, float]:
+    """Returns validated filled amount, average price, and quote cost."""
+    if not isinstance(order, dict):
+        raise TypeError("Exchange order response is not an object.")
+    status = str(order.get("status", "")).lower()
+    filled_value = order.get("filled")
+    if filled_value is None and status in {"closed", "filled"}:
+        filled_value = order.get("amount", requested_amount)
+    if filled_value is None:
+        raise ValueError("Exchange order response does not report a filled amount.")
 
-    def __init__(self, base_currency: str = "EUR"):
-        self.base_currency = base_currency
-        self.cash: float = 0.0  # Available balance in base currency
-        # Holdings of other cryptocurrencies (Coin -> quantity)
-        self.holdings: Dict[str, float] = {}
-        # Offene Trades: {'BTC': {'buy_price': 30000, 'amount_coin': 0.001, 'amount_base': 30, 'timestamp': datetime}}
-        self.open_trades: Dict[str, Dict] = {}
-        self.last_update: Optional[datetime] = None
-        self.initial_portfolio_value: Optional[float] = None
-        self.state_file: str = ".portfolio_state.json"  # Persistency file for dry-run
-
-    def save_state(self, filepath: Optional[str] = None) -> bool:
-        """Save portfolio state to JSON file (for dry-run persistency)."""
-        try:
-            state_file = filepath or self.state_file
-            state = {
-                'cash': self.cash,
-                'holdings': self.holdings,
-                'open_trades': self.open_trades,
-                'base_currency': self.base_currency,
-                'initial_portfolio_value': self.initial_portfolio_value,
-                'timestamp': datetime.now().isoformat(),
-            }
-            with open(state_file, 'w') as f:
-                json.dump(state, f, indent=2, default=lambda o: o.isoformat(
-                ) if isinstance(o, datetime) else str(o))
-            logger.debug(f"Portfolio state saved to {state_file}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to save portfolio state: {e}")
-            return False
-
-    def load_state(self, filepath: Optional[str] = None) -> bool:
-        """Load portfolio state from JSON file (for dry-run persistency)."""
-        try:
-            state_file = filepath or self.state_file
-            if not os.path.exists(state_file):
-                logger.debug(f"Portfolio state file not found: {state_file}")
-                return False
-            with open(state_file, 'r') as f:
-                state = json.load(f)
-            self.cash = float(state.get('cash', 0.0))
-            self.holdings = {k: float(v)
-                             for k, v in state.get('holdings', {}).items()}
-            self.open_trades = state.get('open_trades', {})
-            initial_value = state.get('initial_portfolio_value')
-            self.initial_portfolio_value = float(
-                initial_value) if initial_value not in (None, '') else None
-            for trade in self.open_trades.values():
-                ts = trade.get('timestamp')
-                if isinstance(ts, str):
-                    try:
-                        trade['timestamp'] = datetime.fromisoformat(ts)
-                    except ValueError:
-                        trade['timestamp'] = datetime.now()
-            logger.info(f"Portfolio state loaded from {state_file}")
-            logger.info(f"  Cash: {self.cash:.2f} {self.base_currency}")
-            logger.info(f"  Holdings: {self.holdings}")
-            if self.open_trades:
-                logger.info(
-                    f"  Open trades restored: {list(self.open_trades.keys())}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to load portfolio state: {e}")
-            return False
-
-    def get_value(self, prices: Dict[str, float]) -> float:
-        """
-        Berechnet den Gesamtwert des Portfolios basierend auf aktuellen Preisen.
-        """
-        value = self.cash
-        for coin, amount in self.holdings.items():
-            if coin in prices:
-                value += amount * prices[coin]
-                continue
-
-            # Kraken assets may use 'X' or 'Z' prefixes (e.g. XXBT).
-            clean_coin = coin
-            if len(clean_coin) > 3 and clean_coin[0] in ('X', 'Z'):
-                clean_coin = clean_coin[1:]
-            if len(clean_coin) > 3 and clean_coin[0] in ('X', 'Z'):
-                clean_coin = clean_coin[1:]
-
-            if clean_coin in prices:
-                value += amount * prices[clean_coin]
-            else:
-                logger.debug(
-                    f"Price for {coin}/{clean_coin} not found for portfolio value calculation.")
-        return value
-
-    def add_trade(
-        self,
-        coin: str,
-        buy_price: float,
-        amount_coin: float,
-        amount_base: float,
-        signal_source: str = "rules",
-        signal_confidence: Optional[float] = None,
-        recommendation: str = "HOLD",
+    filled = float(filled_value)
+    average = float(order.get("average") or order.get("price") or fallback_price)
+    cost = float(order.get("cost") or filled * average)
+    if (
+        not math.isfinite(filled)
+        or not math.isfinite(average)
+        or not math.isfinite(cost)
+        or not math.isfinite(requested_amount)
+        or not math.isfinite(fallback_price)
+        or filled <= 0
+        or average <= 0
+        or cost <= 0
+        or requested_amount <= 0
+        or filled > requested_amount + max(1e-12, requested_amount * 1e-8)
     ):
-        """Adds a new trade to the open positions."""
-        self.open_trades[coin] = {
-            'buy_price': buy_price,
-            'amount_coin': amount_coin,
-            'amount_base': amount_base,  # Invested amount in base currency
-            'timestamp': datetime.now(),
-            'peak_price': buy_price,
-            'partial_tp_taken': False,
-            'partial_tp_timestamp': None,
-            'signal_source': signal_source,
-            'signal_confidence': signal_confidence,
-            'recommendation': recommendation,
-        }
-        logger.info(
-            f"Trade {coin} added to monitoring: buy price {buy_price:.4f}, amount {amount_coin:.4f}.")
-
-    def remove_trade(self, coin: str):
-        """Entfernt einen Trade aus den offenen Positionen."""
-        if coin in self.open_trades:
-            del self.open_trades[coin]
-            logger.info(f"Trade {coin} removed from monitoring.")
+        raise ValueError("Exchange order response contains invalid fill details.")
+    return filled, average, cost
 
 
-class BotConfig:
-    """Configuration class for the trading bot."""
+def _currency_aliases(currency: str) -> list[str]:
+    base = currency.upper().strip()
+    aliases = [base, f"Z{base}", f"X{base}"]
+    if base == 'BTC':
+        aliases.extend(['XBT', 'XXBT'])
+    return list(dict.fromkeys(aliases))
 
-    def __init__(self):
-        load_dotenv()
+def _extract_cash_and_holdings(free_balances: dict[str, float], base_currency: str) -> tuple[float, dict[str, float]]:
+    cash = 0.0
+    aliases = _currency_aliases(base_currency)
+    for key in aliases:
+        value = free_balances.get(key)
+        if value is not None:
+            cash = float(value)
+            break
 
-        def _env_bool(name: str, default: bool) -> bool:
-            raw = os.getenv(name)
-            if raw is None:
-                return default
-            return raw.strip().lower() in ("1", "true", "yes", "y", "on")
-
-        def _env_str(name: str, default: str = "") -> str:
-            raw = os.getenv(name)
-            if raw is None:
-                return default
-            return raw.strip().strip('"').strip("'")
-
-        def _env_symbol_int_map(name: str, default: str = "") -> Dict[str, int]:
-            raw = _env_str(name, default)
-            if not raw:
-                return {}
-
-            parsed: Dict[str, int] = {}
-            for item in raw.split(','):
-                token = item.strip()
-                if not token or ':' not in token:
-                    continue
-                symbol, value = token.split(':', 1)
-                symbol = symbol.strip().upper()
-                value = value.strip()
-                if not symbol or not value:
-                    continue
-                try:
-                    parsed[symbol] = int(value)
-                except ValueError:
-                    continue
-            return parsed
-
-        def _env_symbol_float_map(name: str, default: str = "") -> Dict[str, float]:
-            raw = _env_str(name, default)
-            if not raw:
-                return {}
-
-            parsed: Dict[str, float] = {}
-            for item in raw.split(','):
-                token = item.strip()
-                if not token or ':' not in token:
-                    continue
-                symbol, value = token.split(':', 1)
-                symbol = symbol.strip().upper()
-                value = value.strip()
-                if not symbol or not value:
-                    continue
-                try:
-                    parsed[symbol] = float(value)
-                except ValueError:
-                    continue
-            return parsed
-
-        def _env_threshold_float_pairs(name: str, default: str = "") -> List[Tuple[float, float]]:
-            raw = _env_str(name, default)
-            if not raw:
-                return []
-
-            parsed: List[Tuple[float, float]] = []
-            for item in raw.split(','):
-                token = item.strip()
-                if not token or ':' not in token:
-                    continue
-                threshold, value = token.split(':', 1)
-                try:
-                    parsed.append(
-                        (float(threshold.strip()), float(value.strip())))
-                except ValueError:
-                    continue
-            return sorted(parsed, key=lambda entry: entry[0])
-
-        def _env_threshold_int_pairs(name: str, default: str = "") -> List[Tuple[float, int]]:
-            raw = _env_str(name, default)
-            if not raw:
-                return []
-
-            parsed: List[Tuple[float, int]] = []
-            for item in raw.split(','):
-                token = item.strip()
-                if not token or ':' not in token:
-                    continue
-                threshold, value = token.split(':', 1)
-                try:
-                    parsed.append(
-                        (float(threshold.strip()), int(value.strip())))
-                except ValueError:
-                    continue
-            return sorted(parsed, key=lambda entry: entry[0])
-
-        self.exchange_name = os.getenv('EXCHANGE_NAME', 'kraken').lower()
-        self.api_key = os.getenv(
-            'KRAKEN_API_KEY', '')
-        self.api_secret = os.getenv(
-            'KRAKEN_API_SECRET', '')
-        self.base_currency = os.getenv('BASE_CURRENCY', 'EUR').upper()
-        self.quote_currencies = [c.strip().upper() for c in os.getenv(
-            'QUOTE_CURRENCIES', 'BTC,ETH').split(',') if c.strip()]
-        configured_excluded_coins = {c.strip().upper() for c in os.getenv(
-            'EXCLUDED_COINS', 'USDC,USDT,EURT,DAI,TUSD,USDP,FDUSD,USDE').split(',') if c.strip()}
-        lossmaker_excluded_coins = {c.strip().upper() for c in os.getenv(
-            'LOSSMAKER_EXCLUDED_COINS', 'ZEC,HYPE,TON,BTC,XRP').split(',') if c.strip()}
-        self.excluded_coins = configured_excluded_coins | lossmaker_excluded_coins
-        self.dynamic_lossmaker_exclusion_enabled = _env_bool(
-            'DYNAMIC_LOSSMAKER_EXCLUSION_ENABLED', True)
-        self.dynamic_lossmaker_window = int(
-            os.getenv('DYNAMIC_LOSSMAKER_WINDOW', 80))
-        self.dynamic_lossmaker_min_sells = int(
-            os.getenv('DYNAMIC_LOSSMAKER_MIN_SELLS', 3))
-        self.dynamic_lossmaker_max_win_rate_pct = float(
-            os.getenv('DYNAMIC_LOSSMAKER_MAX_WIN_RATE_PCT', 45.0))
-        self.dynamic_lossmaker_min_pnl_loss = float(
-            os.getenv('DYNAMIC_LOSSMAKER_MIN_PNL_LOSS', 0.003))
-        self.dynamic_lossmaker_min_max_hold_exit_ratio = float(
-            os.getenv('DYNAMIC_LOSSMAKER_MIN_MAX_HOLD_EXIT_RATIO', 0.5))
-        self.recent_pnl_guard_enabled = _env_bool(
-            'RECENT_PNL_GUARD_ENABLED', True)
-        self.recent_pnl_guard_window = int(
-            os.getenv('RECENT_PNL_GUARD_WINDOW', 120))
-        self.recent_pnl_guard_min_trades = int(
-            os.getenv('RECENT_PNL_GUARD_MIN_TRADES', 60))
-        self.recent_pnl_guard_min_realized_pnl = float(
-            os.getenv('RECENT_PNL_GUARD_MIN_REALIZED_PNL', 0.0))
-        self.recent_pnl_guard_max_profit_factor = float(
-            os.getenv('RECENT_PNL_GUARD_MAX_PROFIT_FACTOR', 1.0))
-        # Amount in base currency per trade
-        self.trade_amount = float(os.getenv('TRADE_AMOUNT', 20))
-        self.portfolio_trade_amount_multipliers = _env_threshold_float_pairs(
-            'PORTFOLIO_TRADE_AMOUNT_MULTIPLIERS',
-            '50:1.10,100:1.25,200:1.50,300:1.75,500:2.20,1000:3.00',
-        )
-        # Minimum amount per trade in base currency
-        self.min_trade_amount = float(os.getenv('MIN_TRADE_AMOUNT', 5))
-        # Seconds between iterations
-        self.check_interval = int(os.getenv('CHECK_INTERVAL', 100))
-        self.dry_run = _env_bool('DRY_RUN', True)
-        self.simulate_data = _env_bool('SIMULATE_DATA', False)
-        self.simulation_seed = int(os.getenv('SIMULATION_SEED', 42))
-        self.simulation_regime = _env_str(
-            'SIMULATION_REGIME', 'neutral').lower()
-        self.stop_loss_pct = float(
-            os.getenv('STOP_LOSS_PCT', 0.05))  # 5% loss
-        self.take_profit_pct = float(
-            os.getenv('TAKE_PROFIT_PCT', 0.10))  # 10% gain
-        self.max_open_trades = int(os.getenv('MAX_OPEN_TRADES', 3))
-        self.portfolio_max_open_trades_tiers = _env_threshold_int_pairs(
-            'PORTFOLIO_MAX_OPEN_TRADES_TIERS',
-            '100:3,200:4,500:5,1000:6',
-        )
-        # Minimum 24h volume in base currency
-        self.min_volume_base = float(os.getenv('MIN_VOLUME_BASE', 100000))
-        # Number of top coins for analysis
-        self.top_n_for_analysis = int(os.getenv('TOP_N_FOR_ANALYSIS', 10))
-        self.exchange_timeout_ms = int(os.getenv('EXCHANGE_TIMEOUT_MS', 15000))
-        # Split ticker requests into manageable chunks to avoid oversized exchange calls.
-        self.ticker_batch_size = int(os.getenv('TICKER_BATCH_SIZE', 80))
-        self.ticker_fetch_retries = int(os.getenv('TICKER_FETCH_RETRIES', 2))
-        self.ticker_retry_delay_seconds = float(
-            os.getenv('TICKER_RETRY_DELAY_SECONDS', 1.0))
-        self.ohlcv_fetch_retries = int(os.getenv('OHLCV_FETCH_RETRIES', 1))
-        self.ohlcv_retry_delay_seconds = float(
-            os.getenv('OHLCV_RETRY_DELAY_SECONDS', 1.0))
-        self.slow_analysis_warning_seconds = float(
-            os.getenv('SLOW_ANALYSIS_WARNING_SECONDS', 8.0))
-        self.rsi_period = int(os.getenv('RSI_PERIOD', 14))
-        self.sma_period_short = int(os.getenv('SMA_PERIOD_SHORT', 20))
-        self.sma_period_long = int(os.getenv('SMA_PERIOD_LONG', 50))
-        # Minimum score for entries (HOLD (Up-Trend) also possible)
-        self.min_entry_score = int(os.getenv('MIN_ENTRY_SCORE', 60))
-        # If no classic BUY recommendation is available, still trade the strongest candidate
-        self.enable_fallback_entry = _env_bool('ENABLE_FALLBACK_ENTRY', True)
-        # Minimum score for fallback entries only (can be lower than MIN_ENTRY_SCORE)
-        self.fallback_min_score = int(os.getenv('FALLBACK_MIN_SCORE', 45))
-        # RSI limit for fallback entries (avoid overbought assets)
-        self.fallback_max_rsi = float(os.getenv('FALLBACK_MAX_RSI', 68))
-        self.fallback_max_rsi_by_coin = _env_symbol_float_map(
-            'FALLBACK_MAX_RSI_BY_COIN', 'TRX:72')
-        # Optionally forces filling of free slots with neutral non-SELL candidates
-        self.force_fill_slots = _env_bool('FORCE_FILL_SLOTS', False)
-        # Minimum score for forced slot filling (without RSI limit)
-        self.force_fill_min_score = int(os.getenv('FORCE_FILL_MIN_SCORE', 35))
-        self.defensive_entry_mode_enabled = _env_bool(
-            'DEFENSIVE_ENTRY_MODE_ENABLED', True)
-        # Guard aggressive fallback entries in down-trends behind a stricter reversal filter.
-        self.downtrend_reversal_entry_enabled = _env_bool(
-            'DOWNTREND_REVERSAL_ENTRY_ENABLED', True)
-        self.downtrend_reversal_max_rsi = float(
-            os.getenv('DOWNTREND_REVERSAL_MAX_RSI', 30.0))
-        self.downtrend_reversal_max_rsi_by_coin = _env_symbol_float_map(
-            'DOWNTREND_REVERSAL_MAX_RSI_BY_COIN', '')
-        self.downtrend_reversal_min_buy_proba = float(
-            os.getenv('DOWNTREND_REVERSAL_MIN_BUY_PROBA', 0.20))
-        self.downtrend_reversal_min_buy_proba_by_coin = _env_symbol_float_map(
-            'DOWNTREND_REVERSAL_MIN_BUY_PROBA_BY_COIN', '')
-        self.downtrend_reversal_max_sell_proba = float(
-            os.getenv('DOWNTREND_REVERSAL_MAX_SELL_PROBA', 0.35))
-        self.downtrend_reversal_max_sell_proba_by_coin = _env_symbol_float_map(
-            'DOWNTREND_REVERSAL_MAX_SELL_PROBA_BY_COIN', '')
-        self.downtrend_reversal_min_proba_edge = float(
-            os.getenv('DOWNTREND_REVERSAL_MIN_PROBA_EDGE', 0.02))
-        self.downtrend_reversal_min_proba_edge_by_coin = _env_symbol_float_map(
-            'DOWNTREND_REVERSAL_MIN_PROBA_EDGE_BY_COIN', '')
-        self.downtrend_reversal_min_ret_1 = float(
-            os.getenv('DOWNTREND_REVERSAL_MIN_RET_1', 0.0))
-        self.downtrend_reversal_min_ret_3 = float(
-            os.getenv('DOWNTREND_REVERSAL_MIN_RET_3', -0.01))
-        self.downtrend_reversal_min_macd_hist = float(
-            os.getenv('DOWNTREND_REVERSAL_MIN_MACD_HIST', 0.0))
-        self.downtrend_reversal_allowed_coins = {
-            c.strip().upper() for c in os.getenv(
-                'DOWNTREND_REVERSAL_ALLOWED_COINS', 'ETH').split(',') if c.strip()
-        }
-        self.downtrend_reversal_fast_exit_enabled = _env_bool(
-            'DOWNTREND_REVERSAL_FAST_EXIT_ENABLED', True)
-        self.downtrend_reversal_fast_exit_seconds = int(
-            os.getenv('DOWNTREND_REVERSAL_FAST_EXIT_SECONDS', 120))
-        self.downtrend_reversal_flat_max_profit_pct = float(
-            os.getenv('DOWNTREND_REVERSAL_FLAT_MAX_PROFIT_PCT', 0.10))
-        self.downtrend_reversal_weak_signal_exit_seconds = int(
-            os.getenv('DOWNTREND_REVERSAL_WEAK_SIGNAL_EXIT_SECONDS', 45))
-        self.downtrend_reversal_weak_signal_max_profit_pct = float(
-            os.getenv('DOWNTREND_REVERSAL_WEAK_SIGNAL_MAX_PROFIT_PCT', 0.02))
-        self.downtrend_reversal_max_hold_seconds = int(
-            os.getenv('DOWNTREND_REVERSAL_MAX_HOLD_SECONDS', 240))
-        self.uptrend_entry_gate_enabled = _env_bool(
-            'UPTREND_ENTRY_GATE_ENABLED', True)
-        self.uptrend_entry_max_rsi = float(
-            os.getenv('UPTREND_ENTRY_MAX_RSI', 72.0))
-        self.uptrend_entry_max_rsi_by_coin = _env_symbol_float_map(
-            'UPTREND_ENTRY_MAX_RSI_BY_COIN', 'XDC:78,TRX:74')
-        self.uptrend_entry_min_buy_proba = float(
-            os.getenv('UPTREND_ENTRY_MIN_BUY_PROBA', 0.24))
-        self.uptrend_entry_min_buy_proba_by_coin = _env_symbol_float_map(
-            'UPTREND_ENTRY_MIN_BUY_PROBA_BY_COIN', 'TRX:0.150')
-        self.uptrend_entry_max_sell_proba = float(
-            os.getenv('UPTREND_ENTRY_MAX_SELL_PROBA', 0.34))
-        self.uptrend_entry_max_sell_proba_by_coin = _env_symbol_float_map(
-            'UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN', 'ONDO:0.445')
-        self.uptrend_entry_min_proba_edge = float(
-            os.getenv('UPTREND_ENTRY_MIN_PROBA_EDGE', -0.05))
-        self.uptrend_entry_min_proba_edge_by_coin = _env_symbol_float_map(
-            'UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN', 'TRX:-0.13,ONDO:-0.055')
-        self.uptrend_rules_fast_exit_enabled = _env_bool(
-            'UPTREND_RULES_FAST_EXIT_ENABLED', True)
-        self.uptrend_rules_fast_exit_seconds = int(
-            os.getenv('UPTREND_RULES_FAST_EXIT_SECONDS', 120))
-        self.uptrend_rules_fast_exit_seconds_by_coin = _env_symbol_int_map(
-            'UPTREND_RULES_FAST_EXIT_SECONDS_BY_COIN')
-        self.uptrend_rules_flat_max_profit_pct = float(
-            os.getenv('UPTREND_RULES_FLAT_MAX_PROFIT_PCT', 0.08))
-        self.uptrend_rules_flat_max_profit_pct_by_coin = _env_symbol_float_map(
-            'UPTREND_RULES_FLAT_MAX_PROFIT_PCT_BY_COIN')
-        self.uptrend_rules_max_hold_seconds = int(
-            os.getenv('UPTREND_RULES_MAX_HOLD_SECONDS', 300))
-        self.uptrend_rules_max_hold_seconds_by_coin = _env_symbol_int_map(
-            'UPTREND_RULES_MAX_HOLD_SECONDS_BY_COIN')
-        # Optional momentum quality filter for new BUY entries.
-        self.entry_momentum_filter_enabled = _env_bool(
-            'ENTRY_MOMENTUM_FILTER_ENABLED', True)
-        self.entry_min_ret_3 = float(os.getenv('ENTRY_MIN_RET_3', -0.01))
-        self.entry_min_ret_3_by_coin = _env_symbol_float_map(
-            'ENTRY_MIN_RET_3_BY_COIN')
-        self.entry_require_price_above_ema20 = _env_bool(
-            'ENTRY_REQUIRE_PRICE_ABOVE_EMA20', False)
-        self.entry_sharp_pump_filter_enabled = _env_bool(
-            'ENTRY_SHARP_PUMP_FILTER_ENABLED', True)
-        self.entry_max_ret_1 = float(os.getenv('ENTRY_MAX_RET_1', 0.04))
-        self.entry_max_ret_3 = float(os.getenv('ENTRY_MAX_RET_3', 0.08))
-        self.reentry_cooldown_seconds = int(
-            os.getenv('REENTRY_COOLDOWN_SECONDS', 900))
-        self.reentry_dynamic_enabled = _env_bool(
-            'REENTRY_DYNAMIC_ENABLED', True)
-        self.reentry_cooldown_min_seconds = int(
-            os.getenv('REENTRY_COOLDOWN_MIN_SECONDS', 300))
-        self.reentry_cooldown_max_seconds = int(
-            os.getenv(
-                'REENTRY_COOLDOWN_MAX_SECONDS',
-                max(1200, self.reentry_cooldown_seconds),
-            ))
-        if self.reentry_cooldown_max_seconds < self.reentry_cooldown_min_seconds:
-            self.reentry_cooldown_max_seconds = self.reentry_cooldown_min_seconds
-        self.reentry_volatility_low_atr_pct = float(
-            os.getenv('REENTRY_VOLATILITY_LOW_ATR_PCT', 0.008))
-        self.reentry_volatility_high_atr_pct = float(
-            os.getenv('REENTRY_VOLATILITY_HIGH_ATR_PCT', 0.018))
-        self.reentry_cooldown_mult_low_vol = float(
-            os.getenv('REENTRY_COOLDOWN_MULT_LOW_VOL', 0.70))
-        self.reentry_cooldown_mult_mid_vol = float(
-            os.getenv('REENTRY_COOLDOWN_MULT_MID_VOL', 1.00))
-        self.reentry_cooldown_mult_high_vol = float(
-            os.getenv('REENTRY_COOLDOWN_MULT_HIGH_VOL', 1.30))
-        # Enables additional exit signals from market analysis
-        self.enable_signal_exits = _env_bool('ENABLE_SIGNAL_EXITS', True)
-        # Close positions also on HOLD (Down-Trend) signal
-        self.exit_on_downtrend = _env_bool('EXIT_ON_DOWNTREND', True)
-        # ATR multipliers for stop-loss and take-profit
-        self.atr_stop_mult = float(os.getenv('ATR_STOP_MULT', 1.0))
-        self.atr_tp_mult = float(os.getenv('ATR_TP_MULT', 2.0))
-        self.partial_take_profit_enabled = _env_bool(
-            'PARTIAL_TAKE_PROFIT_ENABLED', True)
-        self.partial_take_profit_atr_mult = float(
-            os.getenv('PARTIAL_TAKE_PROFIT_ATR_MULT', 1.0))
-        self.partial_take_profit_fraction = float(
-            os.getenv('PARTIAL_TAKE_PROFIT_FRACTION', 0.5))
-        self.partial_take_profit_remainder_max_hold_seconds = int(
-            os.getenv('PARTIAL_TAKE_PROFIT_REMAINDER_MAX_HOLD_SECONDS', 300))
-        self.partial_take_profit_exit_on_weak_signal = _env_bool(
-            'PARTIAL_TAKE_PROFIT_EXIT_ON_WEAK_SIGNAL', True)
-        self.trailing_stop_enabled = _env_bool('TRAILING_STOP_ENABLED', True)
-        self.trailing_stop_atr_mult = float(
-            os.getenv('TRAILING_STOP_ATR_MULT', 1.0))
-        self.break_even_enabled = _env_bool('BREAK_EVEN_ENABLED', True)
-        self.break_even_trigger_pct = float(
-            os.getenv('BREAK_EVEN_TRIGGER_PCT', 1.0))
-        self.break_even_buffer_pct = float(
-            os.getenv('BREAK_EVEN_BUFFER_PCT', 0.1))
-        # Maximum hold time in seconds (0 = disabled)
-        self.max_hold_seconds = int(os.getenv('MAX_HOLD_SECONDS', 120))
-        self.coin_max_hold_seconds = _env_symbol_int_map(
-            'COIN_MAX_HOLD_SECONDS', 'LINK:420,SUI:420,ONDO:420')
-        # Allow smaller trades when cash is below TRADE_AMOUNT
-        self.allow_partial_trades = _env_bool('ALLOW_PARTIAL_TRADES', True)
-        # Fraction of cash kept in reserve (safety buffer)
-        self.cash_reserve_pct = float(os.getenv('CASH_RESERVE_PCT', 0.02))
-        # Additional data for calculations
-        self.ohlcv_limit = max(self.rsi_period, self.sma_period_long) + 5
-        # OHLCV timeframe (e.g. 1h = 60m)
-        self.ohlcv_timeframe = os.getenv('OHLCV_TIMEFRAME', '1h')
-        # ML-Modell Integration
-        self.use_ml_model = _env_bool('USE_ML_MODEL', False)
-        self.model_path = os.getenv(
-            'MODEL_PATH', './model/fine_tuned_trading_model')
-        # Minimum confidence for ML signals (0.0 - 1.0)
-        self.ml_min_confidence = float(os.getenv('ML_MIN_CONFIDENCE', 0.5))
-        # Optional CatBoost model for fast tabular signals
-        self.use_tabular_model = _env_bool('USE_TABULAR_MODEL', False)
-        self.tabular_model_path = os.getenv(
-            'TABULAR_MODEL_PATH', './model/catboost_trading_model')
-        self.tabular_research_signal_path = os.getenv(
-            'TABULAR_RESEARCH_SIGNAL_PATH', './data/research_signal_latest.json')
-        self.tabular_min_confidence = float(
-            os.getenv('TABULAR_MIN_CONFIDENCE', 0.45))
-        self.tabular_buy_min_confidence = float(
-            os.getenv('TABULAR_BUY_MIN_CONFIDENCE', str(self.tabular_min_confidence)))
-        self.tabular_allow_buy_entries = _env_bool(
-            'TABULAR_ALLOW_BUY_ENTRIES', False)
-        self.tabular_source_gate_enabled = _env_bool(
-            'TABULAR_SOURCE_GATE_ENABLED', False)
-        self.tabular_override_min_confidence = float(
-            os.getenv('TABULAR_OVERRIDE_MIN_CONFIDENCE', 0.60))
-        self.tabular_override_margin = float(
-            os.getenv('TABULAR_OVERRIDE_MARGIN', 0.15))
-        # Optional safety filter: block new entries when CatBoost signals a strong sell
-        self.tabular_block_on_sell = _env_bool('TABULAR_BLOCK_ON_SELL', False)
-        self.tabular_sell_block_min_proba = float(
-            os.getenv('TABULAR_SELL_BLOCK_MIN_PROBA', 0.50))
-        # Optional: automatic recommendation/application of confidence threshold from journal data
-        self.auto_tune_tabular_confidence = _env_bool(
-            'AUTO_TUNE_TABULAR_CONFIDENCE', False)
-        self.auto_tune_lookback_trades = int(
-            os.getenv('AUTO_TUNE_LOOKBACK_TRADES', 200))
-        self.auto_tune_threshold_min = float(
-            os.getenv('AUTO_TUNE_THRESHOLD_MIN', 0.45))
-        self.auto_tune_threshold_max = float(
-            os.getenv('AUTO_TUNE_THRESHOLD_MAX', 0.90))
-        self.auto_tune_threshold_step = float(
-            os.getenv('AUTO_TUNE_THRESHOLD_STEP', 0.02))
-        self.auto_tune_min_trades = int(os.getenv('AUTO_TUNE_MIN_TRADES', 10))
-        # Safety brake: maximum threshold adjustment per bot start
-        self.auto_tune_max_delta = float(
-            os.getenv('AUTO_TUNE_MAX_DELTA', 0.02))
-        # Cooldown between auto-tune adjustments (in minutes)
-        self.auto_tune_cooldown_minutes = int(
-            os.getenv('AUTO_TUNE_COOLDOWN_MINUTES', 0))
-        self.auto_tune_state_file = os.getenv(
-            'AUTO_TUNE_STATE_FILE', 'auto_tune_state.json')
-        # Performance-Tracking / Trade-Journal
-        self.performance_log_enabled = _env_bool(
-            'PERFORMANCE_LOG_ENABLED', True)
-        self.performance_log_file = os.getenv(
-            'PERFORMANCE_LOG_FILE', 'trade_journal.csv')
-        self.performance_report_every = int(
-            os.getenv('PERFORMANCE_REPORT_EVERY', 1))
-        self.analytics_db_enabled = _env_bool('ANALYTICS_DB_ENABLED', False)
-        self.analytics_db_url = _env_str('ANALYTICS_DB_URL', '')
-        self.analytics_db_host = _env_str('ANALYTICS_DB_HOST', '')
-        self.analytics_db_port = int(os.getenv('ANALYTICS_DB_PORT', 5432))
-        self.analytics_db_name = _env_str('ANALYTICS_DB_NAME', '')
-        self.analytics_db_user = _env_str('ANALYTICS_DB_USER', '')
-        self.analytics_db_password = _env_str('ANALYTICS_DB_PASSWORD', '')
-        self.analytics_db_sslmode = _env_str('ANALYTICS_DB_SSLMODE', 'prefer')
-        self.analytics_db_connect_timeout_seconds = int(
-            os.getenv('ANALYTICS_DB_CONNECT_TIMEOUT_SECONDS', 5))
-        self.analytics_db_schema = _env_str('ANALYTICS_DB_SCHEMA', 'public')
-        self.analytics_db_snapshot_every = int(
-            os.getenv('ANALYTICS_DB_SNAPSHOT_EVERY', 1))
-        # Hard risk guardrails (0 = disabled)
-        self.max_daily_loss_pct = float(os.getenv('MAX_DAILY_LOSS_PCT', 0))
-        self.max_buys_per_hour = int(os.getenv('MAX_BUYS_PER_HOUR', 0))
-        self.loss_streak_pause_threshold = int(
-            os.getenv('LOSS_STREAK_PAUSE_THRESHOLD', 0))
-        self.loss_streak_pause_seconds = int(
-            os.getenv('LOSS_STREAK_PAUSE_SECONDS', 0))
-
-        # Optional external AI co-pilot (budget-limited, disabled by default)
-        self.ai_copilot_enabled = _env_bool('AI_COPILOT_ENABLED', False)
-        self.ai_copilot_api_url = _env_str(
-            'AI_COPILOT_API_URL', 'https://api.mammouth.ai/v1/chat/completions')
-        self.ai_copilot_api_key = _env_str('MAMMOUTH_API_KEY', '')
-        self.ai_copilot_model = _env_str('AI_COPILOT_MODEL', 'gpt-5.4-nano')
-        self.ai_copilot_interval_minutes = int(
-            os.getenv('AI_COPILOT_INTERVAL_MINUTES', 62))
-        self.ai_copilot_state_file = os.getenv(
-            'AI_COPILOT_STATE_FILE', 'ai_copilot_state.json')
-        self.ai_copilot_shadow_mode = _env_bool('AI_COPILOT_SHADOW_MODE', True)
-        self.ai_copilot_max_calls_per_day = int(
-            os.getenv('AI_COPILOT_MAX_CALLS_PER_DAY', 24))
-        self.ai_copilot_max_calls_per_month = int(
-            os.getenv('AI_COPILOT_MAX_CALLS_PER_MONTH', 720))
-        self.ai_copilot_max_budget_usd_per_month = float(
-            os.getenv('AI_COPILOT_MAX_BUDGET_USD_PER_MONTH', 5.0))
-        self.ai_copilot_max_output_tokens = int(
-            os.getenv('AI_COPILOT_MAX_OUTPUT_TOKENS', 300))
-        self.ai_copilot_temperature = float(
-            os.getenv('AI_COPILOT_TEMPERATURE', 0.1))
-        self.ai_copilot_max_consecutive_errors = int(
-            os.getenv('AI_COPILOT_MAX_CONSECUTIVE_ERRORS', 3))
-        self.ai_copilot_cost_input_per_mtok = float(
-            os.getenv('AI_COPILOT_COST_INPUT_PER_MTOK', 0.2))
-        self.ai_copilot_cost_output_per_mtok = float(
-            os.getenv('AI_COPILOT_COST_OUTPUT_PER_MTOK', 1.25))
-        self.ai_copilot_min_entry_score_min = int(
-            os.getenv('AI_COPILOT_MIN_ENTRY_SCORE_MIN', 55))
-        self.ai_copilot_min_entry_score_max = int(
-            os.getenv('AI_COPILOT_MIN_ENTRY_SCORE_MAX', 70))
-        self.ai_copilot_reentry_cooldown_min = int(
-            os.getenv('AI_COPILOT_REENTRY_COOLDOWN_MIN', 300))
-        self.ai_copilot_reentry_cooldown_max = int(
-            os.getenv('AI_COPILOT_REENTRY_COOLDOWN_MAX', 1200))
-        self.ai_copilot_tabular_buy_conf_min = float(
-            os.getenv('AI_COPILOT_TABULAR_BUY_CONF_MIN', 0.50))
-        self.ai_copilot_tabular_buy_conf_max = float(
-            os.getenv('AI_COPILOT_TABULAR_BUY_CONF_MAX', 0.65))
-        self.ai_copilot_benchmark_enabled = _env_bool(
-            'AI_COPILOT_BENCHMARK_ENABLED', False)
-        self.ai_copilot_benchmark_model = _env_str(
-            'AI_COPILOT_BENCHMARK_MODEL', '')
-        self.ai_copilot_benchmark_interval_minutes = int(
-            os.getenv('AI_COPILOT_BENCHMARK_INTERVAL_MINUTES', str(self.ai_copilot_interval_minutes)))
-        self.ai_copilot_benchmark_state_file = os.getenv(
-            'AI_COPILOT_BENCHMARK_STATE_FILE', 'ai_copilot_benchmark_state.json')
-        self.ai_copilot_benchmark_max_calls_per_day = int(
-            os.getenv('AI_COPILOT_BENCHMARK_MAX_CALLS_PER_DAY', str(self.ai_copilot_max_calls_per_day)))
-        self.ai_copilot_benchmark_max_calls_per_month = int(
-            os.getenv('AI_COPILOT_BENCHMARK_MAX_CALLS_PER_MONTH', str(self.ai_copilot_max_calls_per_month)))
-        self.ai_copilot_benchmark_max_budget_usd_per_month = float(
-            os.getenv('AI_COPILOT_BENCHMARK_MAX_BUDGET_USD_PER_MONTH', 1.0))
-        self.ai_copilot_benchmark_max_output_tokens = int(
-            os.getenv('AI_COPILOT_BENCHMARK_MAX_OUTPUT_TOKENS', str(self.ai_copilot_max_output_tokens)))
-        self.ai_copilot_benchmark_temperature = float(
-            os.getenv('AI_COPILOT_BENCHMARK_TEMPERATURE', str(self.ai_copilot_temperature)))
-        self.ai_copilot_benchmark_max_consecutive_errors = int(
-            os.getenv('AI_COPILOT_BENCHMARK_MAX_CONSECUTIVE_ERRORS', str(self.ai_copilot_max_consecutive_errors)))
-        self.ai_copilot_benchmark_cost_input_per_mtok = float(
-            os.getenv('AI_COPILOT_BENCHMARK_COST_INPUT_PER_MTOK', str(self.ai_copilot_cost_input_per_mtok)))
-        self.ai_copilot_benchmark_cost_output_per_mtok = float(
-            os.getenv('AI_COPILOT_BENCHMARK_COST_OUTPUT_PER_MTOK', str(self.ai_copilot_cost_output_per_mtok)))
-
-    def analytics_db_connect_kwargs(self) -> Dict[str, Any]:
-        kwargs: Dict[str, Any] = {}
-        if self.analytics_db_url:
-            kwargs['conninfo'] = self.analytics_db_url
-        else:
-            if self.analytics_db_host:
-                kwargs['host'] = self.analytics_db_host
-            if self.analytics_db_port > 0:
-                kwargs['port'] = self.analytics_db_port
-            if self.analytics_db_name:
-                kwargs['dbname'] = self.analytics_db_name
-            if self.analytics_db_user:
-                kwargs['user'] = self.analytics_db_user
-            if self.analytics_db_password:
-                kwargs['password'] = self.analytics_db_password
-            if self.analytics_db_sslmode:
-                kwargs['sslmode'] = self.analytics_db_sslmode
-
-        timeout_seconds = max(
-            1, int(self.analytics_db_connect_timeout_seconds))
-        kwargs['connect_timeout'] = timeout_seconds
-        return kwargs
-
-
-class PostgresAnalyticsWriter:
-    """Optional Postgres sink for trade and portfolio analytics."""
-
-    def __init__(self, config: BotConfig):
-        self.config = config
-        self.enabled = config.analytics_db_enabled
-        self._psycopg = None
-        self._conn = None
-        self._disabled_reason_logged = False
-        self._schema = self._sanitize_identifier(
-            config.analytics_db_schema, 'public')
-
-    def _sanitize_identifier(self, value: str, fallback: str) -> str:
-        candidate = (value or '').strip()
-        if _SAFE_IDENTIFIER_RE.match(candidate):
-            return candidate
-        return fallback
-
-    def _qualified_table(self, table_name: str) -> str:
-        return f'{self._schema}.{table_name}'
-
-    def _ensure_connection(self) -> bool:
-        if not self.enabled:
-            return False
-        if self._conn is not None and not getattr(self._conn, 'closed', False):
-            return True
-        try:
-            if self._psycopg is None:
-                self._psycopg = importlib.import_module('psycopg')
-        except Exception as exc:
-            if not self._disabled_reason_logged:
-                logger.warning(
-                    'Analytics DB enabled but psycopg is unavailable: %s', exc)
-                self._disabled_reason_logged = True
-            return False
-
-        kwargs = self.config.analytics_db_connect_kwargs()
-        if 'conninfo' not in kwargs and not kwargs.get('host'):
-            if not self._disabled_reason_logged:
-                logger.warning(
-                    'Analytics DB enabled but neither ANALYTICS_DB_URL nor ANALYTICS_DB_HOST is configured.')
-                self._disabled_reason_logged = True
-            return False
-
-        try:
-            self._conn = self._psycopg.connect(**kwargs)
-            self._conn.autocommit = True
-            self._ensure_schema()
-            return True
-        except Exception as exc:
-            if not self._disabled_reason_logged:
-                logger.warning(
-                    'Failed to connect to analytics Postgres DB: %s', exc)
-                self._disabled_reason_logged = True
-            self.close()
-            return False
-
-    def _ensure_schema(self) -> None:
-        if self._conn is None:
-            return
-        trades_table = self._qualified_table('trade_events')
-        snapshots_table = self._qualified_table('portfolio_snapshots')
-        with self._conn.cursor() as cur:
-            cur.execute(f'CREATE SCHEMA IF NOT EXISTS {self._schema}')
-            cur.execute(
-                f'''
-                CREATE TABLE IF NOT EXISTS {trades_table} (
-                    id BIGSERIAL PRIMARY KEY,
-                    event_ts TIMESTAMPTZ NOT NULL,
-                    iteration INTEGER NOT NULL,
-                    coin TEXT NOT NULL,
-                    action TEXT NOT NULL,
-                    price DOUBLE PRECISION NOT NULL,
-                    amount_coin DOUBLE PRECISION NOT NULL,
-                    amount_base DOUBLE PRECISION NOT NULL,
-                    pnl_base DOUBLE PRECISION NOT NULL,
-                    pnl_pct DOUBLE PRECISION NOT NULL,
-                    hold_seconds DOUBLE PRECISION NOT NULL,
-                    signal_source TEXT,
-                    signal_confidence DOUBLE PRECISION,
-                    recommendation TEXT,
-                    reason TEXT,
-                    dry_run BOOLEAN NOT NULL,
-                    base_currency TEXT NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-                '''
-            )
-            cur.execute(
-                f'''
-                CREATE INDEX IF NOT EXISTS trade_events_event_ts_idx
-                ON {trades_table} (event_ts DESC)
-                '''
-            )
-            cur.execute(
-                f'''
-                CREATE INDEX IF NOT EXISTS trade_events_coin_action_idx
-                ON {trades_table} (coin, action)
-                '''
-            )
-            cur.execute(
-                f'''
-                CREATE TABLE IF NOT EXISTS {snapshots_table} (
-                    id BIGSERIAL PRIMARY KEY,
-                    snapshot_ts TIMESTAMPTZ NOT NULL,
-                    iteration INTEGER NOT NULL,
-                    portfolio_value_base DOUBLE PRECISION NOT NULL,
-                    cash_base DOUBLE PRECISION NOT NULL,
-                    base_currency TEXT NOT NULL,
-                    open_positions_count INTEGER NOT NULL,
-                    analyzed_coins_count INTEGER NOT NULL,
-                    buy_recommendations_count INTEGER NOT NULL,
-                    dry_run BOOLEAN NOT NULL,
-                    holdings_json JSONB NOT NULL,
-                    open_trades_json JSONB NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-                '''
-            )
-            cur.execute(
-                f'''
-                CREATE INDEX IF NOT EXISTS portfolio_snapshots_snapshot_ts_idx
-                ON {snapshots_table} (snapshot_ts DESC)
-                '''
-            )
-
-    def write_trade(self, row: Dict[str, Any], base_currency: str) -> None:
-        if not self._ensure_connection():
-            return
-        trades_table = self._qualified_table('trade_events')
-        try:
-            with self._conn.cursor() as cur:
-                cur.execute(
-                    f'''
-                    INSERT INTO {trades_table} (
-                        event_ts, iteration, coin, action, price, amount_coin,
-                        amount_base, pnl_base, pnl_pct, hold_seconds,
-                        signal_source, signal_confidence, recommendation, reason,
-                        dry_run, base_currency
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s,
-                        %s, %s, %s, %s,
-                        %s, %s
-                    )
-                    ''',
-                    (
-                        row.get('timestamp', datetime.now(
-                            timezone.utc).isoformat()),
-                        int(row.get('iteration', 0)),
-                        row.get('coin', ''),
-                        row.get('action', ''),
-                        float(row.get('price', 0.0)),
-                        float(row.get('amount_coin', 0.0)),
-                        float(row.get('amount_base', 0.0)),
-                        float(row.get('pnl_base', 0.0)),
-                        float(row.get('pnl_pct', 0.0)),
-                        float(row.get('hold_seconds', 0.0)),
-                        row.get('signal_source', ''),
-                        None if row.get('signal_confidence', '') in (
-                            '', None) else float(row.get('signal_confidence', 0.0)),
-                        row.get('recommendation', ''),
-                        row.get('reason', ''),
-                        bool(row.get('dry_run', False)),
-                        base_currency,
-                    ),
-                )
-        except Exception as exc:
-            logger.warning(
-                'Failed to write trade event to analytics DB: %s', exc)
-            self.close()
-
-    def write_snapshot(
-        self,
-        *,
-        iteration: int,
-        portfolio_value: float,
-        cash_value: float,
-        base_currency: str,
-        dry_run: bool,
-        holdings: Dict[str, float],
-        open_trades: Dict[str, Dict[str, Any]],
-        analyzed_coins_count: int,
-        buy_recommendations_count: int,
-    ) -> None:
-        if not self._ensure_connection():
-            return
-        snapshots_table = self._qualified_table('portfolio_snapshots')
-        serialized_open_trades = json.dumps(
-            open_trades,
-            default=lambda value: value.isoformat() if isinstance(
-                value, datetime) else str(value),
-            ensure_ascii=True,
-        )
-        try:
-            with self._conn.cursor() as cur:
-                cur.execute(
-                    f'''
-                    INSERT INTO {snapshots_table} (
-                        snapshot_ts, iteration, portfolio_value_base, cash_base,
-                        base_currency, open_positions_count, analyzed_coins_count,
-                        buy_recommendations_count, dry_run, holdings_json, open_trades_json
-                    ) VALUES (
-                        %s, %s, %s, %s,
-                        %s, %s, %s,
-                        %s, %s, %s::jsonb, %s::jsonb
-                    )
-                    ''',
-                    (
-                        datetime.now(timezone.utc),
-                        iteration,
-                        float(portfolio_value),
-                        float(cash_value),
-                        base_currency,
-                        len(open_trades),
-                        analyzed_coins_count,
-                        buy_recommendations_count,
-                        bool(dry_run),
-                        json.dumps(holdings, ensure_ascii=True),
-                        serialized_open_trades,
-                    ),
-                )
-        except Exception as exc:
-            logger.warning(
-                'Failed to write portfolio snapshot to analytics DB: %s', exc)
-            self.close()
-
-    def close(self) -> None:
-        conn = self._conn
-        self._conn = None
-        if conn is None:
-            return
-        try:
-            conn.close()
-        except Exception:
-            pass
+    holdings: dict[str, float] = {}
+    for currency, amount in free_balances.items():
+        if amount <= 0:
+            continue
+        if currency in aliases:
+            continue
+        holdings[currency] = float(amount)
+    return cash, holdings
 
 
 class CryptoTradingBot:
@@ -1147,31 +181,63 @@ class CryptoTradingBot:
 
     def __init__(self, config: BotConfig):
         self.config = config
+        if config.simulation_initial_balance_from_kraken and (
+            not config.dry_run or config.exchange_name != 'kraken'
+            or config.base_currency != 'EUR'
+        ):
+            raise ValueError(
+                "Kraken simulation initialization requires DRY_RUN, Kraken and EUR"
+            )
+        if (config.simulation_initial_balance_from_kraken and not config.simulate_data
+                and (config.api_key or config.api_secret)):
+            raise ValueError(
+                "Public-market paper trading requires a previously initialized portfolio "
+                "and no Kraken API credentials"
+            )
+        self.run_id = os.getenv('TRADING_RUN_ID', '').strip() or uuid.uuid4().hex
+        self.config_hash = _config_fingerprint(config)
+        self._journal_fields = list(_TRADE_JOURNAL_FIELDS)
+        self._paper_trade_failed = False
         self.portfolio = Portfolio(config.base_currency)
+        self.portfolio.strict_persistence = config.simulation_initial_balance_from_kraken
         self.analytics_writer = PostgresAnalyticsWriter(config)
         self.iteration = 0
-        self.performance = {
+        self.performance: dict[str, Any] = {
             'buys': 0,
             'sells': 0,
             'wins': 0,
             'losses': 0,
+            'break_even': 0,
             'realized_pnl_base': 0.0,
             'closed_trades': 0,
             'by_source': defaultdict(lambda: {'buys': 0, 'sells': 0, 'pnl': 0.0}),
         }
-        self.daily_anchor_date = None
+        self.daily_anchor_date: date | None = None
         self.daily_anchor_value: float = 0.0
-        self.buy_timestamps_utc: List[datetime] = []
-        self.last_sell_timestamps_utc: Dict[str, datetime] = {}
+        self.buy_timestamps_utc: list[datetime] = []
+        self.last_sell_timestamps_utc: dict[str, datetime] = {}
         self.consecutive_losses: int = 0
-        self.buy_pause_until_utc: Optional[datetime] = None
+        self.buy_pause_until_utc: datetime | None = None
+        logger.info(
+            "Trading run started: run_id=%s config_hash=%s dry_run=%s simulated_data=%s",
+            self.run_id,
+            self.config_hash,
+            config.dry_run,
+            config.simulate_data,
+        )
+        if config.dry_run:
+            logger.info(
+                "DRY-RUN execution cost mode=%s fee_rate=%.6f slippage_rate=%.6f",
+                'net_costs' if config.dry_run_costs_enabled else 'gross_legacy',
+                config.dry_run_fee_rate if config.dry_run_costs_enabled else 0.0,
+                config.dry_run_slippage_rate if config.dry_run_costs_enabled else 0.0,
+            )
         self.exchange = self._initialize_exchange()
-        self._simulation_cache_iteration: Optional[int] = None
-        self._simulation_ohlcv_cache: Dict[Tuple[int,
-                                                 str, str, int], pd.DataFrame] = {}
+        self._simulation_engine = SimulationEngine(
+            config, iteration_provider=lambda: self.iteration)
         # List of tradeable pairs (e.g. BTC/EUR)
-        self.all_symbols: List[str] = []
-        self.all_coins: List[str] = []   # List of base assets (e.g. BTC)
+        self.all_symbols: list[str] = []
+        self.all_coins: list[str] = []   # List of base assets (e.g. BTC)
         if not self.config.simulate_data and self.exchange:
             self._load_market_info()
 
@@ -1192,69 +258,266 @@ class CryptoTradingBot:
                     self.config.model_path)
                 logger.info(
                     f"🤖 ML model loaded from '{self.config.model_path}'.")
-            except Exception as e:
+            except (
+                ImportError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                KeyError,
+            ) as e:
                 logger.warning(
                     f"ML model could not be loaded: {e}. Using rule-based analysis only.")
 
-        self.tabular_predictor = None
+        self.tabular_predictor: Any = None
         if self.config.use_tabular_model:
-            try:
-                from src.predict_catboost import CatBoostTradingPredictor
-                self.tabular_predictor = CatBoostTradingPredictor(
-                    self.config.tabular_model_path,
-                    research_signal_path=self.config.tabular_research_signal_path,
+            if self.config.tabular_model_backend == 'hailo':
+                from src.predict_hailo_remote import HailoRemotePredictor
+                self.tabular_predictor = HailoRemotePredictor(
+                    service_url=self.config.hailo_service_url,
+                    api_token=self.config.hailo_api_token,
+                    timeout_seconds=self.config.hailo_timeout_seconds,
                 )
                 logger.info(
-                    f"📊 CatBoost model loaded from '{self.config.tabular_model_path}'.")
-            except Exception as e:
-                logger.warning(
-                    f"CatBoost model could not be loaded: {e}.")
+                    "Remote Hailo inference configured at %s",
+                    self.config.hailo_service_url,
+                )
+            else:
+                try:
+                    from src.predict_catboost import CatBoostTradingPredictor
+                    self.tabular_predictor = CatBoostTradingPredictor(
+                        self.config.tabular_model_path,
+                        research_signal_path=self.config.tabular_research_signal_path,
+                    )
+                    logger.info(
+                        f"📊 CatBoost model loaded from '{self.config.tabular_model_path}'.")
+                except (
+                    ImportError,
+                    OSError,
+                    RuntimeError,
+                    TypeError,
+                    ValueError,
+                    KeyError,
+                ) as e:
+                    logger.warning(
+                        f"CatBoost model could not be loaded: {e}.")
 
+        if self._public_paper_mode():
+            if not self.config.performance_log_enabled:
+                raise RuntimeError("Public paper trading requires an enabled trade journal")
+            self._recover_paper_trade()
         if self.config.performance_log_enabled:
             self._init_trade_journal()
 
-        if self.config.use_tabular_model:
+        if (
+            self.config.use_tabular_model
+            and self.config.tabular_model_backend == 'catboost'
+        ):
             self._maybe_auto_tune_tabular_confidence()
 
     def _init_trade_journal(self):
-        """Creates the journal file with header if it does not yet exist."""
-        if os.path.exists(self.config.performance_log_file):
+        """Creates or safely extends the CSV journal schema."""
+        path = self.config.performance_log_file
+        if not os.path.exists(path):
+            with open(path, 'w', newline='', encoding='utf-8') as journal:
+                csv.writer(journal).writerow(_TRADE_JOURNAL_FIELDS)
+            self._journal_fields = list(_TRADE_JOURNAL_FIELDS)
             return
-        with open(self.config.performance_log_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                'timestamp', 'iteration', 'coin', 'action', 'price', 'amount_coin',
-                'amount_base', 'pnl_base', 'pnl_pct', 'hold_seconds',
-                'signal_source', 'signal_confidence', 'recommendation', 'reason', 'dry_run'
-            ])
 
-    def _append_trade_journal(self, row: Dict):
+        with open(path, newline='', encoding='utf-8-sig') as journal:
+            existing_fields = next(csv.reader(journal), [])
+        self._journal_fields = list(dict.fromkeys(
+            existing_fields + _TRADE_JOURNAL_FIELDS))
+        if existing_fields == self._journal_fields:
+            return
+
+        file_mode = stat.S_IMODE(os.stat(path).st_mode)
+        directory = os.path.dirname(os.path.abspath(path))
+        descriptor, temporary_path = tempfile.mkstemp(
+            prefix='.trade-journal-', suffix='.csv', dir=directory)
+        try:
+            with os.fdopen(
+                descriptor, 'w', newline='', encoding='utf-8'
+            ) as destination, open(path, newline='', encoding='utf-8-sig') as source:
+                reader = csv.DictReader(source)
+                writer = csv.DictWriter(
+                    destination, fieldnames=self._journal_fields,
+                    extrasaction='ignore')
+                writer.writeheader()
+                for row in reader:
+                    row.setdefault('run_id', 'legacy')
+                    row.setdefault('config_hash', 'legacy')
+                    row.setdefault('mfe_pct', '')
+                    row.setdefault('mae_pct', '')
+                    row.setdefault('execution_cost_mode', 'legacy_unknown')
+                    writer.writerow(row)
+            os.chmod(temporary_path, file_mode)
+            os.replace(temporary_path, path)
+        finally:
+            if os.path.exists(temporary_path):
+                os.unlink(temporary_path)
+
+    def _public_paper_mode(self) -> bool:
+        return (self.config.dry_run
+                and getattr(self.config, 'simulation_initial_balance_from_kraken', False)
+                and not getattr(self.config, 'simulate_data', True))
+
+    @staticmethod
+    def _sync_directory(path: str) -> None:
+        descriptor = os.open(os.path.dirname(os.path.abspath(path)), os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def _recover_paper_trade(self) -> None:
+        """Complete a durable intent before permitting another paper trade."""
+        intent_path = self.portfolio.state_file + '.trade-transaction.json'
+        if not os.path.lexists(intent_path):
+            return
+        try:
+            with open(intent_path, encoding='utf-8') as f:
+                envelope = json.load(f)
+            payload = envelope['payload']
+            encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'),
+                                 ensure_ascii=True).encode('utf-8')
+            if (envelope['sha256'] != hashlib.sha256(encoded).hexdigest()
+                    or payload['version'] != 1
+                    or payload['journal'] != os.path.abspath(self.config.performance_log_file)
+                    or payload['state_file'] != os.path.abspath(self.portfolio.state_file)
+                    or not isinstance(payload['offset'], int) or payload['offset'] < 0
+                    or not isinstance(payload['row'], str)
+                    or not isinstance(payload['state'], dict)
+                    or payload['state'].get('base_currency') != self.portfolio.base_currency):
+                raise ValueError("Invalid paper trade intent")
+            row = payload['row'].encode('utf-8')
+            if not row:
+                raise ValueError("Empty paper trade row")
+            with open(payload['journal'], 'r+b') as journal:
+                prefix = journal.read(payload['offset'])
+                if (len(prefix) != payload['offset']
+                        or hashlib.sha256(prefix).hexdigest() != payload['prefix_sha256']):
+                    raise ValueError("Paper trade journal prefix changed")
+                tail = journal.read()
+                if not row.startswith(tail):
+                    raise ValueError("Paper trade journal has an unexpected tail")
+                if tail != row:
+                    journal.seek(payload['offset'])
+                    journal.write(row)
+                    journal.truncate()
+                journal.flush()
+                os.fsync(journal.fileno())
+            self.portfolio.save_state(state=payload['state'])
+            os.unlink(intent_path)
+            self._sync_directory(intent_path)
+            logger.info("Completed public paper trade transaction")
+        except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("Cannot recover paper trade transaction; stopping") from exc
+
+    def _commit_paper_trade(self, row: dict) -> None:
+        intent_path = self.portfolio.state_file + '.trade-transaction.json'
+        temporary_path = None
+        self._paper_trade_failed = True
+        if os.path.lexists(intent_path):
+            raise RuntimeError("Pending paper trade transaction; restart to recover")
+        row = self._journal_row(row)
+        buffer = io.StringIO(newline='')
+        csv.DictWriter(buffer, fieldnames=self._journal_fields,
+                       extrasaction='ignore').writerow(row)
+        try:
+            journal_path = os.path.abspath(self.config.performance_log_file)
+            with open(journal_path, 'rb') as journal:
+                prefix = journal.read()
+                os.fsync(journal.fileno())
+            if not prefix.endswith(b'\n'):
+                raise ValueError("Paper trade journal has an incomplete last row")
+            self._sync_directory(journal_path)
+            payload = {
+                'version': 1,
+                'journal': journal_path,
+                'state_file': os.path.abspath(self.portfolio.state_file),
+                'offset': len(prefix),
+                'prefix_sha256': hashlib.sha256(prefix).hexdigest(),
+                'row': buffer.getvalue(),
+                'state': self.portfolio._state(),
+            }
+            # Normalize datetimes exactly as the portfolio writer does.
+            payload = json.loads(json.dumps(payload, default=lambda o: o.isoformat()
+                                            if isinstance(o, datetime) else str(o)))
+            encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'),
+                                 ensure_ascii=True).encode('utf-8')
+            with tempfile.NamedTemporaryFile(
+                mode='w', encoding='utf-8',
+                dir=os.path.dirname(os.path.abspath(intent_path)),
+                prefix='.paper-trade-', delete=False,
+            ) as f:
+                temporary_path = f.name
+                json.dump({'payload': payload, 'sha256': hashlib.sha256(encoded).hexdigest()}, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_path, intent_path)
+            temporary_path = None
+            self._sync_directory(intent_path)
+            self._recover_paper_trade()
+            self._paper_trade_failed = False
+        except (OSError, TypeError, ValueError) as exc:
+            raise RuntimeError("Cannot commit paper trade transaction; stopping") from exc
+        finally:
+            if temporary_path is not None and os.path.exists(temporary_path):
+                os.unlink(temporary_path)
+        self.analytics_writer.write_trade(row, self.config.base_currency)
+
+    def _journal_row(self, row: dict) -> dict:
+        row = {
+            **row,
+            'run_id': row.get('run_id', self.run_id),
+            'config_hash': row.get('config_hash', self.config_hash),
+            'execution_cost_mode': row.get(
+                'execution_cost_mode', 'gross_legacy' if row.get(
+                    'dry_run', self.config.dry_run) else 'live_exchange'),
+        }
+        return {
+            **row,
+            'timestamp': row.get('timestamp', datetime.now(UTC).isoformat()),
+            'iteration': row.get('iteration', self.iteration),
+            'coin': row.get('coin', ''),
+            'action': row.get('action', ''),
+            'price': row.get('price', 0.0),
+            'amount_coin': row.get('amount_coin', 0.0),
+            'amount_base': row.get('amount_base', 0.0),
+            'pnl_base': row.get('pnl_base', 0.0),
+            'pnl_pct': row.get('pnl_pct', 0.0),
+            'hold_seconds': row.get('hold_seconds', 0.0),
+            'signal_source': row.get('signal_source', ''),
+            'signal_confidence': row.get('signal_confidence', ''),
+            'recommendation': row.get('recommendation', ''),
+            'reason': row.get('reason', ''),
+            'dry_run': row.get('dry_run', self.config.dry_run),
+            'mfe_pct': row.get('mfe_pct', ''),
+            'mae_pct': row.get('mae_pct', ''),
+        }
+
+    def _append_trade_journal(self, row: dict):
+        row = {
+            **row,
+            'run_id': row.get('run_id', self.run_id),
+            'config_hash': row.get('config_hash', self.config_hash),
+            'execution_cost_mode': row.get(
+                'execution_cost_mode', 'gross_legacy' if row.get(
+                    'dry_run', self.config.dry_run) else 'live_exchange'),
+        }
         if self.config.performance_log_enabled:
             with open(self.config.performance_log_file, 'a', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    row.get('timestamp', datetime.now().isoformat()),
-                    row.get('iteration', self.iteration),
-                    row.get('coin', ''),
-                    row.get('action', ''),
-                    row.get('price', 0.0),
-                    row.get('amount_coin', 0.0),
-                    row.get('amount_base', 0.0),
-                    row.get('pnl_base', 0.0),
-                    row.get('pnl_pct', 0.0),
-                    row.get('hold_seconds', 0.0),
-                    row.get('signal_source', ''),
-                    row.get('signal_confidence', ''),
-                    row.get('recommendation', ''),
-                    row.get('reason', ''),
-                    row.get('dry_run', self.config.dry_run),
-                ])
+                writer = csv.DictWriter(
+                    f, fieldnames=self._journal_fields,
+                    extrasaction='ignore')
+                writer.writerow(self._journal_row(row))
         self.analytics_writer.write_trade(row, self.config.base_currency)
 
     def _write_analytics_snapshot(
         self,
         portfolio_value: float,
-        market_analysis: Dict[str, Dict[str, Any]],
+        market_analysis: dict[str, dict[str, Any]],
     ) -> None:
         snapshot_every = max(1, int(self.config.analytics_db_snapshot_every))
         if self.iteration % snapshot_every != 0:
@@ -1275,7 +538,7 @@ class CryptoTradingBot:
             buy_recommendations_count=buy_recommendations_count,
         )
 
-    def _recommend_tabular_threshold_from_journal(self) -> Optional[float]:
+    def _recommend_tabular_threshold_from_journal(self) -> float | None:
         """Recommends a confidence threshold based on historical sell trades."""
         path = self.config.performance_log_file
         if not os.path.exists(path):
@@ -1283,7 +546,12 @@ class CryptoTradingBot:
 
         try:
             df = pd.read_csv(path)
-        except Exception as e:
+        except (
+            OSError,
+            UnicodeError,
+            pd.errors.ParserError,
+            pd.errors.EmptyDataError,
+        ) as e:
             logger.warning(
                 f"Journal could not be read for auto-tuning: {e}")
             return None
@@ -1327,15 +595,14 @@ class CryptoTradingBot:
             return None
 
         # Primarily highest total PnL, secondarily higher AvgPnL, then more trades
-        best = sorted(candidates, key=lambda x: (
-            x[2], x[3], x[1]), reverse=True)[0]
+        best = max(candidates, key=lambda x: (x[2], x[3], x[1]))
         logger.info(
             f"🔧 Auto-Tune Threshold Recommendation: {best[0]:.2f} "
             f"(trades={best[1]}, pnl={best[2]:.6f} {self.config.base_currency}, "
             f"avg={best[3]:.6f}, win_rate={best[4]:.2f}%)")
         return float(best[0])
 
-    def _dynamic_excluded_coins(self) -> Set[str]:
+    def _dynamic_excluded_coins(self) -> set[str]:
         """Builds a temporary exclusion set from recent sell-side underperformance."""
         if not self.config.dynamic_lossmaker_exclusion_enabled:
             return set()
@@ -1346,7 +613,12 @@ class CryptoTradingBot:
 
         try:
             df = pd.read_csv(path)
-        except Exception as e:
+        except (
+            OSError,
+            UnicodeError,
+            pd.errors.ParserError,
+            pd.errors.EmptyDataError,
+        ) as e:
             logger.warning(
                 f"Journal could not be read for dynamic exclusions: {e}")
             return set()
@@ -1370,7 +642,7 @@ class CryptoTradingBot:
         if sells.empty:
             return set()
 
-        dynamic_exclusions: Set[str] = set()
+        dynamic_exclusions: set[str] = set()
         for coin, group in sells.groupby('coin', dropna=True):
             if len(group) < self.config.dynamic_lossmaker_min_sells:
                 continue
@@ -1396,7 +668,7 @@ class CryptoTradingBot:
 
         return dynamic_exclusions
 
-    def _dynamic_excluded_entry_pairs(self) -> Set[Tuple[str, str]]:
+    def _dynamic_excluded_entry_pairs(self) -> set[tuple[str, str]]:
         """Builds a temporary exclusion set for recent coin/source entry pairs."""
         if not self.config.dynamic_lossmaker_exclusion_enabled:
             return set()
@@ -1407,7 +679,12 @@ class CryptoTradingBot:
 
         try:
             df = pd.read_csv(path)
-        except Exception as e:
+        except (
+            OSError,
+            UnicodeError,
+            pd.errors.ParserError,
+            pd.errors.EmptyDataError,
+        ) as e:
             logger.warning(
                 f"Journal could not be read for dynamic entry pair exclusions: {e}")
             return set()
@@ -1426,7 +703,7 @@ class CryptoTradingBot:
         )
         return blocked_pairs
 
-    def _degraded_entry_sources(self) -> Set[str]:
+    def _degraded_entry_sources(self) -> set[str]:
         """Builds a temporary blocklist for weak signal sources in fallback paths."""
         if not self.config.dynamic_lossmaker_exclusion_enabled:
             return set()
@@ -1437,7 +714,12 @@ class CryptoTradingBot:
 
         try:
             df = pd.read_csv(path)
-        except Exception as e:
+        except (
+            OSError,
+            UnicodeError,
+            pd.errors.ParserError,
+            pd.errors.EmptyDataError,
+        ) as e:
             logger.warning(
                 f"Journal could not be read for dynamic source exclusions: {e}")
             return set()
@@ -1454,7 +736,7 @@ class CryptoTradingBot:
             ),
         )
 
-    def _recent_pnl_guard_state(self) -> Dict[str, Any]:
+    def _recent_pnl_guard_state(self) -> dict[str, Any]:
         """Builds a recent realized-PnL guard state to tighten entries in weak phases."""
         if not self.config.recent_pnl_guard_enabled:
             return {
@@ -1477,7 +759,12 @@ class CryptoTradingBot:
 
         try:
             df = pd.read_csv(path)
-        except Exception as e:
+        except (
+            OSError,
+            UnicodeError,
+            pd.errors.ParserError,
+            pd.errors.EmptyDataError,
+        ) as e:
             logger.warning(
                 f"Journal could not be read for recent PnL guard: {e}")
             return {
@@ -1494,30 +781,57 @@ class CryptoTradingBot:
             min_trades=self.config.recent_pnl_guard_min_trades,
             min_realized_pnl=self.config.recent_pnl_guard_min_realized_pnl,
             max_profit_factor=self.config.recent_pnl_guard_max_profit_factor,
+            stale_after_hours=self.config.recent_pnl_guard_stale_hours,
         )
 
-    def _read_auto_tune_state(self) -> Dict:
+    def _log_recent_pnl_guard_status(self, state: dict[str, Any]) -> None:
+        active = bool(state.get('active', False))
+        journal_age = state.get('journal_age_hours')
+        freshness = (
+            'unknown' if journal_age is None
+            else 'stale' if state.get('journal_stale', False)
+            else 'fresh'
+        )
+        log = logger.warning if active else logger.info
+        log(
+            "Recent PnL guard %s: trades=%d, pnl=%.6f %s, pf=%.4f, "
+            "reason=%s, journal_age_hours=%s, journal_stale=%s, journal_freshness=%s, "
+            "stale_after_hours=%.1f, latest_closed_trade=%s",
+            'active' if active else 'inactive',
+            int(state.get('recent_trades', 0)),
+            float(state.get('recent_realized_pnl', 0.0)),
+            self.config.base_currency,
+            float(state.get('recent_profit_factor', 999.0)),
+            str(state.get('reason', 'n/a')),
+            f"{float(journal_age):.1f}" if journal_age is not None else "unknown",
+            bool(state.get('journal_stale', False)),
+            freshness,
+            self.config.recent_pnl_guard_stale_hours,
+            state.get('latest_closed_trade_at') or "unknown",
+        )
+
+    def _read_auto_tune_state(self) -> dict:
         path = self.config.auto_tune_state_file
         if not path or not os.path.exists(path):
             return {}
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except Exception:
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
             return {}
 
-    def _write_auto_tune_state(self, state: Dict):
+    def _write_auto_tune_state(self, state: dict):
         path = self.config.auto_tune_state_file
         if not path:
             return
         try:
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(state, f, ensure_ascii=True, indent=2)
-        except Exception as e:
+        except (OSError, TypeError, ValueError) as e:
             logger.warning(
                 f"Auto-tune state could not be saved: {e}")
 
-    def _cooldown_remaining_minutes(self, state: Dict) -> float:
+    def _cooldown_remaining_minutes(self, state: dict) -> float:
         cooldown = max(0, self.config.auto_tune_cooldown_minutes)
         if cooldown <= 0:
             return 0.0
@@ -1528,10 +842,10 @@ class CryptoTradingBot:
             last_dt = datetime.fromisoformat(last)
             # Backward-compatible: treat naive timestamps as UTC.
             if last_dt.tzinfo is None:
-                last_dt = last_dt.replace(tzinfo=timezone.utc)
-        except Exception:
+                last_dt = last_dt.replace(tzinfo=UTC)
+        except (TypeError, ValueError):
             return 0.0
-        elapsed_minutes = (datetime.now(timezone.utc) -
+        elapsed_minutes = (datetime.now(UTC) -
                            last_dt).total_seconds() / 60.0
         return max(0.0, cooldown - elapsed_minutes)
 
@@ -1570,7 +884,7 @@ class CryptoTradingBot:
                 f"(recommended {recommended:.2f}, max_delta {max_delta:.2f})")
 
             self._write_auto_tune_state({
-                'last_applied_at': datetime.now(timezone.utc).isoformat(),
+                'last_applied_at': datetime.now(UTC).isoformat(),
                 'last_recommended': recommended,
                 'last_applied': adjusted,
             })
@@ -1578,7 +892,7 @@ class CryptoTradingBot:
             logger.info(
                 f"ℹ️ AUTO_TUNE disabled. Recommended TABULAR_MIN_CONFIDENCE: {recommended:.2f}")
 
-    def _read_ai_copilot_state(self, path: Optional[str] = None) -> Dict:
+    def _read_ai_copilot_state(self, path: str | None = None) -> dict:
         path = path or self.config.ai_copilot_state_file
         if not path:
             return {}
@@ -1595,7 +909,13 @@ class CryptoTradingBot:
                     logger.warning(
                         'Recovered AI co-pilot state from backup file')
                 return state
-            except Exception as exc:
+            except (
+                OSError,
+                UnicodeError,
+                json.JSONDecodeError,
+                TypeError,
+                ValueError,
+            ) as exc:
                 last_error = exc
 
         if last_error is not None:
@@ -1603,7 +923,7 @@ class CryptoTradingBot:
                 f'AI co-pilot state could not be loaded: {last_error}')
         return {}
 
-    def _write_ai_copilot_state(self, state: Dict, path: Optional[str] = None):
+    def _write_ai_copilot_state(self, state: dict, path: str | None = None):
         path = path or self.config.ai_copilot_state_file
         if not path:
             return
@@ -1613,13 +933,13 @@ class CryptoTradingBot:
             if os.path.exists(path):
                 try:
                     shutil.copyfile(path, backup_path)
-                except Exception as exc:
+                except OSError as exc:
                     logger.warning(
                         f'AI co-pilot state backup could not be updated: {exc}')
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(state, f, ensure_ascii=True, indent=2)
             os.replace(tmp_path, path)
-        except Exception as e:
+        except (OSError, TypeError, ValueError) as e:
             try:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
@@ -1628,14 +948,14 @@ class CryptoTradingBot:
             logger.warning(f"AI co-pilot state could not be saved: {e}")
 
     def _current_month_key(self) -> str:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         return f"{now.year:04d}-{now.month:02d}"
 
     def _current_day_key(self) -> str:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         return f"{now.year:04d}-{now.month:02d}-{now.day:02d}"
 
-    def _normalize_ai_state(self, state: Dict, monthly_call_cap: int, budget_cap_usd: float) -> Dict:
+    def _normalize_ai_state(self, state: dict, monthly_call_cap: int, budget_cap_usd: float) -> dict:
         month_key = self._current_month_key()
         day_key = self._current_day_key()
         state['budget_cap_usd'] = float(budget_cap_usd)
@@ -1664,7 +984,7 @@ class CryptoTradingBot:
 
     def _can_run_ai_copilot(
         self,
-        state: Dict,
+        state: dict,
         *,
         enabled: bool,
         model: str,
@@ -1674,7 +994,7 @@ class CryptoTradingBot:
         max_calls_per_month: int,
         max_budget_usd_per_month: float,
         interval_minutes: int,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         if not enabled:
             return False, 'disabled'
         if not model:
@@ -1699,21 +1019,26 @@ class CryptoTradingBot:
             try:
                 last_run = datetime.fromisoformat(last_run_raw)
                 if last_run.tzinfo is None:
-                    last_run = last_run.replace(tzinfo=timezone.utc)
-                elapsed_min = (datetime.now(timezone.utc) -
+                    last_run = last_run.replace(tzinfo=UTC)
+                elapsed_min = (datetime.now(UTC) -
                                last_run).total_seconds() / 60.0
                 if elapsed_min < interval_minutes:
                     return False, 'interval_not_reached'
-            except Exception:
-                pass
+            except (TypeError, ValueError) as exc:
+                logger.warning(
+                    'Ignoring AI co-pilot state with invalid attempt timestamp: %s',
+                    exc,
+                )
+                return False, 'invalid_attempt_timestamp'
         return True, 'ok'
 
-    def _ai_copilot_snapshot(self) -> Dict[str, Any]:
+    def _ai_copilot_snapshot(self) -> dict[str, Any]:
         trades_recent = []
-        recent_trade_summary: Dict[str, Any] = {
+        recent_trade_summary: dict[str, Any] = {
             'window_rows': 0,
             'recent_buy_count': 0,
             'recent_sell_count': 0,
+            'recent_break_even_count': 0,
             'recent_win_rate_pct': 0.0,
             'recent_avg_pnl_base': 0.0,
             'recent_avg_hold_seconds': 0.0,
@@ -1740,17 +1065,18 @@ class CryptoTradingBot:
                     if 'action' in recent_window.columns:
                         actions = recent_window['action'].fillna(
                             '').astype(str).str.lower()
-                        recent_trade_summary['window_rows'] = int(
-                            len(recent_window))
+                        recent_trade_summary['window_rows'] = len(recent_window)
                         recent_trade_summary['recent_buy_count'] = int(
                             (actions == 'buy').sum())
                         sells = recent_window.loc[actions == 'sell'].copy()
-                        recent_trade_summary['recent_sell_count'] = int(
-                            len(sells))
+                        recent_trade_summary['recent_sell_count'] = len(sells)
 
                         if not sells.empty:
                             pnl = pd.to_numeric(
                                 sells.get('pnl_base'), errors='coerce').fillna(0.0)
+                            recent_trade_summary['recent_break_even_count'] = int(
+                                (pnl == 0).sum()
+                            )
                             recent_trade_summary['recent_win_rate_pct'] = round(
                                 float((pnl > 0).mean() * 100.0), 2
                             )
@@ -1781,7 +1107,7 @@ class CryptoTradingBot:
                             )
 
                             if 'coin' in sells.columns:
-                                coin_summary: Dict[str, Any] = {}
+                                coin_summary: dict[str, Any] = {}
                                 for coin, group in sells.groupby('coin', dropna=True):
                                     coin_pnl = pd.to_numeric(
                                         group.get('pnl_base'), errors='coerce'
@@ -1789,9 +1115,10 @@ class CryptoTradingBot:
                                     coin_reasons = group.get('reason', pd.Series(
                                         dtype=object)).fillna('').astype(str)
                                     coin_summary[str(coin)] = {
-                                        'sell_count': int(len(group)),
+                                        'sell_count': len(group),
                                         'pnl_sum': round(float(coin_pnl.sum()), 6),
                                         'avg_pnl': round(float(coin_pnl.mean()), 6),
+                                        'break_even_count': int((coin_pnl == 0).sum()),
                                         'win_rate_pct': round(float((coin_pnl > 0).mean() * 100.0), 2),
                                         'max_hold_exit_ratio': round(
                                             float(
@@ -1816,12 +1143,23 @@ class CryptoTradingBot:
                                     {'coin': coin, 'pnl_sum': data['pnl_sum']}
                                     for coin, data in reversed(ordered_coins[-3:])
                                 ]
-            except Exception:
+            except (
+                OSError,
+                UnicodeError,
+                pd.errors.ParserError,
+                pd.errors.EmptyDataError,
+                AttributeError,
+                KeyError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                logger.warning('Unable to build AI co-pilot snapshot: %s', exc)
                 trades_recent = []
                 recent_trade_summary = {
                     'window_rows': 0,
                     'recent_buy_count': 0,
                     'recent_sell_count': 0,
+                    'recent_break_even_count': 0,
                     'recent_win_rate_pct': 0.0,
                     'recent_avg_pnl_base': 0.0,
                     'recent_avg_hold_seconds': 0.0,
@@ -1841,7 +1179,7 @@ class CryptoTradingBot:
             }
 
         return {
-            'timestamp_utc': datetime.now(timezone.utc).isoformat(),
+            'timestamp_utc': datetime.now(UTC).isoformat(),
             'iteration': int(self.iteration),
             'config': {
                 'min_entry_score': int(self.config.min_entry_score),
@@ -1857,16 +1195,21 @@ class CryptoTradingBot:
                 'sells': int(self.performance['sells']),
                 'wins': int(self.performance['wins']),
                 'losses': int(self.performance['losses']),
+                'break_even': int(self.performance['break_even']),
                 'closed_trades': int(self.performance['closed_trades']),
+                'win_rate_pct': (
+                    self.performance['wins'] / self.performance['closed_trades'] * 100.0
+                    if self.performance['closed_trades'] > 0 else 0.0
+                ),
                 'realized_pnl_base': float(self.performance['realized_pnl_base']),
                 'consecutive_losses': int(self.consecutive_losses),
                 'by_source': by_source,
             },
             'portfolio': {
                 'cash': float(self.portfolio.cash),
-                'open_trades_count': int(len(self.portfolio.open_trades)),
-                'open_trade_coins': sorted(list(self.portfolio.open_trades.keys())),
-                'holding_coins': sorted(list(self.portfolio.holdings.keys())),
+                'open_trades_count': len(self.portfolio.open_trades),
+                'open_trade_coins': sorted(self.portfolio.open_trades.keys()),
+                'holding_coins': sorted(self.portfolio.holdings.keys()),
             },
             'recent_trade_summary': recent_trade_summary,
             'recent_trades': trades_recent,
@@ -1880,7 +1223,7 @@ class CryptoTradingBot:
             },
         }
 
-    def _extract_json_object(self, text: str) -> Optional[Dict[str, Any]]:
+    def _extract_json_object(self, text: str) -> dict[str, Any] | None:
         if not text:
             return None
         start = text.find('{')
@@ -1891,11 +1234,11 @@ class CryptoTradingBot:
             parsed = json.loads(text[start:end + 1])
             if isinstance(parsed, dict):
                 return parsed
-        except Exception:
+        except json.JSONDecodeError:
             return None
         return None
 
-    def _call_ai_copilot(self, snapshot: Dict[str, Any], *, model: str, temperature: float, max_output_tokens: int) -> Tuple[Optional[Dict[str, Any]], int, int]:
+    def _call_ai_copilot(self, snapshot: dict[str, Any], *, model: str, temperature: float, max_output_tokens: int) -> tuple[dict[str, Any] | None, int, int]:
         system_prompt = (
             "You are a conservative trading bot co-pilot. "
             "Return ONLY JSON with keys: proposed_changes (object), reason (string), confidence (0..1), risk_level (low|medium|high). "
@@ -1944,69 +1287,71 @@ class CryptoTradingBot:
         result = self._extract_json_object(content)
         return result, prompt_tokens, completion_tokens
 
-    def _clamp_ai_changes(self, raw_changes: Dict[str, Any]) -> Dict[str, Any]:
+    def _clamp_ai_changes(self, raw_changes: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(raw_changes, dict):
             return {}
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
 
         if 'min_entry_score' in raw_changes:
             try:
-                v = int(round(float(raw_changes['min_entry_score'])))
+                v = round(float(raw_changes['min_entry_score']))
                 v = min(max(v, self.config.ai_copilot_min_entry_score_min),
                         self.config.ai_copilot_min_entry_score_max)
                 out['min_entry_score'] = v
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 pass
 
         if 'reentry_cooldown_seconds' in raw_changes:
             try:
-                v = int(round(float(raw_changes['reentry_cooldown_seconds'])))
-                v = min(max(v, self.config.ai_copilot_reentry_cooldown_min),
-                        self.config.ai_copilot_reentry_cooldown_max)
-                out['reentry_cooldown_seconds'] = v
-            except Exception:
+                cooldown = round(float(raw_changes['reentry_cooldown_seconds']))
+                cooldown = min(max(cooldown,
+                                   self.config.ai_copilot_reentry_cooldown_min),
+                               self.config.ai_copilot_reentry_cooldown_max)
+                out['reentry_cooldown_seconds'] = cooldown
+            except (TypeError, ValueError, OverflowError):
                 pass
 
         if 'tabular_buy_min_confidence' in raw_changes:
             try:
-                v = float(raw_changes['tabular_buy_min_confidence'])
-                v = min(max(v, self.config.ai_copilot_tabular_buy_conf_min),
-                        self.config.ai_copilot_tabular_buy_conf_max)
-                out['tabular_buy_min_confidence'] = round(v, 4)
-            except Exception:
+                conf = float(raw_changes['tabular_buy_min_confidence'])
+                conf = min(max(conf,
+                               self.config.ai_copilot_tabular_buy_conf_min),
+                           self.config.ai_copilot_tabular_buy_conf_max)
+                out['tabular_buy_min_confidence'] = round(conf, 4)
+            except (TypeError, ValueError, OverflowError):
                 pass
 
         return out
 
-    def _apply_ai_changes(self, changes: Dict[str, Any]) -> Dict[str, Tuple[Any, Any]]:
-        applied: Dict[str, Tuple[Any, Any]] = {}
+    def _apply_ai_changes(self, changes: dict[str, Any]) -> dict[str, tuple[Any, Any]]:
+        applied: dict[str, tuple[Any, Any]] = {}
 
         if 'min_entry_score' in changes:
-            old = self.config.min_entry_score
-            new = int(changes['min_entry_score'])
-            if old != new:
-                self.config.min_entry_score = new
-                applied['min_entry_score'] = (old, new)
+            old_score = self.config.min_entry_score
+            new_score = int(changes['min_entry_score'])
+            if old_score != new_score:
+                self.config.min_entry_score = new_score
+                applied['min_entry_score'] = (old_score, new_score)
 
         if 'reentry_cooldown_seconds' in changes:
-            old = self.config.reentry_cooldown_seconds
-            new = int(changes['reentry_cooldown_seconds'])
-            if old != new:
-                self.config.reentry_cooldown_seconds = new
-                applied['reentry_cooldown_seconds'] = (old, new)
+            old_cooldown = self.config.reentry_cooldown_seconds
+            new_cooldown = int(changes['reentry_cooldown_seconds'])
+            if old_cooldown != new_cooldown:
+                self.config.reentry_cooldown_seconds = new_cooldown
+                applied['reentry_cooldown_seconds'] = (old_cooldown, new_cooldown)
 
         if 'tabular_buy_min_confidence' in changes:
-            old = self.config.tabular_buy_min_confidence
-            new = float(changes['tabular_buy_min_confidence'])
-            if abs(old - new) > 1e-9:
-                self.config.tabular_buy_min_confidence = new
-                applied['tabular_buy_min_confidence'] = (old, new)
+            old_conf = self.config.tabular_buy_min_confidence
+            new_conf = float(changes['tabular_buy_min_confidence'])
+            if abs(old_conf - new_conf) > 1e-9:
+                self.config.tabular_buy_min_confidence = new_conf
+                applied['tabular_buy_min_confidence'] = (old_conf, new_conf)
 
         return applied
 
     def _maybe_run_ai_copilot_variant(
         self,
-        snapshot: Dict[str, Any],
+        snapshot: dict[str, Any],
         *,
         label: str,
         state_file: str,
@@ -2067,14 +1412,14 @@ class CryptoTradingBot:
                 logger.warning(
                     f"{label} call ignored due to monthly budget cap: projected {projected:.4f} USD")
                 state['last_attempt_at'] = datetime.now(
-                    timezone.utc).isoformat()
+                    UTC).isoformat()
                 self._write_ai_copilot_state(state, state_file)
                 return
 
             state['monthly_calls'] = int(state.get('monthly_calls', 0)) + 1
             state['daily_calls'] = int(state.get('daily_calls', 0)) + 1
             state['monthly_spend_usd'] = projected
-            state['last_run_at'] = datetime.now(timezone.utc).isoformat()
+            state['last_run_at'] = datetime.now(UTC).isoformat()
             state['last_attempt_at'] = state['last_run_at']
             state['last_prompt_tokens'] = prompt_tokens
             state['last_completion_tokens'] = completion_tokens
@@ -2130,7 +1475,7 @@ class CryptoTradingBot:
                         f"{label} applied: {applied} "
                         f"(model={model}, risk={risk_level}, confidence={confidence}, reason={reason_text})")
                     state['last_applied_at'] = datetime.now(
-                        timezone.utc).isoformat()
+                        UTC).isoformat()
                     state['last_applied_changes'] = {
                         k: {'old': v[0], 'new': v[1]} for k, v in applied.items()
                     }
@@ -2140,8 +1485,17 @@ class CryptoTradingBot:
 
             self._write_ai_copilot_state(state, state_file)
 
-        except Exception as e:
-            state['last_attempt_at'] = datetime.now(timezone.utc).isoformat()
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+            UnicodeError,
+            json.JSONDecodeError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as e:
+            state['last_attempt_at'] = datetime.now(UTC).isoformat()
             state['consecutive_errors'] = int(
                 state.get('consecutive_errors', 0)) + 1
             state['last_error'] = str(e)
@@ -2154,10 +1508,10 @@ class CryptoTradingBot:
                 logger.error(
                     f"{label} suspended after {state['consecutive_errors']} consecutive errors")
                 state['last_suspended_at'] = datetime.now(
-                    timezone.utc).isoformat()
+                    UTC).isoformat()
             self._write_ai_copilot_state(state, state_file)
 
-    def _maybe_run_ai_copilot(self, snapshot: Dict[str, Any]):
+    def _maybe_run_ai_copilot(self, snapshot: dict[str, Any]):
         self._maybe_run_ai_copilot_variant(
             snapshot,
             label='AI co-pilot',
@@ -2177,7 +1531,7 @@ class CryptoTradingBot:
             allow_apply=not self.config.ai_copilot_shadow_mode,
         )
 
-    def _maybe_run_ai_copilot_benchmark(self, snapshot: Dict[str, Any]):
+    def _maybe_run_ai_copilot_benchmark(self, snapshot: dict[str, Any]):
         self._maybe_run_ai_copilot_variant(
             snapshot,
             label='AI co-pilot benchmark',
@@ -2197,7 +1551,36 @@ class CryptoTradingBot:
             allow_apply=False,
         )
 
-    def _record_close_performance(self, entry_trade: Dict, sell_price: float, sell_amount: float):
+    @staticmethod
+    def _trade_excursion_metrics(entry_trade: dict) -> tuple[float, float]:
+        buy_price = float(entry_trade.get('buy_price', 0.0))
+        if buy_price <= 0:
+            return 0.0, 0.0
+        peak_price = max(
+            buy_price, float(entry_trade.get('peak_price', buy_price)))
+        trough_price = min(
+            buy_price, float(entry_trade.get('trough_price', buy_price)))
+        mfe_pct = (peak_price - buy_price) / buy_price * 100.0
+        mae_pct = (trough_price - buy_price) / buy_price * 100.0
+        return mfe_pct, mae_pct
+
+    @staticmethod
+    def _entry_cost_basis(entry_trade: dict, buy_price: float, buy_amount_coin: float) -> float:
+        raw_basis = entry_trade.get('amount_base')
+        if raw_basis is None and entry_trade.get('execution_cost_mode') != 'net_costs':
+            logger.warning("Legacy DRY-RUN position has no cost basis; reconstructing from entry price")
+            raw_basis = buy_price * buy_amount_coin
+        try:
+            basis = float(raw_basis)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid entry cost basis") from exc
+        if not math.isfinite(basis) or basis <= 0:
+            raise ValueError("Invalid entry cost basis")
+        return basis
+
+    def _record_close_performance(self, entry_trade: dict, sell_price: float, sell_amount: float,
+                                  *, net_proceeds: float | None = None,
+                                  entry_basis: float | None = None):
         buy_price = float(entry_trade.get('buy_price', 0.0))
         buy_amount_coin = float(entry_trade.get('amount_coin', 0.0))
         if buy_amount_coin <= 0:
@@ -2205,16 +1588,24 @@ class CryptoTradingBot:
         pnl_base = (sell_price - buy_price) * sell_amount
         pnl_pct = ((sell_price - buy_price) / buy_price) * \
             100 if buy_price > 0 else 0.0
+        if net_proceeds is not None:
+            total_basis = entry_basis if entry_basis is not None else self._entry_cost_basis(
+                entry_trade, buy_price, buy_amount_coin)
+            basis = total_basis * min(sell_amount / buy_amount_coin, 1.0)
+            pnl_base = net_proceeds - basis
+            pnl_pct = pnl_base / basis * 100 if basis > 0 else 0.0
         hold_seconds = (
             datetime.now() - entry_trade.get('timestamp', datetime.now())).total_seconds()
 
         self.performance['sells'] += 1
         self.performance['closed_trades'] += 1
         self.performance['realized_pnl_base'] += pnl_base
-        if pnl_base >= 0:
+        if pnl_base > 0:
             self.performance['wins'] += 1
-        else:
+        elif pnl_base < 0:
             self.performance['losses'] += 1
+        else:
+            self.performance['break_even'] += 1
 
         source = entry_trade.get('signal_source', 'rules')
         self.performance['by_source'][source]['sells'] += 1
@@ -2228,7 +1619,7 @@ class CryptoTradingBot:
                 and self.consecutive_losses >= self.config.loss_streak_pause_threshold
             ):
                 self.buy_pause_until_utc = datetime.now(
-                    timezone.utc) + timedelta(seconds=self.config.loss_streak_pause_seconds)
+                    UTC) + timedelta(seconds=self.config.loss_streak_pause_seconds)
                 logger.warning(
                     f"🧯 Loss streak detected ({self.consecutive_losses} in a row). "
                     f"New BUYs paused until {self.buy_pause_until_utc.isoformat()}"
@@ -2239,16 +1630,16 @@ class CryptoTradingBot:
         return pnl_base, pnl_pct, hold_seconds
 
     def _register_buy_timestamp(self):
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.now(UTC)
         self.buy_timestamps_utc.append(now_utc)
         cutoff = now_utc - timedelta(hours=1)
         self.buy_timestamps_utc = [
             ts for ts in self.buy_timestamps_utc if ts >= cutoff]
 
     def _register_sell_timestamp(self, coin: str):
-        self.last_sell_timestamps_utc[coin] = datetime.now(timezone.utc)
+        self.last_sell_timestamps_utc[coin] = datetime.now(UTC)
 
-    def _resolve_reentry_cooldown_seconds(self, current_price: float, atr: float) -> Tuple[int, str]:
+    def _resolve_reentry_cooldown_seconds(self, current_price: float, atr: float) -> tuple[int, str]:
         """Returns an effective re-entry cooldown (seconds), optionally adjusted by volatility."""
         base = max(0, int(self.config.reentry_cooldown_seconds))
         minimum = max(0, int(self.config.reentry_cooldown_min_seconds))
@@ -2283,12 +1674,12 @@ class CryptoTradingBot:
             mult = float(self.config.reentry_cooldown_mult_mid_vol)
             regime = 'mid_vol'
 
-        effective = int(round(base * mult))
+        effective = round(base * mult)
         effective = min(max(effective, minimum), maximum)
         reason = f'{regime},atr_pct={atr_pct:.4f},mult={mult:.2f}'
         return effective, reason
 
-    def _is_coin_in_reentry_cooldown(self, coin: str, cooldown_seconds: Optional[int] = None) -> Tuple[bool, int]:
+    def _is_coin_in_reentry_cooldown(self, coin: str, cooldown_seconds: int | None = None) -> tuple[bool, int]:
         cooldown = max(
             0,
             int(self.config.reentry_cooldown_seconds if cooldown_seconds is None else cooldown_seconds),
@@ -2300,14 +1691,14 @@ class CryptoTradingBot:
         if last_sell is None:
             return False, 0
 
-        elapsed = (datetime.now(timezone.utc) - last_sell).total_seconds()
+        elapsed = (datetime.now(UTC) - last_sell).total_seconds()
         remaining = int(max(0, cooldown - elapsed))
         if remaining > 0:
             return True, remaining
         return False, 0
 
     def _refresh_daily_anchor(self, portfolio_value: float):
-        today_utc = datetime.now(timezone.utc).date()
+        today_utc = datetime.now(UTC).date()
         if portfolio_value <= 0:
             return
         if self.daily_anchor_date != today_utc:
@@ -2318,8 +1709,8 @@ class CryptoTradingBot:
             logger.info(
                 f"🗓️ Daily-risk-anchor set: {portfolio_value:.2f} {self.config.base_currency} ({today_utc})")
 
-    def _can_open_new_positions(self, portfolio_value: float) -> Tuple[bool, str]:
-        now_utc = datetime.now(timezone.utc)
+    def _can_open_new_positions(self, portfolio_value: float) -> tuple[bool, str]:
+        now_utc = datetime.now(UTC)
 
         if self.buy_pause_until_utc and now_utc < self.buy_pause_until_utc:
             remaining = (self.buy_pause_until_utc - now_utc).total_seconds()
@@ -2357,7 +1748,9 @@ class CryptoTradingBot:
             self.performance['realized_pnl_base'] / closed) if closed > 0 else 0.0
         logger.info(
             f"📊 Performance: Buys={self.performance['buys']} | Sells={self.performance['sells']} | "
-            f"Closed={closed} | WinRate={win_rate:.1f}% | "
+            f"Closed={closed} | Wins={self.performance['wins']} | "
+            f"Losses={self.performance['losses']} | "
+            f"BreakEven={self.performance['break_even']} | WinRate={win_rate:.1f}% | "
             f"RealizedPnL={self.performance['realized_pnl_base']:.2f} {self.config.base_currency} | "
             f"AvgPnL/Trade={avg_pnl:.4f} {self.config.base_currency}")
 
@@ -2389,11 +1782,15 @@ class CryptoTradingBot:
                 f"Exchange {self.config.exchange_name} successfully initialised.")
             return exchange
         except (ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.AuthenticationError) as e:
+            if self.config.simulation_initial_balance_from_kraken:
+                raise RuntimeError("Cannot initialize public Kraken exchange") from e
             logger.error(
                 f"Exchange initialisation failed: {e}. Enabling simulation mode.")
             self.config.simulate_data = True
             return None
-        except Exception as e:
+        except (ccxt.BaseError, AttributeError, TypeError, ValueError) as e:
+            if self.config.simulation_initial_balance_from_kraken:
+                raise RuntimeError("Cannot initialize public Kraken exchange") from e
             logger.error(
                 f"Unexpected error during exchange initialisation: {e}. Enabling simulation mode.")
             self.config.simulate_data = True
@@ -2410,10 +1807,10 @@ class CryptoTradingBot:
                     self.all_symbols.append(symbol)
                     self.all_coins.append(market['base'])
             # Unique coin list
-            self.all_coins = sorted(list(set(self.all_coins)))
+            self.all_coins = sorted(set(self.all_coins))
             logger.info(
                 f"Loaded {len(self.all_symbols)} trading pairs and {len(self.all_coins)} coins with {self.config.base_currency}.")
-        except Exception as e:
+        except ccxt.BaseError as e:
             logger.error(f"Error loading market information: {e}")
             self.all_symbols = [
                 f"{coin}/{self.config.base_currency}" for coin in self.config.quote_currencies]
@@ -2430,48 +1827,87 @@ class CryptoTradingBot:
 
     def _update_portfolio_balance(self):
         """Updates the portfolio with current balances from the exchange."""
-        def _currency_aliases(currency: str) -> List[str]:
-            base = currency.upper().strip()
-            aliases = [base, f"Z{base}", f"X{base}"]
-            if base == 'BTC':
-                aliases.extend(['XBT', 'XXBT'])
-            return list(dict.fromkeys(aliases))
-
-        def _extract_cash_and_holdings(free_balances: Dict[str, float]) -> Tuple[float, Dict[str, float]]:
-            cash = 0.0
-            aliases = _currency_aliases(self.config.base_currency)
-            for key in aliases:
-                value = free_balances.get(key)
-                if value is not None:
-                    cash = float(value)
-                    break
-
-            holdings: Dict[str, float] = {}
-            for currency, amount in free_balances.items():
-                if amount <= 0:
-                    continue
-                if currency in aliases:
-                    continue
-                holdings[currency] = float(amount)
-            return cash, holdings
+        if self.config.simulation_initial_balance_from_kraken:
+            self._initialize_simulation_portfolio_from_kraken()
+            return
 
         if self.config.simulate_data or self.exchange is None:
-            # For simulate_data mode: initialize dry-run cash once, then respect persistence
-            if self.portfolio.cash == 0.0 and not self.portfolio.holdings:
-                # Try to load from persistent state first
-                if not self.portfolio.load_state():
-                    # No state file, initialize with default dry-run capital
-                    self.portfolio.cash = 1000.0
-                    self.portfolio.initial_portfolio_value = self.portfolio.cash
-                    logger.info(
-                        f"Simulated starting capital: {self.portfolio.cash:.2f} {self.config.base_currency}")
-            self.portfolio.last_update = datetime.now()
+            self._initialize_simulated_portfolio()
             return
 
         # In dry-run mode:
         # 1. Load initial balance from exchange exactly once
         # 2. Then restore from persistent state file (portfolio changes from previous runs)
         # 3. Never overwrite simulated portfolio changes
+        if self.config.dry_run:
+            self._initialize_dry_run_portfolio()
+            return
+
+        self._refresh_live_portfolio_balance()
+
+    def _initialize_simulation_portfolio_from_kraken(self) -> None:
+        """Bootstrap the simulation portfolio once from the Kraken EUR balance."""
+        if self.config.simulation_initial_balance_from_kraken:
+            if self.portfolio.last_update is not None:
+                return
+            if self._public_paper_mode():
+                self._recover_paper_trade()
+            if os.path.lexists(self.portfolio.state_file):
+                if not self.portfolio.load_state():
+                    raise RuntimeError("Cannot restore existing simulation portfolio")
+                self.iteration = self.portfolio.simulation_iteration + 1
+                logger.warning(
+                    "Simulation restarted: restored the last saved portfolio; "
+                    "Kraken balance was not fetched again."
+                )
+            else:
+                if not self.config.simulate_data:
+                    raise RuntimeError(
+                        "Initialize the paper portfolio separately before using public market data"
+                    )
+                if not self.config.api_key or not self.config.api_secret:
+                    raise RuntimeError("Kraken read-only API credentials are required for initial balance")
+                exchange = ccxt.kraken({
+                    'apiKey': self.config.api_key,
+                    'secret': self.config.api_secret,
+                    'enableRateLimit': True,
+                    'timeout': self.config.exchange_timeout_ms,
+                })
+                try:
+                    balance = exchange.fetch_balance()
+                    free = balance['free']
+                    value = next((free[key] for key in ('EUR', 'ZEUR', 'XEUR')
+                                  if key in free and free[key] is not None), None)
+                    cash = float(value)
+                except (ccxt.BaseError, KeyError, TypeError, ValueError):
+                    raise RuntimeError("Could not obtain free EUR balance from Kraken") from None
+                if not math.isfinite(cash) or cash < 0:
+                    raise ValueError("Kraken returned an invalid free EUR balance")
+                self.portfolio.cash = cash
+                self.portfolio.initial_portfolio_value = cash
+                self.portfolio.save_state()
+                logger.info("Simulation initialized once from Kraken free EUR balance: %.2f EUR", cash)
+            self.portfolio.last_update = datetime.now()
+
+    def _initialize_simulated_portfolio(self) -> None:
+        """Restore or seed the portfolio for simulated / offline data mode."""
+        if self.config.simulate_data or self.exchange is None:
+            needs_initialization = (
+                self.portfolio.last_update is None
+                and self.portfolio.initial_portfolio_value is None
+                and math.isclose(self.portfolio.cash, 0.0, abs_tol=1e-12)
+                and not self.portfolio.holdings
+            )
+            if needs_initialization and not self.portfolio.load_state():
+                self.portfolio.cash = 1000.0
+                self.portfolio.initial_portfolio_value = self.portfolio.cash
+                logger.info(
+                    f"Simulated starting capital: {self.portfolio.cash:.2f} {self.config.base_currency}")
+            self.portfolio.last_update = datetime.now()
+            return
+
+    def _initialize_dry_run_portfolio(self) -> None:
+        """Restore the dry-run portfolio from state, else seed it from the exchange."""
         if self.config.dry_run:
             if self.portfolio.last_update is not None:
                 return
@@ -2485,36 +1921,37 @@ class CryptoTradingBot:
                 balance = self.exchange.fetch_balance()
                 free_balances = balance.get('free', {})
                 self.portfolio.cash, self.portfolio.holdings = _extract_cash_and_holdings(
-                    free_balances)
+                    free_balances, self.config.base_currency)
                 if not self.portfolio.holdings:
                     self.portfolio.initial_portfolio_value = self.portfolio.cash
                 self.portfolio.last_update = datetime.now()
                 logger.info(
                     f"Portfolio initialized from exchange (dry-run mode). Cash: {self.portfolio.cash:.2f} {self.config.base_currency}, Holdings: {self.portfolio.holdings}")
-            except Exception as e:
+            except ccxt.BaseError as e:
                 logger.warning(
                     f"Failed to load initial balance from exchange in dry-run mode: {e}")
-            return
 
+    def _refresh_live_portfolio_balance(self) -> None:
+        """Fetch the current balance from the exchange (live trading mode)."""
         # Live trading mode: always fetch current balance
         try:
             balance = self.exchange.fetch_balance()
             free_balances = balance.get('free', {})
             self.portfolio.cash, self.portfolio.holdings = _extract_cash_and_holdings(
-                free_balances)
+                free_balances, self.config.base_currency)
             self.portfolio.last_update = datetime.now()
             logger.info(
                 f"Portfolio balance updated. Cash: {self.portfolio.cash:.2f} {self.config.base_currency}, Holdings: {self.portfolio.holdings}")
         except (ccxt.NetworkError, ccxt.ExchangeError) as e:
             logger.error(
                 f"Error fetching/updating account balance: {e}")
-        except Exception as e:
-            logger.error(
-                f"Unexpected error fetching/updating account balance: {e}")
+        except ccxt.BaseError as e:
+            logger.error(f"Error fetching/updating account balance: {e}")
 
-    def _get_market_data(self) -> Dict[str, Dict]:
+
+    def _get_market_data(self) -> dict[str, dict]:
         """Fetches current ticker data (price, volume) for all relevant coins."""
-        market_data: Dict[str, Dict] = {}
+        market_data: dict[str, dict] = {}
         if self.config.simulate_data:
             for coin in self.all_coins:
                 symbol = f'{coin}/{self.config.base_currency}'
@@ -2557,14 +1994,6 @@ class CryptoTradingBot:
                             f"after error: {e} (wait {wait:.1f}s)")
                         if wait > 0:
                             time.sleep(wait)
-                except Exception as e:
-                    if attempt >= retries:
-                        logger.error(
-                            f"Unexpected ticker error for batch {start//batch_size + 1}: {e}")
-                    else:
-                        wait = delay_seconds * (attempt + 1)
-                        if wait > 0:
-                            time.sleep(wait)
 
             if not tickers:
                 continue
@@ -2581,178 +2010,11 @@ class CryptoTradingBot:
 
         return market_data
 
-    def _simulation_series_seed(self, symbol: str, timeframe: str) -> int:
-        token = f"{symbol}|{timeframe}|{self.config.simulation_seed}"
-        checksum = sum((index + 1) * ord(char)
-                       for index, char in enumerate(token))
-        return checksum % (2 ** 32)
-
-    def _simulation_time_delta(self, timeframe: str) -> timedelta:
-        unit = timeframe[-1].lower()
-        value = int(timeframe[:-1]) if timeframe[:-1].isdigit() else 1
-        if unit == 'm':
-            return timedelta(minutes=value)
-        if unit == 'h':
-            return timedelta(hours=value)
-        if unit == 'd':
-            return timedelta(days=value)
-        return timedelta(hours=1)
-
-    def _simulation_base_price(self, coin: str) -> float:
-        defaults = {
-            'BTC': 74000.0,
-            'ETH': 2500.0,
-            'SOL': 160.0,
-            'XRP': 0.55,
-            'ADA': 0.45,
-            'DOGE': 0.16,
-            'TRX': 0.12,
-            'CHZ': 0.11,
-            'VVV': 5.5,
-        }
-        if coin in defaults:
-            return defaults[coin]
-        checksum = sum(ord(char) for char in coin)
-        return 10.0 + (checksum % 190)
-
-    def _simulation_base_volume(self, coin: str) -> float:
-        defaults = {
-            'BTC': 2_000_000.0,
-            'ETH': 1_400_000.0,
-            'SOL': 900_000.0,
-            'XRP': 700_000.0,
-            'ADA': 550_000.0,
-            'DOGE': 600_000.0,
-            'TRX': 450_000.0,
-            'CHZ': 280_000.0,
-            'VVV': 180_000.0,
-        }
-        if coin in defaults:
-            return defaults[coin]
-        checksum = sum((index + 3) * ord(char)
-                       for index, char in enumerate(coin))
-        return float(120_000 + (checksum % 500_000))
-
-    def _simulation_regime_for_coin(self, coin: str) -> str:
-        regime = (self.config.simulation_regime or 'neutral').lower()
-        if regime != 'mixed':
-            return regime
-
-        regimes = ['uptrend', 'sideways', 'downtrend', 'recovery']
-        checksum = sum((index + 5) * ord(char)
-                       for index, char in enumerate(coin))
-        return regimes[checksum % len(regimes)]
-
-    def _simulation_regime_shape(self, regime: str, bucket_index: int, phase: float) -> Tuple[float, float, float]:
-        relative = bucket_index - self.iteration
-
-        if regime == 'uptrend':
-            price_bias = 0.16 * math.tanh((relative + 36.0) / 18.0)
-            volume_multiplier = 1.00 + 0.12 * \
-                math.sin(bucket_index / 4.0 + phase)
-            wave_scale = 0.85
-        elif regime == 'downtrend':
-            price_bias = -0.16 * math.tanh((relative + 36.0) / 18.0)
-            volume_multiplier = 1.05 + 0.16 * \
-                abs(math.sin(bucket_index / 5.0 + phase))
-            wave_scale = 0.95
-        elif regime == 'sideways':
-            price_bias = 0.02 * math.sin(relative / 6.0 + phase)
-            volume_multiplier = 0.78 + 0.06 * \
-                math.cos(bucket_index / 7.0 + phase)
-            wave_scale = 0.35
-        elif regime == 'crash':
-            crash_step = 1.0 / (1.0 + math.exp(-(relative + 6.0) / 1.2))
-            price_bias = -0.30 * crash_step + 0.01 * \
-                math.sin(bucket_index / 4.0 + phase)
-            volume_multiplier = 1.20 + 0.70 * crash_step
-            wave_scale = 1.35
-        elif regime == 'recovery':
-            dip = -0.18 * math.exp(-((relative + 18.0) ** 2) / 90.0)
-            bounce = 0.16 / (1.0 + math.exp(-(relative + 6.0) / 1.6))
-            price_bias = dip + bounce + 0.02 * \
-                math.sin(bucket_index / 6.0 + phase)
-            volume_multiplier = 1.00 + 0.22 * \
-                abs(math.sin(bucket_index / 4.0 + phase))
-            wave_scale = 0.90
-        else:
-            price_bias = 0.03 * math.sin(relative / 8.0 + phase)
-            volume_multiplier = 0.95 + 0.10 * \
-                math.sin(bucket_index / 3.0 + phase * 0.5)
-            wave_scale = 0.70
-
-        return price_bias, max(0.25, volume_multiplier), wave_scale
-
     def _build_simulated_ohlcv_data(self, symbol: str, timeframe: str = '1h', limit: int = 100) -> pd.DataFrame:
-        if self._simulation_cache_iteration != self.iteration:
-            self._simulation_ohlcv_cache = {}
-            self._simulation_cache_iteration = self.iteration
+        """Builds deterministic simulated OHLCV data via the simulation engine."""
+        return self._simulation_engine.build_ohlcv(symbol, timeframe=timeframe, limit=limit)
 
-        cache_key = (self.iteration, symbol, timeframe, limit)
-        cached = self._simulation_ohlcv_cache.get(cache_key)
-        if cached is not None:
-            return cached.copy()
-
-        coin = symbol.split('/')[0]
-        regime = self._simulation_regime_for_coin(coin)
-        rng = np.random.default_rng(
-            self._simulation_series_seed(symbol, timeframe))
-        interval = self._simulation_time_delta(timeframe)
-        end_time = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-        base_price = self._simulation_base_price(coin)
-        base_volume = self._simulation_base_volume(coin)
-
-        phase = rng.uniform(0.0, 2.0 * math.pi)
-        volatility = rng.uniform(0.0025, 0.0120)
-        trend_strength = rng.uniform(0.01, 0.04)
-
-        def close_for_bucket(bucket_index: int) -> float:
-            regime_bias, _, wave_scale = self._simulation_regime_shape(
-                regime, bucket_index, phase)
-            macro = 0.10 * math.sin(bucket_index / 18.0 + phase)
-            micro = 0.03 * math.cos(bucket_index / 5.0 + phase * 0.7)
-            local_trend = trend_strength * \
-                math.sin(bucket_index / 9.0 + phase * 0.3)
-            regime_cycle = 0.02 * \
-                math.sin((self.iteration + bucket_index) / 7.0 + phase * 1.3)
-            price_factor = max(0.25, 1.0 + regime_bias + wave_scale * (
-                macro + micro + local_trend + regime_cycle))
-            return base_price * price_factor
-
-        rows = []
-        for idx in range(limit):
-            timestamp = end_time - interval * (limit - 1 - idx)
-            bucket_index = self.iteration - (limit - 1 - idx)
-            close_price = close_for_bucket(bucket_index)
-            open_price = close_for_bucket(bucket_index - 1)
-            _, volume_multiplier, _ = self._simulation_regime_shape(
-                regime, bucket_index, phase)
-            wick_up = abs(math.sin(bucket_index * 0.91 + phase)
-                          ) * (0.002 + volatility * 0.5)
-            wick_down = abs(math.cos(bucket_index * 1.07 + phase)
-                            ) * (0.002 + volatility * 0.5)
-            high_price = max(open_price, close_price) * (1.0 + wick_up)
-            low_price = min(open_price, close_price) * \
-                max(0.2, 1.0 - wick_down)
-            price_move = abs(close_price - open_price) / max(open_price, 1e-9)
-            volume = max(base_volume * 0.08,
-                         base_volume * volume_multiplier * (1.0 + price_move * 8.0))
-
-            rows.append([
-                timestamp,
-                float(open_price),
-                float(high_price),
-                float(low_price),
-                float(close_price),
-                float(volume),
-            ])
-
-        df = pd.DataFrame(
-            rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        self._simulation_ohlcv_cache[cache_key] = df
-        return df.copy()
-
-    def _fetch_ohlcv_data(self, symbol: str, timeframe: str = '1h', limit: int = 100) -> Optional[pd.DataFrame]:
+    def _fetch_ohlcv_data(self, symbol: str, timeframe: str = '1h', limit: int = 100) -> pd.DataFrame | None:
         """Fetches OHLCV data for a symbol."""
         if self.config.simulate_data or self.exchange is None:
             return self._build_simulated_ohlcv_data(symbol, timeframe=timeframe, limit=limit)
@@ -2789,19 +2051,6 @@ class CryptoTradingBot:
                     f"(attempt {attempt + 2}/{retries + 1}, wait {wait:.1f}s)")
                 if wait > 0:
                     time.sleep(wait)
-            except Exception as e:
-                elapsed = time.monotonic() - started_at
-                if attempt >= retries:
-                    logger.error(
-                        f"Unexpected error fetching OHLCV data for {symbol} after {elapsed:.1f}s: {e}")
-                    return None
-                wait = delay_seconds * (attempt + 1)
-                logger.warning(
-                    f"Retrying unexpected OHLCV error for {symbol} after {elapsed:.1f}s: {e} "
-                    f"(attempt {attempt + 2}/{retries + 1}, wait {wait:.1f}s)")
-                if wait > 0:
-                    time.sleep(wait)
-
         return None
 
     def _calculate_rsi(self, data: pd.Series, period: int) -> float:
@@ -2879,8 +2128,8 @@ class CryptoTradingBot:
         price: float,
         atr: float,
         risk_pct: float = 0.01,
-        portfolio_value: Optional[float] = None,
-        trade_amount_cap: Optional[float] = None,
+        portfolio_value: float | None = None,
+        trade_amount_cap: float | None = None,
     ) -> float:
         """Calculates position size such that at most risk_pct of the portfolio is at risk (ATR-based)."""
         effective_trade_amount = self.config.trade_amount if trade_amount_cap is None else trade_amount_cap
@@ -2920,7 +2169,7 @@ class CryptoTradingBot:
         rule_score: int,
         tab_decision: str,
         tab_confidence: float,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         if tab_decision == 'kaufen' and not self.config.tabular_allow_buy_entries:
             return False, 'buy_entries_disabled'
 
@@ -2954,7 +2203,7 @@ class CryptoTradingBot:
 
         return False, 'gated_by_rules'
 
-    def _effective_stop_loss_level(self, trade_info: Dict, current_price: float, atr: float) -> float:
+    def _effective_stop_loss_level(self, trade_info: dict, current_price: float, atr: float) -> float:
         """Builds a dynamic stop level combining base ATR stop, trailing stop and break-even protection."""
         buy_price = float(trade_info.get('buy_price', 0.0))
         if buy_price <= 0:
@@ -2979,7 +2228,7 @@ class CryptoTradingBot:
 
         return stop_loss_level
 
-    def _passes_entry_momentum_filter(self, coin_data: Dict) -> Tuple[bool, str]:
+    def _passes_entry_momentum_filter(self, coin_data: dict) -> tuple[bool, str]:
         """Checks if an entry candidate has acceptable short-term momentum."""
         if not self.config.entry_momentum_filter_enabled:
             return True, 'disabled'
@@ -3008,17 +2257,23 @@ class CryptoTradingBot:
 
         if self.config.entry_sharp_pump_filter_enabled:
             ret_1 = coin_data.get('ret_1')
-            if ret_1 is not None and not np.isnan(ret_1):
-                if float(ret_1) > self.config.entry_max_ret_1:
-                    return False, f"sharp_pump_ret_1 ({float(ret_1):.4f} > {self.config.entry_max_ret_1:.4f})"
+            if (
+                ret_1 is not None
+                and not np.isnan(ret_1)
+                and float(ret_1) > self.config.entry_max_ret_1
+            ):
+                return False, f"sharp_pump_ret_1 ({float(ret_1):.4f} > {self.config.entry_max_ret_1:.4f})"
 
-            if ret_3 is not None and not np.isnan(ret_3):
-                if float(ret_3) > self.config.entry_max_ret_3:
-                    return False, f"sharp_pump_ret_3 ({float(ret_3):.4f} > {self.config.entry_max_ret_3:.4f})"
+            if (
+                ret_3 is not None
+                and not np.isnan(ret_3)
+                and float(ret_3) > self.config.entry_max_ret_3
+            ):
+                return False, f"sharp_pump_ret_3 ({float(ret_3):.4f} > {self.config.entry_max_ret_3:.4f})"
 
         return True, 'ok'
 
-    def _passes_uptrend_entry_filter(self, coin_data: Dict) -> Tuple[bool, str]:
+    def _passes_uptrend_entry_filter(self, coin_data: dict) -> tuple[bool, str]:
         """Allows up-trend fallback entries only when trend and tabular quality are not too weak."""
         recommendation = str(coin_data.get('recommendation', ''))
         if recommendation != 'HOLD (Up-Trend)':
@@ -3064,7 +2319,7 @@ class CryptoTradingBot:
 
         return True, 'ok'
 
-    def _passes_fallback_entry_filter(self, coin: str, coin_data: Dict) -> Tuple[bool, str]:
+    def _passes_fallback_entry_filter(self, coin: str, coin_data: dict) -> tuple[bool, str]:
         """Applies fallback-only entry checks after the directional filters passed."""
         rsi = coin_data.get('rsi')
         if rsi is None or np.isnan(rsi):
@@ -3077,7 +2332,23 @@ class CryptoTradingBot:
 
         return True, 'ok'
 
-    def _entry_market_mode(self, market_analysis: Dict[str, Dict]) -> str:
+    def _entry_volatility_guard(self, coin_data: dict) -> tuple[bool, str]:
+        """Screens entries by ATR(14)/price, a volatility proxy rather than a return estimate."""
+        minimum = self.config.min_entry_atr_pct
+        if minimum <= 0:
+            return True, 'disabled'
+
+        try:
+            atr_pct = float(coin_data.get('atr_pct'))
+        except (TypeError, ValueError):
+            atr_pct = float('nan')
+        if not math.isfinite(atr_pct):
+            return False, 'atr_pct_unavailable'
+        if atr_pct < minimum:
+            return False, f'atr_pct_below_minimum ({atr_pct:.5f} < {minimum:.5f})'
+        return True, 'ok'
+
+    def _entry_market_mode(self, market_analysis: dict[str, dict]) -> str:
         """Classifies the market to suppress aggressive entry filling in weak environments."""
         if not market_analysis:
             return 'normal'
@@ -3111,7 +2382,7 @@ class CryptoTradingBot:
         elif bearish_share >= 0.40 or bearish > bullish:
             signal_mode = 'cautious'
 
-        return max((regime_mode, signal_mode), key=severity_rank.get)
+        return max((regime_mode, signal_mode), key=severity_rank.__getitem__)
 
     @staticmethod
     def _filter_reason_code(reason: str) -> str:
@@ -3120,8 +2391,8 @@ class CryptoTradingBot:
 
     def _log_blocked_uptrend_candidates(
         self,
-        market_analysis: Dict[str, Dict],
-        uptrend_filter_results: Dict[str, Tuple[bool, str]],
+        market_analysis: dict[str, dict],
+        uptrend_filter_results: dict[str, tuple[bool, str]],
         limit: int = 5,
     ) -> None:
         """Logs concrete rejection details for blocked rules-based up-trend entries."""
@@ -3189,8 +2460,8 @@ class CryptoTradingBot:
 
     def _log_blocked_downtrend_reversal_candidates(
         self,
-        market_analysis: Dict[str, Dict],
-        downtrend_filter_results: Dict[str, Tuple[bool, str]],
+        market_analysis: dict[str, dict],
+        downtrend_filter_results: dict[str, tuple[bool, str]],
         limit: int = 5,
     ) -> None:
         """Logs concrete rejection details for blocked down-trend reversal entries."""
@@ -3258,9 +2529,9 @@ class CryptoTradingBot:
 
     def _log_fallback_entry_diagnostics(
         self,
-        market_analysis: Dict[str, Dict],
-        fallback_base_candidates: List[str],
-        fallback_filter_results: Dict[str, Tuple[bool, str]],
+        market_analysis: dict[str, dict],
+        fallback_base_candidates: list[str],
+        fallback_filter_results: dict[str, tuple[bool, str]],
         fallback_allowed: bool,
         fallback_suppression_reason: str,
         entry_market_mode: str,
@@ -3335,7 +2606,7 @@ class CryptoTradingBot:
 
     def _log_blocked_buy_attempt_candidates(
         self,
-        blocked_attempts: List[Dict[str, Any]],
+        blocked_attempts: list[dict[str, Any]],
         limit: int = 5,
     ) -> None:
         """Logs why shortlisted buy candidates still failed during the execution path."""
@@ -3365,13 +2636,13 @@ class CryptoTradingBot:
             )
 
     @staticmethod
-    def _is_rules_uptrend_trade(trade_info: Dict) -> bool:
+    def _is_rules_uptrend_trade(trade_info: dict) -> bool:
         recommendation = str(trade_info.get('recommendation', ''))
         signal_source = str(trade_info.get('signal_source', ''))
         return recommendation == 'HOLD (Up-Trend)' and signal_source == 'rules'
 
-    def _passes_downtrend_reversal_filter(self, coin_data: Dict) -> Tuple[bool, str]:
-        """Allows down-trend fallback entries only for oversold coins with improving CatBoost odds."""
+    def _passes_downtrend_reversal_filter(self, coin_data: dict) -> tuple[bool, str]:
+        """Allows down-trend fallback entries only for oversold coins with improving tabular odds."""
         recommendation = str(coin_data.get('recommendation', ''))
         if recommendation != 'HOLD (Down-Trend)':
             return True, 'not_downtrend'
@@ -3448,7 +2719,7 @@ class CryptoTradingBot:
     def _allows_entry_signal(
         recommendation: str,
         downtrend_reversal_allowed: bool,
-        excluded_signals: Set[str],
+        excluded_signals: set[str],
     ) -> bool:
         """Keeps explicit downtrend-reversal approvals eligible even when generic exits block downtrend entries."""
         if recommendation != 'HOLD (Down-Trend)':
@@ -3456,11 +2727,169 @@ class CryptoTradingBot:
         return downtrend_reversal_allowed
 
     @staticmethod
-    def _is_downtrend_reversal_trade(trade_info: Dict) -> bool:
+    def _is_downtrend_reversal_trade(trade_info: dict) -> bool:
         """Returns True for trades opened via the guarded downtrend reversal path."""
         return str(trade_info.get('recommendation', '')) == 'HOLD (Down-Trend)'
 
-    def _analyze_coin(self, coin: str, current_price: float) -> Optional[Dict]:
+    def _build_tabular_features(
+        self,
+        ohlcv_df,
+        close,
+        current_price: float,
+        rsi: float,
+        sma_short: float,
+        sma_long: float,
+        atr_14: float,
+    ) -> tuple[pd.DataFrame, float]:
+        """Build the tabular model feature row and return it with the MACD histogram."""
+        n = len(ohlcv_df)
+        latest = ohlcv_df.iloc[-1]
+
+        # MACD + signal + histogram
+        ema12 = close.ewm(span=12, adjust=False).mean()
+        ema26 = close.ewm(span=26, adjust=False).mean()
+        macd_line = ema12 - ema26
+        macd_signal_line = macd_line.ewm(span=9, adjust=False).mean()
+        _macd = float(macd_line.iloc[-1])
+        _macd_sig = float(macd_signal_line.iloc[-1])
+        _macd_hist = _macd - _macd_sig
+        macd_hist = _macd_hist
+
+        # EMAs
+        _ema20 = float(
+            close.ewm(span=20, adjust=False).mean().iloc[-1])
+        _ema50 = float(
+            close.ewm(span=50, adjust=False).mean().iloc[-1])
+        _ema200 = float(
+            close.ewm(span=200, adjust=False).mean().iloc[-1])
+
+        # Stochastic %K/%D
+        _stoch_k, _stoch_d = 50.0, 50.0
+        if n >= 17:
+            low14 = ohlcv_df['low'].rolling(14).min()
+            high14 = ohlcv_df['high'].rolling(14).max()
+            _raw_k = 100.0 * (close - low14) / (high14 - low14 + 1e-12)
+            _stoch_k = float(_raw_k.rolling(3).mean().iloc[-1])
+            _stoch_d = float(_raw_k.rolling(
+                3).mean().rolling(3).mean().iloc[-1])
+
+        # CCI 20
+        _cci = 0.0
+        if n >= 20:
+            tp = (ohlcv_df['high'] + ohlcv_df['low'] + close) / 3.0
+            tp_sma = tp.rolling(20).mean()
+            tp_mad = tp.rolling(20).apply(
+                lambda x: np.mean(np.abs(x - x.mean())), raw=True)
+            _cci = float(
+                ((tp - tp_sma) / (0.015 * tp_mad + 1e-12)).iloc[-1])
+
+        # OBV
+        if n >= 2:
+            _direction = np.sign(close.diff().fillna(0))
+            _obv = float(
+                (_direction * ohlcv_df['volume']).cumsum().iloc[-1])
+        else:
+            _obv = 0.0
+
+        # Bollinger Bands (20, 2)
+        _bb_mid = float(close.rolling(20).mean(
+        ).iloc[-1]) if n >= 20 else float(current_price)
+        _bb_std = float(close.rolling(
+            20).std().iloc[-1]) if n >= 20 else 0.0
+        _bb_upper = _bb_mid + 2.0 * _bb_std
+        _bb_lower = _bb_mid - 2.0 * _bb_std
+
+        # Return features
+        _ret1 = float(close.pct_change(1).iloc[-1]) if n >= 2 else 0.0
+        _ret3 = float(close.pct_change(3).iloc[-1]) if n >= 4 else 0.0
+        _ret6 = float(close.pct_change(6).iloc[-1]) if n >= 7 else 0.0
+        _vol6 = float(close.pct_change().rolling(
+            6).std().iloc[-1]) if n >= 7 else 0.0
+
+        row_data = pd.DataFrame([{
+            'rsi': float(rsi) if not np.isnan(rsi) else 50.0,
+            'macd': _macd,
+            'macd_signal': _macd_sig,
+            'macd_hist': _macd_hist,
+            'sma_50': float(sma_short) if not np.isnan(sma_short) else float(current_price),
+            'sma_200': float(sma_long) if not np.isnan(sma_long) else float(current_price),
+            'ema_20': _ema20,
+            'ema_50': _ema50,
+            'ema_200': _ema200,
+            'atr_14': atr_14 if math.isfinite(atr_14) else 0.0,
+            'stoch_k': _stoch_k,
+            'stoch_d': _stoch_d,
+            'cci_20': _cci,
+            'obv': _obv,
+            'bb_upper': _bb_upper,
+            'bb_middle': _bb_mid,
+            'bb_lower': _bb_lower,
+            'volume': float(latest['volume']) if 'volume' in latest else 0.0,
+            'ret_1': _ret1,
+            'ret_3': _ret3,
+            'ret_6': _ret6,
+            'vol_6': _vol6,
+        }])
+
+        return row_data, macd_hist
+
+    def _apply_ml_signal(
+        self,
+        coin: str,
+        ohlcv_df,
+        current_price: float,
+        rsi: float,
+        recommendation: str,
+        score: int,
+        signal_source: str,
+        signal_confidence,
+    ) -> tuple[str, int, str, Any]:
+        """Run the optional ML predictor and weave its signal into the rule result."""
+        if self.ml_predictor is None:
+            return recommendation, score, signal_source, signal_confidence
+        try:
+            macd = self._calculate_macd(ohlcv_df['close'])
+            row_data = pd.DataFrame([{
+                'coin': coin,
+                'timestamp': int(ohlcv_df['timestamp'].iloc[-1].timestamp() * 1000),
+                'open': float(ohlcv_df['open'].iloc[-1]),
+                'high': float(ohlcv_df['high'].iloc[-1]),
+                'low': float(ohlcv_df['low'].iloc[-1]),
+                'close': float(current_price),
+                'volume': float(ohlcv_df['volume'].iloc[-1]),
+                'rsi': float(rsi) if not np.isnan(rsi) else 50.0,
+                'macd': float(macd) if not np.isnan(macd) else 0.0,
+            }])
+            ml_result = self.ml_predictor.predict(row_data)
+            ml_decision = ml_result['decision']
+            ml_confidence = ml_result['confidence']
+            logger.info(
+                f"  🤖 ML for {coin}: {ml_decision.upper()} "
+                f"(Confidence: {ml_confidence*100:.0f}%, "
+                f"Votes: {ml_result.get('llm_votes', {})}, "
+                f"Rule: {ml_result.get('rule', '-')})")
+
+            # Ensemble: weave ML signal into score/recommendation
+            if ml_confidence >= self.config.ml_min_confidence:
+                signal_source = 'llm'
+                signal_confidence = ml_confidence
+                if ml_decision == 'kaufen':
+                    if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'HOLD (Down-Trend)']:
+                        recommendation = 'BUY'
+                        score = max(score, 70)
+                    elif recommendation in ['BUY', 'STRONG BUY']:
+                        score = min(score + int(ml_confidence * 15), 95)
+                elif ml_decision == 'verkaufen':
+                    if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'BUY', 'STRONG BUY']:
+                        recommendation = 'WEAK SELL'
+                        score = min(score, 30)
+                    elif recommendation in ['SELL', 'WEAK SELL']:
+                        score = max(score - int(ml_confidence * 10), 5)
+        except (IndexError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
+            logger.warning(f"ML prediction for {coin} failed: {e}")
+        return recommendation, score, signal_source, signal_confidence
+
+    def _analyze_coin(self, coin: str, current_price: float) -> dict | None:
         """Performs a detailed analysis for a single coin."""
         symbol = f"{coin}/{self.config.base_currency}"
         ohlcv_df = self._fetch_ohlcv_data(
@@ -3486,173 +2915,41 @@ class CryptoTradingBot:
             3).iloc[-1]) if len(ohlcv_df) >= 4 else 0.0
 
         # Simple strategy based on indicators
-        recommendation = "HOLD"
-        score = 50  # Neutral score
+        recommendation, score = get_rule_recommendation(
+            rsi, sma_short, sma_long, current_price
+        )
         signal_source = 'rules'
         signal_confidence = None
         tab_buy_proba = None
         tab_hold_proba = None
         tab_sell_proba = None
+        tabular_sell_veto = False
         macd_hist = None
-
-        if not np.isnan(rsi) and not np.isnan(sma_short) and not np.isnan(sma_long):
-            if rsi < 30 and sma_short > sma_long and current_price > sma_short:
-                recommendation = "STRONG BUY"
-                score = 90
-            elif rsi < 40 and sma_short > sma_long:
-                recommendation = "BUY"
-                score = 75
-            elif rsi > 70 and sma_short < sma_long and current_price < sma_short:
-                recommendation = "SELL"
-                score = 10
-            elif rsi > 60 and sma_short < sma_long:
-                recommendation = "WEAK SELL"
-                score = 25
-            elif sma_short > sma_long:
-                recommendation = "HOLD (Up-Trend)"
-                score = 60
-            elif sma_short < sma_long:
-                recommendation = "HOLD (Down-Trend)"
-                score = 40
+        atr_14 = float(self._calculate_atr(ohlcv_df, 14))
+        atr_pct = (
+            atr_14 / current_price
+            if math.isfinite(atr_14) and math.isfinite(current_price) and current_price > 0
+            else None
+        )
 
         rule_recommendation = recommendation
         rule_score = score
 
         # ML model analysis (optional, only if loaded and data is valid)
-        if self.ml_predictor is not None:
-            try:
-                macd = self._calculate_macd(ohlcv_df['close'])
-                row_data = pd.DataFrame([{
-                    'coin': coin,
-                    'timestamp': int(ohlcv_df['timestamp'].iloc[-1].timestamp() * 1000),
-                    'open': float(ohlcv_df['open'].iloc[-1]),
-                    'high': float(ohlcv_df['high'].iloc[-1]),
-                    'low': float(ohlcv_df['low'].iloc[-1]),
-                    'close': float(current_price),
-                    'volume': float(ohlcv_df['volume'].iloc[-1]),
-                    'rsi': float(rsi) if not np.isnan(rsi) else 50.0,
-                    'macd': float(macd) if not np.isnan(macd) else 0.0,
-                }])
-                ml_result = self.ml_predictor.predict(row_data)
-                ml_decision = ml_result['decision']
-                ml_confidence = ml_result['confidence']
-                logger.info(
-                    f"  🤖 ML for {coin}: {ml_decision.upper()} "
-                    f"(Confidence: {ml_confidence*100:.0f}%, "
-                    f"Votes: {ml_result.get('llm_votes', {})}, "
-                    f"Rule: {ml_result.get('rule', '-')})")
-
-                # Ensemble: weave ML signal into score/recommendation
-                if ml_confidence >= self.config.ml_min_confidence:
-                    signal_source = 'llm'
-                    signal_confidence = ml_confidence
-                    if ml_decision == 'kaufen':
-                        if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'HOLD (Down-Trend)']:
-                            recommendation = 'BUY'
-                            score = max(score, 70)
-                        elif recommendation in ['BUY', 'STRONG BUY']:
-                            score = min(score + int(ml_confidence * 15), 95)
-                    elif ml_decision == 'verkaufen':
-                        if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'BUY', 'STRONG BUY']:
-                            recommendation = 'WEAK SELL'
-                            score = min(score, 30)
-                        elif recommendation in ['SELL', 'WEAK SELL']:
-                            score = max(score - int(ml_confidence * 10), 5)
-            except Exception as e:
-                logger.warning(f"ML prediction for {coin} failed: {e}")
+        recommendation, score, signal_source, signal_confidence = (
+            self._apply_ml_signal(
+                coin, ohlcv_df, current_price, rsi, recommendation, score,
+                signal_source, signal_confidence,
+            )
+        )
 
         # Fast tabular model analysis (optional)
         if self.tabular_predictor is not None:
             try:
-                n = len(ohlcv_df)
-                latest = ohlcv_df.iloc[-1]
-
-                # MACD + signal + histogram
-                ema12 = close.ewm(span=12, adjust=False).mean()
-                ema26 = close.ewm(span=26, adjust=False).mean()
-                macd_line = ema12 - ema26
-                macd_signal_line = macd_line.ewm(span=9, adjust=False).mean()
-                _macd = float(macd_line.iloc[-1])
-                _macd_sig = float(macd_signal_line.iloc[-1])
-                _macd_hist = _macd - _macd_sig
-                macd_hist = _macd_hist
-
-                # EMAs
-                _ema20 = float(
-                    close.ewm(span=20, adjust=False).mean().iloc[-1])
-                _ema50 = float(
-                    close.ewm(span=50, adjust=False).mean().iloc[-1])
-                _ema200 = float(
-                    close.ewm(span=200, adjust=False).mean().iloc[-1])
-
-                # Stochastic %K/%D
-                _stoch_k, _stoch_d = 50.0, 50.0
-                if n >= 17:
-                    low14 = ohlcv_df['low'].rolling(14).min()
-                    high14 = ohlcv_df['high'].rolling(14).max()
-                    _raw_k = 100.0 * (close - low14) / (high14 - low14 + 1e-12)
-                    _stoch_k = float(_raw_k.rolling(3).mean().iloc[-1])
-                    _stoch_d = float(_raw_k.rolling(
-                        3).mean().rolling(3).mean().iloc[-1])
-
-                # CCI 20
-                _cci = 0.0
-                if n >= 20:
-                    tp = (ohlcv_df['high'] + ohlcv_df['low'] + close) / 3.0
-                    tp_sma = tp.rolling(20).mean()
-                    tp_mad = tp.rolling(20).apply(
-                        lambda x: np.mean(np.abs(x - x.mean())), raw=True)
-                    _cci = float(
-                        ((tp - tp_sma) / (0.015 * tp_mad + 1e-12)).iloc[-1])
-
-                # OBV
-                if n >= 2:
-                    _direction = np.sign(close.diff().fillna(0))
-                    _obv = float(
-                        (_direction * ohlcv_df['volume']).cumsum().iloc[-1])
-                else:
-                    _obv = 0.0
-
-                # Bollinger Bands (20, 2)
-                _bb_mid = float(close.rolling(20).mean(
-                ).iloc[-1]) if n >= 20 else float(current_price)
-                _bb_std = float(close.rolling(
-                    20).std().iloc[-1]) if n >= 20 else 0.0
-                _bb_upper = _bb_mid + 2.0 * _bb_std
-                _bb_lower = _bb_mid - 2.0 * _bb_std
-
-                # Return features
-                _ret1 = float(close.pct_change(1).iloc[-1]) if n >= 2 else 0.0
-                _ret3 = float(close.pct_change(3).iloc[-1]) if n >= 4 else 0.0
-                _ret6 = float(close.pct_change(6).iloc[-1]) if n >= 7 else 0.0
-                _vol6 = float(close.pct_change().rolling(
-                    6).std().iloc[-1]) if n >= 7 else 0.0
-
-                row_data = pd.DataFrame([{
-                    'rsi': float(rsi) if not np.isnan(rsi) else 50.0,
-                    'macd': _macd,
-                    'macd_signal': _macd_sig,
-                    'macd_hist': _macd_hist,
-                    'sma_50': float(sma_short) if not np.isnan(sma_short) else float(current_price),
-                    'sma_200': float(sma_long) if not np.isnan(sma_long) else float(current_price),
-                    'ema_20': _ema20,
-                    'ema_50': _ema50,
-                    'ema_200': _ema200,
-                    'atr_14': float(self._calculate_atr(ohlcv_df, 14)) if n >= 15 else 0.0,
-                    'stoch_k': _stoch_k,
-                    'stoch_d': _stoch_d,
-                    'cci_20': _cci,
-                    'obv': _obv,
-                    'bb_upper': _bb_upper,
-                    'bb_middle': _bb_mid,
-                    'bb_lower': _bb_lower,
-                    'volume': float(latest['volume']) if 'volume' in latest else 0.0,
-                    'ret_1': _ret1,
-                    'ret_3': _ret3,
-                    'ret_6': _ret6,
-                    'vol_6': _vol6,
-                }])
-
+                row_data, macd_hist = self._build_tabular_features(
+                    ohlcv_df, close, current_price, rsi, sma_short, sma_long,
+                    atr_14,
+                )
                 tab_result = self.tabular_predictor.predict(
                     row_data, confidence_threshold=self.config.tabular_min_confidence)
                 tab_decision = tab_result.get('decision', 'halten')
@@ -3661,22 +2958,32 @@ class CryptoTradingBot:
                 tab_sell_proba = float(tab_proba.get('verkaufen', 0.0))
                 tab_hold_proba = float(tab_proba.get('halten', 0.0))
                 tab_buy_proba = float(tab_proba.get('kaufen', 0.0))
+                model_name = self.config.tabular_model_backend.upper()
                 logger.info(
-                    f"  📊 CatBoost for {coin}: {tab_decision.upper()} "
+                    f"  📊 {model_name} for {coin}: {tab_decision.upper()} "
                     f"(Confidence: {tab_confidence*100:.0f}%, Proba: {tab_proba})")
 
-                # Safety filter: block new entries even on rules-BUYs
-                # if CatBoost sees a high-probability sell signal.
-                if self.config.tabular_block_on_sell and tab_sell_proba >= self.config.tabular_sell_block_min_proba:
-                    if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'HOLD (Down-Trend)', 'BUY', 'STRONG BUY']:
-                        recommendation = 'WEAK SELL'
-                        score = min(score, 25)
-                        signal_source = 'catboost'
-                        signal_confidence = tab_sell_proba
-                        logger.info(
-                            f"  🛡️ CatBoost sell-filter active for {coin}: "
-                            f"P(sell)={tab_sell_proba*100:.0f}% >= "
-                            f"{self.config.tabular_sell_block_min_proba*100:.0f}%")
+                # A decisive tabular SELL is a separate veto; HOLD or low-confidence
+                # predictions are not treated as sell evidence.
+                if (
+                    self.config.tabular_block_on_sell
+                    and tab_decision == 'verkaufen'
+                    and tab_confidence >= max(
+                        self.config.tabular_min_confidence,
+                        self.config.tabular_sell_block_min_proba,
+                    )
+                    and tab_sell_proba >= self.config.tabular_sell_block_min_proba
+                    and recommendation in ['HOLD', 'HOLD (Up-Trend)', 'HOLD (Down-Trend)', 'BUY', 'STRONG BUY']
+                ):
+                    tabular_sell_veto = True
+                    recommendation = 'WEAK SELL'
+                    score = min(score, 25)
+                    signal_source = self.config.tabular_model_backend
+                    signal_confidence = tab_sell_proba
+                    logger.info(
+                        f"  🛡️ {model_name} sell-filter active for {coin}: "
+                        f"P(sell)={tab_sell_proba*100:.0f}% >= "
+                        f"{self.config.tabular_sell_block_min_proba*100:.0f}%")
 
                 should_apply, gate_reason = self._should_apply_tabular_signal(
                     rule_recommendation=rule_recommendation,
@@ -3684,16 +2991,32 @@ class CryptoTradingBot:
                     tab_decision=tab_decision,
                     tab_confidence=tab_confidence,
                 )
+                if (
+                    self.config.tabular_block_on_sell
+                    and tab_decision == 'verkaufen'
+                    and rule_recommendation in ['BUY', 'STRONG BUY']
+                    and not tabular_sell_veto
+                ):
+                    should_apply = False
+                    gate_reason = 'sell_below_entry_veto_threshold'
+                    logger.info(
+                        "  🛡️ %s sell signal below entry-veto threshold for %s; "
+                        "preserving rule BUY (P(sell)=%.0f%%, threshold=%.0f%%)",
+                        model_name,
+                        coin,
+                        tab_sell_proba * 100,
+                        self.config.tabular_sell_block_min_proba * 100,
+                    )
                 required_confidence = self.config.tabular_buy_min_confidence if tab_decision == 'kaufen' else self.config.tabular_min_confidence
                 if tab_confidence >= required_confidence and not should_apply:
                     logger.info(
-                        f"  🚧 CatBoost gated for {coin}: {gate_reason} "
+                        f"  🚧 {model_name} gated for {coin}: {gate_reason} "
                         f"(rule={rule_recommendation}, rule_score={rule_score}, "
                         f"tab_decision={tab_decision}, tab_confidence={tab_confidence*100:.0f}%)"
                     )
 
                 if should_apply:
-                    signal_source = 'catboost'
+                    signal_source = self.config.tabular_model_backend
                     signal_confidence = tab_confidence
                     if tab_decision == 'kaufen':
                         if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'HOLD (Down-Trend)']:
@@ -3707,9 +3030,24 @@ class CryptoTradingBot:
                             score = min(score, 28)
                         elif recommendation in ['SELL', 'WEAK SELL']:
                             score = max(score - int(tab_confidence * 8), 3)
-            except Exception as e:
-                logger.warning(
-                    f"CatBoost prediction for {coin} failed: {e}")
+            except (IndexError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
+                if self.config.tabular_model_backend == 'hailo':
+                    logger.error(
+                        "Hailo prediction for %s failed; suppressing this coin's entries: %s",
+                        coin,
+                        e,
+                    )
+                    recommendation = 'HOLD'
+                    score = 0
+                    signal_source = 'hailo_unavailable'
+                    signal_confidence = 0.0
+                    tab_sell_proba = 0.0
+                    tab_hold_proba = 0.0
+                    tab_buy_proba = 0.0
+                    tabular_sell_veto = False
+                else:
+                    logger.warning(
+                        f"CatBoost prediction for {coin} failed: {e}")
 
         return {
             'rsi': rsi,
@@ -3727,10 +3065,13 @@ class CryptoTradingBot:
             'tabular_buy_proba': tab_buy_proba,
             'tabular_hold_proba': tab_hold_proba,
             'tabular_sell_proba': tab_sell_proba,
+            'tabular_sell_veto': tabular_sell_veto,
+            'atr_14': atr_14 if math.isfinite(atr_14) else None,
+            'atr_pct': atr_pct,
             'macd_hist': macd_hist,
         }
 
-    def _analyze_markets(self, market_data: Dict[str, Dict], extra_coins: Optional[List[str]] = None) -> Dict[str, Dict]:
+    def _analyze_markets(self, market_data: dict[str, dict], extra_coins: list[str] | None = None) -> dict[str, dict]:
         """Performs a comprehensive market analysis and returns recommendations."""
         dynamic_excluded_coins = self._dynamic_excluded_coins()
         if dynamic_excluded_coins:
@@ -3768,7 +3109,7 @@ class CryptoTradingBot:
                 if coin in market_data and coin not in coins_for_detailed_analysis:
                     coins_for_detailed_analysis.append(coin)
 
-        analysis: Dict[str, Dict] = {}
+        analysis: dict[str, dict] = {}
         total_analysis_coins = len(coins_for_detailed_analysis)
         for idx, coin in enumerate(coins_for_detailed_analysis, start=1):
             logger.info(
@@ -3793,113 +3134,462 @@ class CryptoTradingBot:
             sorted(analysis.items(), key=lambda x: x[1]['score'], reverse=True))
         return sorted_analysis
 
+    def _confirm_order_fill(
+        self,
+        order: dict[str, Any],
+        symbol: str,
+        requested_amount: float,
+        fallback_price: float,
+    ) -> tuple[float, float, float]:
+        if not isinstance(order, dict):
+            raise TypeError("Exchange order response is not an object.")
+        status = str(order.get("status", "")).lower()
+        terminal_statuses = {"closed", "filled", "canceled", "cancelled", "expired", "rejected"}
+        if status in terminal_statuses:
+            try:
+                return _order_fill_details(order, requested_amount, fallback_price)
+            except (TypeError, ValueError) as exc:
+                order_id = order.get("id")
+                if not order_id:
+                    raise ValueError(
+                        "Terminal order response has no usable fill details or order ID."
+                    ) from exc
+        else:
+            order_id = order.get("id")
+            if not order_id or self.exchange is None:
+                raise ValueError(
+                    "Unconfirmed order response has no usable order ID."
+                )
+
+        cancel_error = None
+        if status not in terminal_statuses:
+            try:
+                self.exchange.cancel_order(order_id, symbol)
+            except (ccxt.OrderNotFound, ccxt.InvalidOrder):
+                pass
+            except (ccxt.NetworkError, ccxt.ExchangeError) as exc:
+                cancel_error = exc
+
+        try:
+            refreshed_order = self.exchange.fetch_order(order_id, symbol)
+        except (ccxt.NetworkError, ccxt.ExchangeError) as exc:
+            raise ValueError(
+                f"Could not refresh order {order_id} to confirm its final state."
+            ) from exc
+
+        if not isinstance(refreshed_order, dict):
+            raise TypeError(f"Order {order_id} refresh returned an invalid response.")
+        refreshed_status = str(refreshed_order.get("status", "")).lower()
+        if refreshed_status not in terminal_statuses:
+            error = ValueError(
+                f"Order {order_id} remains non-terminal ({refreshed_status or 'unknown'}); "
+                "fill state is not safe to account."
+            )
+            if cancel_error:
+                raise error from cancel_error
+            raise error
+
+        try:
+            return _order_fill_details(refreshed_order, requested_amount, fallback_price)
+        except (TypeError, ValueError) as exc:
+            if status in terminal_statuses:
+                try:
+                    return _order_fill_details(order, requested_amount, fallback_price)
+                except (TypeError, ValueError):
+                    pass
+            else:
+                raise ValueError(
+                    f"Order {order_id} has no usable confirmed fill details."
+                ) from exc
+            raise ValueError(
+                f"Order {order_id} has no usable confirmed fill details."
+            ) from exc
+
     def _execute_trade(
         self,
         coin: str,
         action: str,
         price: float,
         amount_in_base_currency: float,
-        atr: float = None,
+        atr: float | None = None,
         signal_source: str = 'rules',
-        signal_confidence: Optional[float] = None,
+        signal_confidence: float | None = None,
         recommendation: str = 'HOLD',
         reason: str = '',
+        partial_take_profit: bool = False,
     ):
         """
         Executes a (simulated) trade.
         Uses market orders for simplicity; limit orders would be preferable in a real bot.
         """
+        if self._public_paper_mode() and getattr(self, '_paper_trade_failed', False):
+            raise RuntimeError("Paper trade transaction failed; restart to recover")
         if self.config.dry_run:
-            amount_coin = amount_in_base_currency / price
-            logger.info(
-                f"💰 DRY-RUN: Would {action.upper()} {amount_coin:.4f} {coin} at {price:.4f} {self.config.base_currency} (total: {amount_in_base_currency:.2f} {self.config.base_currency})")
-            if action == "buy":
-                if self.portfolio.cash < amount_in_base_currency:
-                    logger.warning(
-                        f"Insufficient cash for DRY-RUN buy of {coin}: {self.portfolio.cash:.2f} < {amount_in_base_currency:.2f} {self.config.base_currency}")
-                    return False
-                self.portfolio.cash -= amount_in_base_currency
-                self.portfolio.holdings[coin] = self.portfolio.holdings.get(
-                    coin, 0.0) + amount_coin
-                self.portfolio.add_trade(
-                    coin,
-                    price,
-                    amount_coin,
-                    amount_in_base_currency,
-                    signal_source=signal_source,
-                    signal_confidence=signal_confidence,
-                    recommendation=recommendation,
-                )
-                self.performance['buys'] += 1
-                self.performance['by_source'][signal_source]['buys'] += 1
-                self._register_buy_timestamp()
-                self._append_trade_journal({
-                    'coin': coin,
-                    'action': 'buy',
-                    'price': price,
-                    'amount_coin': amount_coin,
-                    'amount_base': amount_in_base_currency,
-                    'signal_source': signal_source,
-                    'signal_confidence': signal_confidence,
-                    'recommendation': recommendation,
-                    'reason': reason,
-                    'dry_run': True,
-                })
-                # Persist portfolio state after successful dry-run buy
-                if self.config.dry_run:
-                    self.portfolio.save_state()
-            elif action == "sell":
-                held = self.portfolio.holdings.get(coin, 0.0)
-                sell_amount = min(amount_coin, held)
-                if sell_amount <= 0:
-                    logger.warning(
-                        f"DRY-RUN sell skipped, no holdings for {coin}.")
-                    return False
-                self.portfolio.cash += sell_amount * price
-                remaining = held - sell_amount
-                if remaining > 1e-12:
-                    self.portfolio.holdings[coin] = remaining
-                elif coin in self.portfolio.holdings:
-                    del self.portfolio.holdings[coin]
+            return self._execute_dry_run_trade(
+                coin, action, price, amount_in_base_currency,
+                signal_source=signal_source,
+                signal_confidence=signal_confidence,
+                recommendation=recommendation,
+                reason=reason,
+                partial_take_profit=partial_take_profit,
+            )
+        return self._execute_real_trade(
+            coin, action, price, amount_in_base_currency,
+            signal_source=signal_source,
+            signal_confidence=signal_confidence,
+            recommendation=recommendation,
+            reason=reason,
+        )
 
-                entry_trade = self.portfolio.open_trades.get(coin, {})
-                original_amount_coin = float(
-                    entry_trade.get('amount_coin', sell_amount))
-                remaining_open_amount = max(
-                    0.0, original_amount_coin - sell_amount)
-                remaining_ratio = (
-                    remaining_open_amount / original_amount_coin
-                    if original_amount_coin > 0 else 0.0
-                )
-                pnl_base, pnl_pct, hold_seconds = self._record_close_performance(
-                    entry_trade, price, sell_amount)
-                self._append_trade_journal({
-                    'coin': coin,
-                    'action': 'sell',
-                    'price': price,
-                    'amount_coin': sell_amount,
-                    'amount_base': sell_amount * price,
-                    'pnl_base': pnl_base,
-                    'pnl_pct': pnl_pct,
-                    'hold_seconds': hold_seconds,
-                    'signal_source': entry_trade.get('signal_source', 'rules'),
-                    'signal_confidence': entry_trade.get('signal_confidence', ''),
-                    'recommendation': entry_trade.get('recommendation', ''),
-                    'reason': reason,
-                    'dry_run': True,
-                })
-                self._register_sell_timestamp(coin)
-                if remaining_open_amount > 1e-12 and coin in self.portfolio.open_trades:
-                    self.portfolio.open_trades[coin]['amount_coin'] = remaining_open_amount
-                    self.portfolio.open_trades[coin]['amount_base'] = float(
-                        entry_trade.get('amount_base', 0.0)) * remaining_ratio
-                else:
-                    self.portfolio.remove_trade(coin)
-                # Persist portfolio state after successful dry-run sell
-                if self.config.dry_run:
-                    self.portfolio.save_state()
-            return True
+    def _execute_dry_run_trade(
+        self,
+        coin: str,
+        action: str,
+        price: float,
+        amount_in_base_currency: float,
+        *,
+        signal_source: str = 'rules',
+        signal_confidence: float | None = None,
+        recommendation: str = 'HOLD',
+        reason: str = '',
+        partial_take_profit: bool = False,
+    ):
+        """Simulated (dry-run / paper) trade execution."""
+        costs_enabled = self.config.dry_run_costs_enabled
+        tracked_entry = self.portfolio.open_trades.get(coin, {})
+        net_tracked = (
+            action == 'sell' and isinstance(tracked_entry, dict)
+            and tracked_entry.get('execution_cost_mode') == 'net_costs'
+        )
+        plan = self._plan_dry_run_fill(
+            coin, action, price, amount_in_base_currency,
+            costs_enabled, net_tracked)
+        if plan is None:
+            return False
+        fill_price, amount_coin = plan
+        logger.info(
+            "💰 DRY-RUN: %s %.8f %s reference=%.8f fill=%.8f %s "
+            "requested_base=%.8f cost_mode=%s",
+            action.upper(), amount_coin, coin, price, fill_price,
+            self.config.base_currency, amount_in_base_currency,
+            'net_costs' if costs_enabled else 'gross_legacy')
+        if action == "buy":
+            return self._dry_run_buy(
+                coin, price, amount_in_base_currency, amount_coin,
+                fill_price, costs_enabled, signal_source,
+                signal_confidence, recommendation, reason)
+        if action == "sell":
+            return self._dry_run_sell(
+                coin, price, amount_coin, fill_price, costs_enabled,
+                net_tracked, tracked_entry, reason, partial_take_profit)
+        return True
 
+    def _plan_dry_run_fill(
+        self,
+        coin: str,
+        action: str,
+        price: float,
+        amount_in_base_currency: float,
+        costs_enabled: bool,
+        net_tracked: bool,
+    ) -> tuple[float, float] | None:
+        """Validate a dry-run request and compute (fill_price, amount_coin).
+
+        Returns None when the request is invalid or the calculation breaks down.
+        """
+        if (costs_enabled or net_tracked) and (
+            action not in ('buy', 'sell')
+            or not math.isfinite(price) or price <= 0
+            or not math.isfinite(amount_in_base_currency)
+            or amount_in_base_currency <= 0
+        ):
+            logger.warning("Invalid DRY-RUN trade request for %s", coin)
+            return None
+        amount_coin = amount_in_base_currency / price
+        if costs_enabled and action == 'buy':
+            fill_price = price * (1.0 + self.config.dry_run_slippage_rate)
+            amount_coin = amount_in_base_currency / (
+                fill_price * (1.0 + self.config.dry_run_fee_rate))
+        else:
+            fill_price = price * (
+                1.0 - self.config.dry_run_slippage_rate
+                if costs_enabled else 1.0)
+        if costs_enabled and (
+            not math.isfinite(fill_price) or fill_price <= 0
+            or not math.isfinite(amount_coin) or amount_coin <= 0
+        ):
+            logger.warning("DRY-RUN trade calculation invalid for %s", coin)
+            return None
+        return fill_price, amount_coin
+
+    def _dry_run_buy(
+        self,
+        coin: str,
+        price: float,
+        amount_in_base_currency: float,
+        amount_coin: float,
+        fill_price: float,
+        costs_enabled: bool,
+        signal_source: str,
+        signal_confidence: float | None,
+        recommendation: str,
+        reason: str,
+    ) -> bool:
+        """Dry-run buy branch of _execute_dry_run_trade."""
+        if costs_enabled and (
+            coin in self.portfolio.open_trades
+            or self.portfolio.holdings.get(coin, 0.0) > 1e-12
+        ):
+            logger.warning("DRY-RUN buy skipped for existing %s position", coin)
+            return False
+        if self.portfolio.cash < amount_in_base_currency:
+            logger.warning(
+                f"Insufficient cash for DRY-RUN buy of {coin}: {self.portfolio.cash:.2f} < {amount_in_base_currency:.2f} {self.config.base_currency}")
+            return False
+        self.portfolio.cash -= amount_in_base_currency
+        self.portfolio.holdings[coin] = self.portfolio.holdings.get(
+            coin, 0.0) + amount_coin
+        self.portfolio.add_trade(
+            coin,
+            fill_price,
+            amount_coin,
+            amount_in_base_currency,
+            signal_source=signal_source,
+            signal_confidence=signal_confidence,
+            recommendation=recommendation,
+        )
+        if costs_enabled:
+            self.portfolio.open_trades[coin]['execution_cost_mode'] = 'net_costs'
+            self.portfolio.open_trades[coin]['entry_reference_price'] = price
+        self.performance['buys'] += 1
+        self.performance['by_source'][signal_source]['buys'] += 1
+        self._register_buy_timestamp()
+        journal_row = {
+            'coin': coin,
+            'action': 'buy',
+            'price': fill_price,
+            'amount_coin': amount_coin,
+            'amount_base': amount_in_base_currency,
+            'signal_source': signal_source,
+            'signal_confidence': signal_confidence,
+            'recommendation': recommendation,
+            'reason': reason,
+            'dry_run': True,
+            'execution_cost_mode': 'net_costs' if costs_enabled else 'gross_legacy',
+            'reference_price': price,
+            'fee_base': amount_coin * fill_price * self.config.dry_run_fee_rate if costs_enabled else 0.0,
+            'slippage_base': amount_coin * (fill_price - price) if costs_enabled else 0.0,
+        }
+        # Persist portfolio state after successful dry-run buy
+        if self._public_paper_mode():
+            self._commit_paper_trade(journal_row)
+        else:
+            self._append_trade_journal(journal_row)
+            self.portfolio.save_state()
+        return True
+
+    def _dry_run_sell(
+        self,
+        coin: str,
+        price: float,
+        amount_coin: float,
+        fill_price: float,
+        costs_enabled: bool,
+        net_tracked: bool,
+        tracked_entry: dict,
+        reason: str,
+        partial_take_profit: bool,
+    ) -> bool:
+        """Dry-run sell branch of _execute_dry_run_trade."""
+        held = self.portfolio.holdings.get(coin, 0.0)
+        sell_amount = min(amount_coin, held)
+        entry_trade = tracked_entry
+        resolved_entry = self._resolve_dry_run_sell_entry(
+            coin, entry_trade, held, sell_amount, costs_enabled, net_tracked)
+        if resolved_entry is None:
+            return False
+        entry_cost_mode, entry_basis, sell_amount = resolved_entry
+        if sell_amount <= 0:
+            logger.warning(
+                f"DRY-RUN sell skipped, no holdings for {coin}.")
+            return False
+        proceeds_and_fee = self._dry_run_sell_proceeds(
+            coin, sell_amount, fill_price, costs_enabled, net_tracked)
+        if proceeds_and_fee is None:
+            return False
+        proceeds, fee_base = proceeds_and_fee
+        self.portfolio.cash += proceeds
+        self._apply_dry_run_sell_to_holdings(coin, held, sell_amount)
+
+        original_amount_coin = float(
+            entry_trade.get('amount_coin', sell_amount))
+        remaining_open_amount = max(
+            0.0, original_amount_coin - sell_amount)
+        remaining_ratio = (
+            remaining_open_amount / original_amount_coin
+            if original_amount_coin > 0 else 0.0
+        )
+        pnl_base, pnl_pct, hold_seconds = self._record_dry_run_sell_close(
+            entry_trade, fill_price, sell_amount, proceeds, entry_basis,
+            costs_enabled, entry_cost_mode)
+        gross_pnl_base, net_pnl_base = self._dry_run_sell_gross_net_pnl(
+            entry_trade, price, sell_amount, pnl_base, entry_cost_mode)
+        mfe_pct, mae_pct = self._trade_excursion_metrics(entry_trade)
+        journal_row = {
+            'coin': coin,
+            'action': 'sell',
+            'price': fill_price,
+            'amount_coin': sell_amount,
+            'amount_base': proceeds,
+            'pnl_base': pnl_base,
+            'pnl_pct': pnl_pct,
+            'hold_seconds': hold_seconds,
+            'mfe_pct': mfe_pct,
+            'mae_pct': mae_pct,
+            'signal_source': entry_trade.get('signal_source', 'rules'),
+            'signal_confidence': entry_trade.get('signal_confidence', ''),
+            'recommendation': entry_trade.get('recommendation', ''),
+            'reason': reason,
+            'dry_run': True,
+            'execution_cost_mode': 'net_costs' if costs_enabled else 'gross_legacy',
+            'entry_cost_mode': entry_cost_mode,
+            'reference_price': price,
+            'fee_base': fee_base,
+            'slippage_base': sell_amount * (price - fill_price) if costs_enabled else 0.0,
+            'gross_pnl_base': gross_pnl_base,
+            'net_pnl_base': net_pnl_base,
+        }
+        if not self._public_paper_mode():
+            self._append_trade_journal(journal_row)
+        self._register_sell_timestamp(coin)
+        self._update_open_trades_after_dry_run_sell(
+            coin, entry_trade, remaining_open_amount, remaining_ratio,
+            entry_basis, costs_enabled, entry_cost_mode, partial_take_profit)
+        # Persist portfolio state after successful dry-run sell
+        if self._public_paper_mode():
+            self._commit_paper_trade(journal_row)
+        else:
+            self.portfolio.save_state()
+        return True
+
+    def _resolve_dry_run_sell_entry(
+        self, coin: str, entry_trade: dict, held: float,
+        sell_amount: float, costs_enabled: bool, net_tracked: bool,
+    ) -> tuple[str, float | None, float] | None:
+        """Validate the tracked entry and cap the sell amount to its quantity.
+
+        Returns (entry_cost_mode, entry_basis, sell_amount) or *None*
+        when the sell must be skipped.
+        """
+        if costs_enabled and (not isinstance(entry_trade, dict) or not entry_trade):
+            logger.warning("DRY-RUN sell skipped for %s: no tracked entry cost basis", coin)
+            return None
+        entry_cost_mode = entry_trade.get('execution_cost_mode', 'gross_legacy')
+        entry_basis = None
+        if costs_enabled or net_tracked:
+            try:
+                entry_quantity = float(entry_trade.get('amount_coin'))
+                entry_price = float(entry_trade.get('buy_price'))
+                if (not math.isfinite(entry_quantity) or entry_quantity <= 0
+                        or not math.isfinite(entry_price) or entry_price <= 0
+                        or not math.isfinite(held) or held <= 0):
+                    raise ValueError("Invalid entry price, quantity or holdings")
+                entry_basis = self._entry_cost_basis(entry_trade, entry_price, entry_quantity)
+            except (TypeError, ValueError, OverflowError) as exc:
+                logger.warning("DRY-RUN sell skipped for %s: invalid entry cost basis or position: %s", coin, exc)
+                return None
+            sell_amount = min(sell_amount, entry_quantity)
+        return entry_cost_mode, entry_basis, sell_amount
+
+    def _dry_run_sell_proceeds(
+        self, coin: str, sell_amount: float, fill_price: float,
+        costs_enabled: bool, net_tracked: bool,
+    ) -> tuple[float, float] | None:
+        """Net proceeds and fee for a dry-run sell, *None* when invalid."""
+        gross_proceeds = sell_amount * fill_price
+        fee_base = gross_proceeds * self.config.dry_run_fee_rate if costs_enabled else 0.0
+        proceeds = gross_proceeds - fee_base
+        if (costs_enabled or net_tracked) and (not math.isfinite(proceeds) or proceeds <= 0):
+            logger.warning("DRY-RUN proceeds invalid for %s", coin)
+            return None
+        return proceeds, fee_base
+
+    def _apply_dry_run_sell_to_holdings(
+        self, coin: str, held: float, sell_amount: float
+    ) -> None:
+        """Reduce or remove the coin holding after a dry-run sell."""
+        remaining = held - sell_amount
+        if remaining > 1e-12:
+            self.portfolio.holdings[coin] = remaining
+        elif coin in self.portfolio.holdings:
+            del self.portfolio.holdings[coin]
+
+    def _record_dry_run_sell_close(
+        self, entry_trade: dict, fill_price: float, sell_amount: float,
+        proceeds: float, entry_basis: float | None, costs_enabled: bool,
+        entry_cost_mode: str,
+    ) -> tuple[float, float, float]:
+        """Record close performance, net-aware when costs are tracked."""
+        if costs_enabled or entry_cost_mode == 'net_costs':
+            return self._record_close_performance(
+                entry_trade, fill_price, sell_amount, net_proceeds=proceeds,
+                entry_basis=entry_basis)
+        return self._record_close_performance(entry_trade, fill_price, sell_amount)
+
+    def _dry_run_sell_gross_net_pnl(
+        self, entry_trade: dict, price: float, sell_amount: float,
+        pnl_base: float, entry_cost_mode: str,
+    ) -> tuple[str | float, str | float]:
+        """Gross/net PnL pair for the journal; empty strings when unavailable."""
+        gross_pnl_base: str | float = ''
+        net_pnl_base: str | float = ''
+        if entry_cost_mode == 'net_costs':
+            try:
+                entry_reference = float(entry_trade.get('entry_reference_price'))
+            except (TypeError, ValueError):
+                entry_reference = 0.0
+            if (math.isfinite(entry_reference) and entry_reference > 0
+                    and math.isfinite(price) and price > 0):
+                gross_pnl = sell_amount * (price - entry_reference)
+                if math.isfinite(gross_pnl) and math.isfinite(pnl_base):
+                    gross_pnl_base = gross_pnl
+                    net_pnl_base = pnl_base
+        return gross_pnl_base, net_pnl_base
+
+    def _update_open_trades_after_dry_run_sell(
+        self, coin: str, entry_trade: dict,
+        remaining_open_amount: float, remaining_ratio: float,
+        entry_basis: float | None, costs_enabled: bool,
+        entry_cost_mode: str, partial_take_profit: bool,
+    ) -> None:
+        """Scale down the open trade after a partial sell, or remove it."""
+        if remaining_open_amount <= 1e-12 or coin not in self.portfolio.open_trades:
+            self.portfolio.remove_trade(coin)
+            return
+        if costs_enabled or entry_cost_mode == 'net_costs':
+            # _resolve_dry_run_sell_entry guarantees a float basis in this branch.
+            remaining_basis = (entry_basis or 0.0) * remaining_ratio
+        else:
+            remaining_basis = float(entry_trade.get('amount_base', 0.0)) * remaining_ratio
+        self.portfolio.open_trades[coin]['amount_coin'] = remaining_open_amount
+        self.portfolio.open_trades[coin]['amount_base'] = remaining_basis
+        if self._public_paper_mode() and partial_take_profit:
+            self.portfolio.open_trades[coin]['partial_tp_taken'] = True
+            self.portfolio.open_trades[coin]['partial_tp_timestamp'] = datetime.now()
+
+    def _execute_real_trade(
+        self,
+        coin: str,
+        action: str,
+        price: float,
+        amount_in_base_currency: float,
+        *,
+        signal_source: str = 'rules',
+        signal_confidence: float | None = None,
+        recommendation: str = 'HOLD',
+        reason: str = '',
+    ):
+        """Live exchange trade execution (ccxt market orders)."""
         if self.exchange is None:
             logger.error(
                 "Real trade cannot be executed in simulation mode or without an exchange.")
@@ -3918,13 +3608,20 @@ class CryptoTradingBot:
             if action == "buy":
                 order = self.exchange.create_market_buy_order(
                     symbol, amount_in_base_currency / price)
+                try:
+                    filled, average, cost = self._confirm_order_fill(
+                        order, symbol, amount_in_base_currency / price, price
+                    )
+                except (TypeError, ValueError) as exc:
+                    logger.error("Unable to confirm BUY fill for %s: %s", coin, exc)
+                    return False
                 logger.info(
-                    f"✅ REAL TRADE (BUY): {order['amount']:.4f} {coin} @ {order['price']:.4f} {self.config.base_currency} (cost: {order['cost']:.2f} {self.config.base_currency}, ID: {order['id']})")
+                    f"✅ REAL TRADE (BUY): {filled:.4f} {coin} @ {average:.4f} {self.config.base_currency} (cost: {cost:.2f} {self.config.base_currency}, ID: {order.get('id', 'n/a')})")
                 self.portfolio.add_trade(
                     coin,
-                    order['price'],
-                    order['amount'],
-                    order['cost'],
+                    average,
+                    filled,
+                    cost,
                     signal_source=signal_source,
                     signal_confidence=signal_confidence,
                     recommendation=recommendation,
@@ -3935,9 +3632,9 @@ class CryptoTradingBot:
                 self._append_trade_journal({
                     'coin': coin,
                     'action': 'buy',
-                    'price': order.get('price', price),
-                    'amount_coin': order.get('amount', amount_in_base_currency / price),
-                    'amount_base': order.get('cost', amount_in_base_currency),
+                    'price': average,
+                    'amount_coin': filled,
+                    'amount_base': cost,
                     'signal_source': signal_source,
                     'signal_confidence': signal_confidence,
                     'recommendation': recommendation,
@@ -3951,14 +3648,19 @@ class CryptoTradingBot:
                     return False
                 order = self.exchange.create_market_sell_order(
                     symbol, amount_in_base_currency / price)
+                try:
+                    sold_amount_coin, average, cost = self._confirm_order_fill(
+                        order, symbol, amount_in_base_currency / price, price
+                    )
+                except (TypeError, ValueError) as exc:
+                    logger.error("Unable to confirm SELL fill for %s: %s", coin, exc)
+                    return False
                 logger.info(
-                    f"✅ REAL TRADE (SELL): {order['amount']:.4f} {coin} @ {order['price']:.4f} {self.config.base_currency} (proceeds: {order['cost']:.2f} {self.config.base_currency}, ID: {order['id']})")
+                    f"✅ REAL TRADE (SELL): {sold_amount_coin:.4f} {coin} @ {average:.4f} {self.config.base_currency} (proceeds: {cost:.2f} {self.config.base_currency}, ID: {order.get('id', 'n/a')})")
 
                 entry_trade = self.portfolio.open_trades.get(coin, {})
                 original_amount_coin = float(
                     entry_trade.get('amount_coin', amount_in_base_currency / price))
-                sold_amount_coin = float(
-                    order.get('amount', amount_in_base_currency / price))
                 remaining_open_amount = max(
                     0.0, original_amount_coin - sold_amount_coin)
                 remaining_ratio = (
@@ -3966,16 +3668,19 @@ class CryptoTradingBot:
                     if original_amount_coin > 0 else 0.0
                 )
                 pnl_base, pnl_pct, hold_seconds = self._record_close_performance(
-                    entry_trade, float(order.get('price', price)), sold_amount_coin)
+                    entry_trade, average, sold_amount_coin)
+                mfe_pct, mae_pct = self._trade_excursion_metrics(entry_trade)
                 self._append_trade_journal({
                     'coin': coin,
                     'action': 'sell',
-                    'price': order.get('price', price),
+                    'price': average,
                     'amount_coin': sold_amount_coin,
-                    'amount_base': order.get('cost', amount_in_base_currency),
+                    'amount_base': cost,
                     'pnl_base': pnl_base,
                     'pnl_pct': pnl_pct,
                     'hold_seconds': hold_seconds,
+                    'mfe_pct': mfe_pct,
+                    'mae_pct': mae_pct,
                     'signal_source': entry_trade.get('signal_source', 'rules'),
                     'signal_confidence': entry_trade.get('signal_confidence', ''),
                     'recommendation': entry_trade.get('recommendation', ''),
@@ -4002,14 +3707,225 @@ class CryptoTradingBot:
             logger.error(
                 f"Error executing trade ({action} {coin}): {e}")
             return False
-        except Exception as e:
-            logger.error(
-                f"Unexpected error executing trade ({action} {coin}): {e}")
+        except ccxt.BaseError as e:
+            logger.error(f"Exchange error executing trade ({action} {coin}): {e}")
             return False
 
-    def _manage_open_trades(self, current_market_data: Dict[str, Dict], market_analysis: Optional[Dict] = None):
+    def _maybe_partial_take_profit(
+        self,
+        coin: str,
+        trade_info: dict,
+        partial_tp_taken: bool,
+        amount_coin: float,
+        current_price: float,
+        partial_take_profit_level: float,
+        partial_fraction: float,
+        atr: float,
+    ) -> bool:
+        """Execute a partial take-profit sell; return True if the caller should skip the rest."""
+        if (
+            self.config.partial_take_profit_enabled
+            and not partial_tp_taken
+            and 0.0 < partial_fraction < 1.0
+            and current_price >= partial_take_profit_level
+        ):
+            partial_amount_coin = amount_coin * partial_fraction
+            if partial_amount_coin > 1e-12:
+                partial_reason = (
+                    f"💸 PARTIAL-TAKE-PROFIT ({partial_fraction*100:.0f}% @ "
+                    f"{partial_take_profit_level:.4f})"
+                )
+                logger.info(
+                    f"{partial_reason} → Teilverkauf {coin} @ {current_price:.4f}")
+                if self._execute_trade(
+                    coin,
+                    "sell",
+                    current_price,
+                    partial_amount_coin * current_price,
+                    atr=atr,
+                    reason=partial_reason,
+                    partial_take_profit=True,
+                ):
+                    if coin in self.portfolio.open_trades and not self._public_paper_mode():
+                        self.portfolio.open_trades[coin]['partial_tp_taken'] = True
+                        self.portfolio.open_trades[coin]['partial_tp_timestamp'] = datetime.now(
+                        )
+                        if self.config.dry_run:
+                            self.portfolio.save_state()
+                    return True
+                logger.warning(
+                    "Partial take-profit sell failed for %s; continuing "
+                    "with remaining exit checks.",
+                    coin,
+                )
+            return False
+        return False
+
+    def _partial_tp_remainder_exit_reason(
+        self,
+        exit_reason: str | None,
+        coin: str,
+        partial_tp_taken: bool,
+        partial_tp_timestamp,
+        market_analysis: dict | None,
+    ) -> str | None:
+        """Exit reason for the leftover position after a partial take-profit."""
+        if partial_tp_taken and partial_tp_timestamp:
+            partial_tp_elapsed_seconds = (
+                datetime.now() - partial_tp_timestamp).total_seconds()
+            if (
+                self.config.partial_take_profit_remainder_max_hold_seconds > 0
+                and partial_tp_elapsed_seconds >= self.config.partial_take_profit_remainder_max_hold_seconds
+            ):
+                exit_reason = (
+                    "⏱️ PARTIAL-TP-REMAINDER-TIMEOUT "
+                    f"({int(partial_tp_elapsed_seconds)}s >= "
+                    f"{self.config.partial_take_profit_remainder_max_hold_seconds}s)"
+                )
+            elif (
+                self.config.partial_take_profit_exit_on_weak_signal
+                and market_analysis is not None
+            ):
+                signal = market_analysis.get(
+                    coin, {}).get('recommendation', '')
+                if signal in {'SELL', 'WEAK SELL', 'HOLD (Down-Trend)'}:
+                    exit_reason = (
+                        '📉 PARTIAL-TP-REMAINDER-WEAK-SIGNAL '
+                        f'(recommendation: {signal})'
+                    )
+        return exit_reason
+
+    def _downtrend_reversal_exit_reason(
+        self,
+        exit_reason: str | None,
+        coin: str,
+        trade_info: dict,
+        hold_seconds: float,
+        pnl_pct: float,
+        market_analysis: dict | None,
+    ) -> str | None:
+        """Exit reason for downtrend-reversal trades (max-hold, fast, weak-signal)."""
+        is_downtrend_reversal_trade = self._is_downtrend_reversal_trade(
+            trade_info)
+        if (
+            exit_reason is None
+            and is_downtrend_reversal_trade
+            and self.config.downtrend_reversal_fast_exit_enabled
+            and market_analysis is not None
+        ):
+            current_signal = market_analysis.get(
+                coin, {}).get('recommendation', '')
+            if (
+                self.config.downtrend_reversal_max_hold_seconds > 0
+                and hold_seconds >= self.config.downtrend_reversal_max_hold_seconds
+            ):
+                exit_reason = (
+                    '⏱️ DOWNTREND-REVERSAL-MAX-HOLD '
+                    f'({int(hold_seconds)}s >= {self.config.downtrend_reversal_max_hold_seconds}s)'
+                )
+            elif (
+                hold_seconds >= self.config.downtrend_reversal_fast_exit_seconds
+                and pnl_pct <= self.config.downtrend_reversal_flat_max_profit_pct
+                and current_signal in {'HOLD (Down-Trend)', 'WEAK SELL', 'SELL'}
+            ):
+                exit_reason = (
+                    '📉 DOWNTREND-REVERSAL-FAST-EXIT '
+                    f'({pnl_pct:+.2f}% <= {self.config.downtrend_reversal_flat_max_profit_pct:.2f}% '
+                    f'after {int(hold_seconds)}s, signal: {current_signal})'
+                )
+            elif (
+                hold_seconds >= self.config.downtrend_reversal_weak_signal_exit_seconds
+                and pnl_pct <= self.config.downtrend_reversal_weak_signal_max_profit_pct
+                and current_signal in {'HOLD (Down-Trend)', 'WEAK SELL', 'SELL'}
+            ):
+                exit_reason = (
+                    '📉 DOWNTREND-REVERSAL-WEAK-SIGNAL-EXIT '
+                    f'({pnl_pct:+.2f}% <= {self.config.downtrend_reversal_weak_signal_max_profit_pct:.2f}% '
+                    f'after {int(hold_seconds)}s, signal: {current_signal})'
+                )
+        return exit_reason
+
+    def _uptrend_rules_exit_reason(
+        self,
+        exit_reason: str | None,
+        coin: str,
+        trade_info: dict,
+        hold_seconds: float,
+        pnl_pct: float,
+        market_analysis: dict | None,
+    ) -> str | None:
+        """Exit reason for rules-based uptrend trades (max-hold, fast-exit)."""
+        is_rules_uptrend_trade = self._is_rules_uptrend_trade(trade_info)
+        if (
+            exit_reason is None
+            and is_rules_uptrend_trade
+            and self.config.uptrend_rules_fast_exit_enabled
+            and market_analysis is not None
+        ):
+            current_signal = market_analysis.get(
+                coin, {}).get('recommendation', '')
+            fast_exit_seconds = self.config.uptrend_rules_fast_exit_seconds_by_coin.get(
+                coin, self.config.uptrend_rules_fast_exit_seconds)
+            flat_max_profit_pct = self.config.uptrend_rules_flat_max_profit_pct_by_coin.get(
+                coin, self.config.uptrend_rules_flat_max_profit_pct)
+            uptrend_rules_max_hold_seconds = self.config.uptrend_rules_max_hold_seconds_by_coin.get(
+                coin, self.config.uptrend_rules_max_hold_seconds)
+            if (
+                uptrend_rules_max_hold_seconds > 0
+                and hold_seconds >= uptrend_rules_max_hold_seconds
+            ):
+                exit_reason = (
+                    '⏱️ UPTREND-RULES-MAX-HOLD '
+                    f'({int(hold_seconds)}s >= {uptrend_rules_max_hold_seconds}s)'
+                )
+            elif (
+                fast_exit_seconds > 0
+                and hold_seconds >= fast_exit_seconds
+                and pnl_pct <= flat_max_profit_pct
+                and current_signal not in {'BUY', 'STRONG BUY'}
+            ):
+                exit_reason = (
+                    '📉 UPTREND-RULES-FAST-EXIT '
+                    f'({pnl_pct:+.2f}% <= {flat_max_profit_pct:.2f}% '
+                    f'after {int(hold_seconds)}s, signal: {current_signal})'
+                )
+        return exit_reason
+
+    def _core_exit_reason(
+        self,
+        exit_reason: str | None,
+        coin: str,
+        current_price: float,
+        stop_loss_level: float,
+        take_profit_level: float,
+        max_hold_seconds: int,
+        hold_seconds: float,
+        pnl_pct: float,
+        market_analysis: dict | None,
+    ) -> str | None:
+        """Core stop-loss, take-profit, max-hold and signal-based exit checks."""
+        if current_price <= stop_loss_level:
+            exit_reason = f"🚨 ATR-STOP-LOSS (Stop: {stop_loss_level:.4f})"
+        elif (not self.config.partial_take_profit_enabled) and current_price >= take_profit_level:
+            exit_reason = f"🎉 ATR-TAKE-PROFIT (TP: {take_profit_level:.4f})"
+        elif max_hold_seconds > 0 and hold_seconds >= max_hold_seconds:
+            exit_reason = f"⏰ MAX-HOLD-TIME reached ({int(hold_seconds)}s >= {max_hold_seconds}s)"
+        elif self.config.exit_on_downtrend and market_analysis is not None:
+            signal = market_analysis.get(
+                coin, {}).get('recommendation', '')
+            if signal == 'HOLD (Down-Trend)':
+                exit_reason = f"📉 Down-trend signal detected (recommendation: {signal})"
+        elif pnl_pct < 0 and market_analysis is not None:
+            signal = market_analysis.get(
+                coin, {}).get('recommendation', '')
+            if signal not in {'BUY', 'STRONG BUY', 'HOLD (Up-Trend)'}:
+                exit_reason = f"🔻 PnL-NEG-WEAK-SIGNAL ({pnl_pct:+.2f}% | signal: {signal})"
+        return exit_reason
+
+    def _manage_open_trades(self, current_market_data: dict[str, dict], market_analysis: dict | None = None):
         """Monitors open trades for stop-loss, take-profit, time and signal exits."""
         trades_to_remove = []
+        excursions_updated = False
         for coin, trade_info in list(self.portfolio.open_trades.items()):
             buy_price = trade_info['buy_price']
             amount_coin = trade_info['amount_coin']
@@ -4021,13 +3937,41 @@ class CryptoTradingBot:
                     f"Current market data for {coin} not available, cannot monitor trade.")
                 continue
             current_price = current_price_data['price']
+            peak_price = max(
+                float(trade_info.get('peak_price', buy_price)),
+                buy_price,
+                current_price,
+            )
+            trough_price = min(
+                float(trade_info.get('trough_price', buy_price)),
+                buy_price,
+                current_price,
+            )
+            if (
+                peak_price != float(trade_info.get('peak_price', buy_price))
+                or trough_price != float(trade_info.get('trough_price', buy_price))
+            ):
+                excursions_updated = True
+            trade_info['peak_price'] = peak_price
+            trade_info['trough_price'] = trough_price
             pnl_pct = (current_price - buy_price) / buy_price * 100
             hold_seconds = (datetime.now() -
                             trade_info['timestamp']).total_seconds()
             max_hold_seconds = self.config.coin_max_hold_seconds.get(
                 coin, self.config.max_hold_seconds)
             # Fetch ATR for dynamic stops
+            atr_started = time.monotonic()
             atr = self._get_atr_for_coin(coin, period=14)
+            atr_seconds = time.monotonic() - atr_started
+            observed_hold_seconds = (datetime.now() - trade_info['timestamp']).total_seconds()
+            if max_hold_seconds > 0 and observed_hold_seconds >= max_hold_seconds:
+                logger.warning(
+                    "Position hold limit reached: coin=%s observed_hold_seconds=%.1f "
+                    "limit_seconds=%d overdue_seconds=%.1f atr_fetch_seconds=%.1f; "
+                    "exit is checked during the trading loop, not at an exact deadline",
+                    coin, observed_hold_seconds, max_hold_seconds,
+                    observed_hold_seconds - max_hold_seconds, atr_seconds,
+                )
             if np.isnan(atr) or atr == 0:
                 atr = buy_price * 0.02  # Fallback: 2% of price
             stop_loss_level = self._effective_stop_loss_level(
@@ -4043,181 +3987,628 @@ class CryptoTradingBot:
             exit_reason = None
             partial_fraction = min(
                 max(self.config.partial_take_profit_fraction, 0.0), 1.0)
-            if (
-                self.config.partial_take_profit_enabled
-                and not partial_tp_taken
-                and 0.0 < partial_fraction < 1.0
-                and current_price >= partial_take_profit_level
+            if self._maybe_partial_take_profit(
+                coin, trade_info, partial_tp_taken, amount_coin, current_price,
+                partial_take_profit_level, partial_fraction, atr,
             ):
-                partial_amount_coin = amount_coin * partial_fraction
-                if partial_amount_coin > 1e-12:
-                    partial_reason = (
-                        f"💸 PARTIAL-TAKE-PROFIT ({partial_fraction*100:.0f}% @ "
-                        f"{partial_take_profit_level:.4f})"
-                    )
-                    logger.info(
-                        f"{partial_reason} → Teilverkauf {coin} @ {current_price:.4f}")
-                    if self._execute_trade(
-                        coin,
-                        "sell",
-                        current_price,
-                        partial_amount_coin * current_price,
-                        atr=atr,
-                        reason=partial_reason,
-                    ):
-                        if coin in self.portfolio.open_trades:
-                            self.portfolio.open_trades[coin]['partial_tp_taken'] = True
-                            self.portfolio.open_trades[coin]['partial_tp_timestamp'] = datetime.now(
-                            )
-                            if self.config.dry_run:
-                                self.portfolio.save_state()
-                    continue
-            if partial_tp_taken and partial_tp_timestamp:
-                partial_tp_elapsed_seconds = (
-                    datetime.now() - partial_tp_timestamp).total_seconds()
-                if (
-                    self.config.partial_take_profit_remainder_max_hold_seconds > 0
-                    and partial_tp_elapsed_seconds >= self.config.partial_take_profit_remainder_max_hold_seconds
-                ):
-                    exit_reason = (
-                        "⏱️ PARTIAL-TP-REMAINDER-TIMEOUT "
-                        f"({int(partial_tp_elapsed_seconds)}s >= "
-                        f"{self.config.partial_take_profit_remainder_max_hold_seconds}s)"
-                    )
-                elif (
-                    self.config.partial_take_profit_exit_on_weak_signal
-                    and market_analysis is not None
-                ):
-                    signal = market_analysis.get(
-                        coin, {}).get('recommendation', '')
-                    if signal in {'SELL', 'WEAK SELL', 'HOLD (Down-Trend)'}:
-                        exit_reason = (
-                            '📉 PARTIAL-TP-REMAINDER-WEAK-SIGNAL '
-                            f'(recommendation: {signal})'
-                        )
-            is_downtrend_reversal_trade = self._is_downtrend_reversal_trade(
-                trade_info)
-            if (
-                exit_reason is None
-                and is_downtrend_reversal_trade
-                and self.config.downtrend_reversal_fast_exit_enabled
-                and market_analysis is not None
-            ):
-                current_signal = market_analysis.get(
-                    coin, {}).get('recommendation', '')
-                if (
-                    self.config.downtrend_reversal_max_hold_seconds > 0
-                    and hold_seconds >= self.config.downtrend_reversal_max_hold_seconds
-                ):
-                    exit_reason = (
-                        '⏱️ DOWNTREND-REVERSAL-MAX-HOLD '
-                        f'({int(hold_seconds)}s >= {self.config.downtrend_reversal_max_hold_seconds}s)'
-                    )
-                elif (
-                    hold_seconds >= self.config.downtrend_reversal_fast_exit_seconds
-                    and pnl_pct <= self.config.downtrend_reversal_flat_max_profit_pct
-                    and current_signal in {'HOLD (Down-Trend)', 'WEAK SELL', 'SELL'}
-                ):
-                    exit_reason = (
-                        '📉 DOWNTREND-REVERSAL-FAST-EXIT '
-                        f'({pnl_pct:+.2f}% <= {self.config.downtrend_reversal_flat_max_profit_pct:.2f}% '
-                        f'after {int(hold_seconds)}s, signal: {current_signal})'
-                    )
-                elif (
-                    hold_seconds >= self.config.downtrend_reversal_weak_signal_exit_seconds
-                    and pnl_pct <= self.config.downtrend_reversal_weak_signal_max_profit_pct
-                    and current_signal in {'HOLD (Down-Trend)', 'WEAK SELL', 'SELL'}
-                ):
-                    exit_reason = (
-                        '📉 DOWNTREND-REVERSAL-WEAK-SIGNAL-EXIT '
-                        f'({pnl_pct:+.2f}% <= {self.config.downtrend_reversal_weak_signal_max_profit_pct:.2f}% '
-                        f'after {int(hold_seconds)}s, signal: {current_signal})'
-                    )
-            is_rules_uptrend_trade = self._is_rules_uptrend_trade(trade_info)
-            if (
-                exit_reason is None
-                and is_rules_uptrend_trade
-                and self.config.uptrend_rules_fast_exit_enabled
-                and market_analysis is not None
-            ):
-                current_signal = market_analysis.get(
-                    coin, {}).get('recommendation', '')
-                fast_exit_seconds = self.config.uptrend_rules_fast_exit_seconds_by_coin.get(
-                    coin, self.config.uptrend_rules_fast_exit_seconds)
-                flat_max_profit_pct = self.config.uptrend_rules_flat_max_profit_pct_by_coin.get(
-                    coin, self.config.uptrend_rules_flat_max_profit_pct)
-                uptrend_rules_max_hold_seconds = self.config.uptrend_rules_max_hold_seconds_by_coin.get(
-                    coin, self.config.uptrend_rules_max_hold_seconds)
-                if (
-                    uptrend_rules_max_hold_seconds > 0
-                    and hold_seconds >= uptrend_rules_max_hold_seconds
-                ):
-                    exit_reason = (
-                        '⏱️ UPTREND-RULES-MAX-HOLD '
-                        f'({int(hold_seconds)}s >= {uptrend_rules_max_hold_seconds}s)'
-                    )
-                elif (
-                    fast_exit_seconds > 0
-                    and hold_seconds >= fast_exit_seconds
-                    and pnl_pct <= flat_max_profit_pct
-                    and current_signal not in {'BUY', 'STRONG BUY'}
-                ):
-                    exit_reason = (
-                        '📉 UPTREND-RULES-FAST-EXIT '
-                        f'({pnl_pct:+.2f}% <= {flat_max_profit_pct:.2f}% '
-                        f'after {int(hold_seconds)}s, signal: {current_signal})'
-                    )
-            if current_price <= stop_loss_level:
-                exit_reason = f"🚨 ATR-STOP-LOSS (Stop: {stop_loss_level:.4f})"
-            elif (not self.config.partial_take_profit_enabled) and current_price >= take_profit_level:
-                exit_reason = f"🎉 ATR-TAKE-PROFIT (TP: {take_profit_level:.4f})"
-            elif max_hold_seconds > 0 and hold_seconds >= max_hold_seconds:
-                exit_reason = f"⏰ MAX-HOLD-TIME reached ({int(hold_seconds)}s >= {max_hold_seconds}s)"
-            elif self.config.exit_on_downtrend and market_analysis is not None:
-                signal = market_analysis.get(
-                    coin, {}).get('recommendation', '')
-                if signal == 'HOLD (Down-Trend)':
-                    exit_reason = f"📉 Down-trend signal detected (recommendation: {signal})"
-            elif pnl_pct < 0 and market_analysis is not None:
-                signal = market_analysis.get(
-                    coin, {}).get('recommendation', '')
-                if signal not in {'BUY', 'STRONG BUY', 'HOLD (Up-Trend)'}:
-                    exit_reason = f"🔻 PnL-NEG-WEAK-SIGNAL ({pnl_pct:+.2f}% | signal: {signal})"
+                continue
+            exit_reason = self._partial_tp_remainder_exit_reason(
+                exit_reason, coin, partial_tp_taken, partial_tp_timestamp,
+                market_analysis,
+            )
+            exit_reason = self._downtrend_reversal_exit_reason(
+                exit_reason, coin, trade_info, hold_seconds, pnl_pct,
+                market_analysis,
+            )
+            exit_reason = self._uptrend_rules_exit_reason(
+                exit_reason, coin, trade_info, hold_seconds, pnl_pct,
+                market_analysis,
+            )
+            exit_reason = self._core_exit_reason(
+                exit_reason, coin, current_price, stop_loss_level,
+                take_profit_level, max_hold_seconds, hold_seconds, pnl_pct,
+                market_analysis,
+            )
             if exit_reason:
                 logger.info(
                     f"{exit_reason} → Verkauf {coin} @ {current_price:.4f}")
-                self._execute_trade(coin, "sell", current_price,
-                                    amount_coin * current_price, atr=atr, reason=exit_reason)
-                trades_to_remove.append(coin)
+                if self._execute_trade(
+                    coin,
+                    "sell",
+                    current_price,
+                    amount_coin * current_price,
+                    atr=atr,
+                    reason=exit_reason,
+                ):
+                    remaining_trade = self.portfolio.open_trades.get(coin)
+                    if (
+                        remaining_trade is None
+                        or float(remaining_trade.get("amount_coin", 0.0))
+                        >= amount_coin - 1e-12
+                    ):
+                        trades_to_remove.append(coin)
+                else:
+                    logger.warning(
+                        "Exit sell failed for %s; retaining the position for retry.",
+                        coin,
+                    )
         for coin in trades_to_remove:
             self.portfolio.remove_trade(coin)
+        if excursions_updated and self.config.dry_run:
+            self.portfolio.save_state()
 
-    def run(self):
-        """Main loop of the bot."""
+    def _entry_pair_allowed(
+        self,
+        coin: str,
+        data: dict[str, Any],
+        excluded_pairs: set[tuple[str, str]],
+    ) -> bool:
+        """True unless this (coin, signal_source) pair is dynamically excluded."""
+        source = str(data.get('signal_source', 'rules')).strip().lower()
+        return (str(coin).upper(), source) not in excluded_pairs
+
+    def _entry_guards_allow(
+        self,
+        coin: str,
+        data: dict[str, Any],
+        cache: dict[str, bool],
+    ) -> bool:
+        """Cached per-iteration entry guards: tabular veto + volatility proxy."""
+        if coin in cache:
+            return cache[coin]
+
+        if data.get('tabular_sell_veto', False):
+            logger.info(
+                "⛔ Confident tabular SELL vetoed new entry for %s: "
+                "P(sell)=%.3f",
+                coin,
+                float(data.get('tabular_sell_proba') or 0.0),
+            )
+            cache[coin] = False
+            return False
+
+        volatility_allowed, volatility_reason = (
+            self._entry_volatility_guard(data)
+        )
+        if not volatility_allowed:
+            minimum_atr_pct = self.config.min_entry_atr_pct
+            if volatility_reason == 'atr_pct_unavailable':
+                logger.warning(
+                    "⛔ Entry withheld for %s: ATR(14)/price volatility proxy "
+                    "is unavailable (minimum %.3f%%)",
+                    coin,
+                    minimum_atr_pct * 100,
+                )
+            else:
+                logger.info(
+                    "⛔ Entry withheld for %s: ATR(14)/price volatility proxy "
+                    "%.3f%% is below minimum %.3f%%",
+                    coin,
+                    float(data['atr_pct']) * 100,
+                    minimum_atr_pct * 100,
+                )
+            cache[coin] = False
+            return False
+
+        cache[coin] = True
+        return True
+
+    def _log_portfolio_status(
+        self,
+        current_market_data: dict[str, dict[str, Any]],
+        market_analysis: dict[str, Any],
+    ) -> None:
+        """Compute portfolio value, log status, and persist the analytics snapshot."""
+        portfolio_value = self.portfolio.get_value(
+            {coin: data['price'] for coin, data in current_market_data.items()})
+        if self.portfolio.initial_portfolio_value is None:
+            self.portfolio.initial_portfolio_value = portfolio_value
+            if self.config.dry_run:
+                self.portfolio.save_state()
+        logger.info(
+            f"📈 Portfolio value: {portfolio_value:.2f} {self.config.base_currency}")
+        logger.info(
+            f"  - Cash: {self.portfolio.cash:.2f} {self.config.base_currency}")
+        logger.info(f"  - Holdings: {self.portfolio.holdings}")
+        logger.info(
+            f"  - Open trades details: {self.portfolio.open_trades}")
+        self._write_analytics_snapshot(
+            portfolio_value, market_analysis)
+        if self.config.simulation_initial_balance_from_kraken:
+            self.portfolio.save_state()
+
+
+    def _log_startup_banner(self) -> None:
+        """Log the masked configuration and active-mode warnings at startup."""
         logger.info(
             "🚀 Crypto trading bot started - analysing markets for trading opportunities.")
         safe_config = vars(self.config).copy()
-        safe_config['api_key'] = _mask_secret(safe_config.get('api_key', ''))
-        safe_config['api_secret'] = _mask_secret(
-            safe_config.get('api_secret', ''))
+        safe_config['api_key'] = '[REDACTED]' if safe_config.get('api_key') else ''
+        safe_config['api_secret'] = '[REDACTED]' if safe_config.get('api_secret') else ''
         safe_config['ai_copilot_api_key'] = _mask_secret(
             safe_config.get('ai_copilot_api_key', ''))
+        safe_config['hailo_api_token'] = (
+            '[REDACTED]' if safe_config.get('hailo_api_token') else ''
+        )
         logger.info(f"Configuration: {safe_config}")
         if self.config.dry_run:
             logger.warning(
                 "DRY-RUN MODE IS ACTIVE! No real trades will be executed.")
         if self.config.simulate_data:
+            if self.config.simulation_initial_balance_from_kraken:
+                logger.warning(
+                    "SIMULATION MODE IS ACTIVE! Market data and trades are simulated; "
+                    "Kraken may be queried once for the initial free EUR balance."
+                )
+            else:
+                logger.warning(
+                    "SIMULATION MODE IS ACTIVE! No real exchange data will be fetched or trades executed.")
+        elif self.config.simulation_initial_balance_from_kraken:
             logger.warning(
-                "SIMULATION MODE IS ACTIVE! No real exchange data will be fetched or trades executed.")
+                "PUBLIC-MARKET PAPER MODE: Kraken market data, simulated trades and "
+                "an isolated previously initialized portfolio; no Kraken credentials."
+            )
 
+
+    def _select_entry_candidates(
+        self, market_analysis: dict[str, Any]
+    ) -> list[str]:
+        """Rank entry candidates and fill trade slots (strict, fallback, force-fill)."""
+        occupied_positions = set(self.portfolio.open_trades.keys()) | set(
+            self.portfolio.holdings.keys())
+        available_trade_slots = max(
+            0, self.config.max_open_trades - len(self.portfolio.open_trades))
+        dynamic_excluded_entry_pairs = self._dynamic_excluded_entry_pairs()
+        if dynamic_excluded_entry_pairs:
+            logger.info(
+                "Dynamically excluded lossmaker entry pairs: %s",
+                ', '.join(sorted(
+                    f"{coin}/{source}" for coin, source in dynamic_excluded_entry_pairs)),
+            )
+        degraded_entry_sources = self._degraded_entry_sources()
+        if degraded_entry_sources:
+            logger.info(
+                "Dynamically degraded entry sources (fallback/force-fill blocked): %s",
+                ', '.join(sorted(degraded_entry_sources)),
+            )
+        recent_pnl_guard = self._recent_pnl_guard_state()
+        recent_pnl_guard_active = bool(
+            recent_pnl_guard.get('active', False))
+        self._log_recent_pnl_guard_status(recent_pnl_guard)
+
+
+        entry_guard_results: dict[str, bool] = {}
+
+
+        downtrend_filter_results = {
+            coin: self._passes_downtrend_reversal_filter(data)
+            for coin, data in market_analysis.items()
+        }
+        uptrend_filter_results = {
+            coin: self._passes_uptrend_entry_filter(data)
+            for coin, data in market_analysis.items()
+        }
+        entry_market_mode = self._entry_market_mode(market_analysis)
+
+        # Only suggest coins not yet held.
+        strict_buy_candidates_before_guard = [
+            coin for coin, data in market_analysis.items()
+            if coin not in occupied_positions
+            and data.get('recommendation') in ['STRONG BUY', 'BUY']
+            and data.get('score', 0) >= self.config.min_entry_score
+            and self._entry_pair_allowed(coin, data, dynamic_excluded_entry_pairs)
+            and self._entry_guards_allow(coin, data, entry_guard_results)
+        ]
+        if recent_pnl_guard_active:
+            blocked_by_recent_guard = [
+                coin for coin in strict_buy_candidates_before_guard
+                if str(market_analysis[coin].get(
+                    'signal_source', 'rules')).strip().lower() != 'catboost'
+            ]
+            log_blocked_candidates = (
+                logger.warning if blocked_by_recent_guard else logger.info
+            )
+            log_blocked_candidates(
+                "Recent PnL guard withheld %d strict BUY candidates: %s",
+                len(blocked_by_recent_guard),
+                ', '.join(blocked_by_recent_guard[:10]) or "none",
+            )
+        strict_buy_candidates = [
+            coin for coin in strict_buy_candidates_before_guard
+            if not recent_pnl_guard_active
+            or str(market_analysis[coin].get(
+                'signal_source', 'rules')).strip().lower() == 'catboost'
+        ]
+        top_buy_recommendations = strict_buy_candidates[:min(
+            self.config.top_n_for_analysis, available_trade_slots)]
+
+        # Fallback: fill remaining slots with solid non-SELL candidates.
+        # If exit_on_downtrend is active, exclude down-trend coins from entries.
+        _excluded_signals_fallback = ['SELL', 'WEAK SELL']
+        if self.config.exit_on_downtrend:
+            _excluded_signals_fallback.append('HOLD (Down-Trend)')
+        def _candidates_within_filters(min_score: float) -> list[str]:
+            """Coins passing the shared entry filters for a given minimum score."""
+            return [
+                coin for coin, data in market_analysis.items()
+                if coin not in occupied_positions
+                and coin not in top_buy_recommendations
+                if data.get('score', 0) >= min_score
+                and self._entry_guards_allow(coin, data, entry_guard_results)
+                and str(data.get('signal_source', 'rules')).strip().lower() not in degraded_entry_sources
+                and self._allows_entry_signal(
+                    str(data.get('recommendation', '')),
+                    downtrend_filter_results.get(
+                        coin, (False, 'not_evaluated'))[0],
+                    set(_excluded_signals_fallback),
+                )
+                and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+                and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+                and self._entry_pair_allowed(coin, data, dynamic_excluded_entry_pairs)
+            ]
+
+        fallback_base_candidates = _candidates_within_filters(
+            self.config.fallback_min_score)
+        fallback_filter_results = {
+            coin: self._passes_fallback_entry_filter(
+                coin, market_analysis.get(coin, {}))
+            for coin in fallback_base_candidates
+        }
+        fallback_candidates = []
+        fallback_allowed = (
+            self.config.enable_fallback_entry
+            and not recent_pnl_guard_active
+            and available_trade_slots > len(top_buy_recommendations)
+            and (
+                not self.config.defensive_entry_mode_enabled
+                or entry_market_mode != 'defensive'
+            )
+        )
+        fallback_suppression_reason = 'allowed'
+        if not self.config.enable_fallback_entry:
+            fallback_suppression_reason = 'fallback_disabled'
+        elif available_trade_slots <= len(top_buy_recommendations):
+            fallback_suppression_reason = 'no_free_slots'
+        elif self.config.defensive_entry_mode_enabled and entry_market_mode == 'defensive':
+            fallback_suppression_reason = 'entry_mode_defensive'
+        if fallback_allowed:
+            fallback_candidates = [
+                coin for coin in fallback_base_candidates
+                if fallback_filter_results.get(coin, (False, 'not_evaluated'))[0]
+            ]
+            if fallback_candidates:
+                missing_slots = available_trade_slots - \
+                    len(top_buy_recommendations)
+                top_buy_recommendations.extend(
+                    fallback_candidates[:missing_slots])
+                best_coin = top_buy_recommendations[0]
+                best_data = market_analysis.get(best_coin, {})
+                logger.info(
+                    f"ℹ️ Fallback entry activated (slots filled): lead candidate {best_coin} ({best_data.get('recommendation', 'n/a')}, score {best_data.get('score', 0)}).")
+
+        # Optional more aggressive slot filling: use neutral candidates even without RSI filter,
+        # down-trend coins are also excluded when exit_on_downtrend is active.
+        force_fill_candidates = []
+        force_fill_allowed = (
+            self.config.force_fill_slots
+            and not recent_pnl_guard_active
+            and available_trade_slots > len(top_buy_recommendations)
+            and (
+                not self.config.defensive_entry_mode_enabled
+                or entry_market_mode == 'normal'
+            )
+        )
+        if force_fill_allowed:
+            force_fill_candidates = _candidates_within_filters(
+                self.config.force_fill_min_score)
+            if force_fill_candidates:
+                missing_slots = available_trade_slots - \
+                    len(top_buy_recommendations)
+                top_buy_recommendations.extend(
+                    force_fill_candidates[:missing_slots])
+                logger.info(
+                    f"⚙️ Force-fill active: {min(len(force_fill_candidates), missing_slots)} additional candidates added (min score {self.config.force_fill_min_score}).")
+
+        logger.info(
+            f"🔍 Market analysis complete. Top {len(top_buy_recommendations)} buy recommendations:")
+
+        if not top_buy_recommendations and market_analysis:
+            recommendation_mix = dict(Counter(
+                data.get('recommendation', 'UNKNOWN')
+                for data in market_analysis.values()
+            ))
+            downtrend_reversal_eligible = sum(
+                1
+                for coin, data in market_analysis.items()
+                if data.get('recommendation') == 'HOLD (Down-Trend)'
+                and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+            )
+            logger.info(
+                "ℹ️ No entry candidates this round: strict=%d, fallback=%d, force_fill=%d, downtrend_reversal_eligible=%d, entry_mode=%s, recommendation_mix=%s",
+                len(strict_buy_candidates),
+                len(fallback_candidates),
+                len(force_fill_candidates),
+                downtrend_reversal_eligible,
+                entry_market_mode,
+                recommendation_mix,
+            )
+            self._log_blocked_uptrend_candidates(
+                market_analysis,
+                uptrend_filter_results,
+            )
+            self._log_blocked_downtrend_reversal_candidates(
+                market_analysis,
+                downtrend_filter_results,
+            )
+            self._log_fallback_entry_diagnostics(
+                market_analysis,
+                fallback_base_candidates,
+                fallback_filter_results,
+                fallback_allowed,
+                fallback_suppression_reason,
+                entry_market_mode,
+            )
+            for coin, data in list(market_analysis.items())[:5]:
+                signal_confidence = data.get('signal_confidence')
+                confidence_text = ''
+                if signal_confidence is not None:
+                    confidence_text = f", confidence={float(signal_confidence) * 100:.0f}%"
+                logger.info(
+                    "  - %s: rec=%s, rule=%s, score=%s, rule_score=%s, RSI=%.2f, source=%s%s",
+                    coin,
+                    data.get('recommendation', 'n/a'),
+                    data.get('rule_recommendation', 'n/a'),
+                    data.get('score', 0),
+                    data.get('rule_score', 0),
+                    float(data.get('rsi', np.nan)),
+                    data.get('signal_source', 'n/a'),
+                    confidence_text,
+                )
+
+        for i, coin in enumerate(top_buy_recommendations):
+            data = market_analysis.get(coin, {})
+            logger.info(f"  {i+1}. {coin}: {data.get('recommendation', 'HOLD')} "
+                        f"(Price: {data.get('price', 0):.4f} {self.config.base_currency}, "
+                        f"Score: {data.get('score', 0)}%, "
+                        f"Volumen: {data.get('volume', 0):,.0f} {self.config.base_currency}, "
+                        f"RSI: {data.get('rsi', np.nan):.2f})")
+        return top_buy_recommendations
+
+
+    def _execute_signal_exits(
+        self,
+        current_market_data: dict[str, Any],
+        market_analysis: dict[str, Any],
+    ) -> None:
+        """Close open positions that received a SELL or WEAK SELL signal."""
+        # Step 4: Exit logic - close positions on SELL signals
+        if self.config.enable_signal_exits and self.portfolio.open_trades:
+            sell_signal_coins = []
+            for coin in list(self.portfolio.open_trades.keys()):
+                signal = market_analysis.get(
+                    coin, {}).get('recommendation')
+                if signal in ['SELL', 'WEAK SELL']:
+                    sell_signal_coins.append(coin)
+
+            if sell_signal_coins:
+                logger.info(
+                    f"📉 Exit signals detected for {len(sell_signal_coins)} coins: {sell_signal_coins}")
+                for coin in sell_signal_coins:
+                    price_data = current_market_data.get(coin)
+                    trade_info = self.portfolio.open_trades.get(coin)
+                    if not price_data or not trade_info:
+                        continue
+                    current_price = price_data['price']
+                    amount_coin = trade_info['amount_coin']
+                    self._execute_trade(
+                        coin,
+                        "sell",
+                        current_price,
+                        amount_coin * current_price,
+                        reason='📉 SIGNAL-EXIT'
+                    )
+
+
+    def _compute_entry_position_size(
+        self,
+        coin: str,
+        current_price: float,
+        atr: float,
+        portfolio_value: float,
+        trade_amount_cap: float,
+        attempt_meta: dict[str, Any],
+    ) -> float:
+        """Size a new entry from ATR risk and the cash reserve, updating attempt_meta."""
+        target_position_size = self._calculate_position_size(
+            coin,
+            current_price,
+            atr,
+            portfolio_value=portfolio_value,
+            trade_amount_cap=trade_amount_cap,
+        )
+        reserved_cash = self.portfolio.cash * self.config.cash_reserve_pct
+        max_affordable = max(
+            self.portfolio.cash - reserved_cash, 0.0)
+        position_size = min(
+            target_position_size, max_affordable)
+        attempt_meta['position_size_text'] = f"{position_size:.2f}"
+        attempt_meta['cash_text'] = f"{self.portfolio.cash:.2f}"
+
+        # Very small ATR risk amounts should not completely block entries
+        # as long as the minimum trade is still affordable with the cash reserve.
+        if position_size < self.config.min_trade_amount and max_affordable >= self.config.min_trade_amount:
+            position_size = self.config.min_trade_amount
+            attempt_meta['position_size_text'] = f"{position_size:.2f}"
+        return position_size
+
+
+    def _open_new_positions(
+        self,
+        current_market_data: dict[str, Any],
+        market_analysis: dict[str, Any],
+        top_buy_recommendations: list[str],
+        portfolio_value_live: float,
+    ) -> None:
+        """Open new positions for the selected buy candidates within risk limits."""
+        # Step 5: Trade logic - open new positions
+        current_open_trades_count = len(self.portfolio.open_trades)
+        available_funds_for_trade = self.portfolio.cash
+        effective_trade_amount = self._effective_trade_amount(
+            portfolio_value_live)
+        effective_max_open_trades = self._effective_max_open_trades(
+            portfolio_value_live)
+        min_required_cash = self.config.min_trade_amount if self.config.allow_partial_trades else effective_trade_amount
+        can_open_positions, block_reason = self._can_open_new_positions(
+            portfolio_value_live)
+
+        if not can_open_positions:
+            logger.warning(
+                f"⛔ Risk guardrail blocking new positions: {block_reason}")
+        elif available_funds_for_trade >= min_required_cash and current_open_trades_count < effective_max_open_trades:
+            logger.info(
+                f"Attempting to open new positions. Available: {available_funds_for_trade:.2f} {self.config.base_currency}, Open trades: {current_open_trades_count}/{effective_max_open_trades}, Min amount: {min_required_cash:.2f} {self.config.base_currency}, Effective trade amount: {effective_trade_amount:.2f} {self.config.base_currency}.")
+            blocked_buy_attempts: list[dict[str, Any]] = []
+            successful_buy_count = 0
+            for coin in top_buy_recommendations:
+                # Only trade if no position is already open
+                if coin not in self.portfolio.open_trades and coin not in self.portfolio.holdings:
+                    coin_data = market_analysis.get(coin, {})
+                    attempt_meta = {
+                        'coin': coin,
+                        'signal_source': coin_data.get('signal_source', 'rules'),
+                        'score': coin_data.get('score', 0),
+                        'recommendation': coin_data.get('recommendation', 'HOLD'),
+                        'position_size_text': 'n/a',
+                        'cash_text': f"{self.portfolio.cash:.2f}",
+                        'cooldown_text': 'n/a',
+                    }
+                    price_data = current_market_data.get(coin)
+                    if price_data:
+                        current_price = price_data['price']
+                        atr = self._get_atr_for_coin(coin, period=14)
+                        position_size = self._compute_entry_position_size(
+                            coin, current_price, atr,
+                            portfolio_value_live, effective_trade_amount,
+                            attempt_meta)
+
+                        if position_size < self.config.min_trade_amount:
+                            logger.info(
+                                f"Skipping {coin}: effective trade amount {position_size:.2f} {self.config.base_currency} is below MIN_TRADE_AMOUNT {self.config.min_trade_amount:.2f}.")
+                            blocked_buy_attempts.append({
+                                **attempt_meta,
+                                'reason': (
+                                    'below_min_trade_amount '
+                                    f'({position_size:.2f} < {self.config.min_trade_amount:.2f})'
+                                ),
+                            })
+                            continue
+
+                        if self.portfolio.cash >= position_size:
+                            logger.info(
+                                f"ℹ️ Attempting to buy {coin}...")
+                            signal_source = coin_data.get(
+                                'signal_source', 'rules')
+                            signal_confidence = coin_data.get(
+                                'signal_confidence')
+                            passes_filter, filter_reason = self._passes_entry_momentum_filter(
+                                coin_data)
+                            if not passes_filter:
+                                logger.info(
+                                    f"⛔ Momentum filter blocked entry for {coin}: {filter_reason}")
+                                blocked_buy_attempts.append({
+                                    **attempt_meta,
+                                    'reason': filter_reason,
+                                })
+                                continue
+                            effective_cooldown, cooldown_mode = self._resolve_reentry_cooldown_seconds(
+                                current_price, atr)
+                            in_cooldown, cooldown_remaining = self._is_coin_in_reentry_cooldown(
+                                coin, cooldown_seconds=effective_cooldown)
+                            if in_cooldown:
+                                cooldown_text = (
+                                    f"{cooldown_remaining}s remaining "
+                                    f"(effective={effective_cooldown}s, {cooldown_mode})"
+                                )
+                                logger.info(
+                                    f"⛔ Re-entry cooldown active for {coin}: {cooldown_remaining}s remaining "
+                                    f"(effective={effective_cooldown}s, base={self.config.reentry_cooldown_seconds}s, {cooldown_mode})")
+                                blocked_buy_attempts.append({
+                                    **attempt_meta,
+                                    'reason': 'reentry_cooldown_active',
+                                    'cooldown_text': cooldown_text,
+                                })
+                                continue
+                            if self._execute_trade(
+                                coin,
+                                "buy",
+                                current_price,
+                                position_size,
+                                atr=atr,
+                                signal_source=signal_source,
+                                signal_confidence=signal_confidence,
+                                recommendation=coin_data.get(
+                                    'recommendation', 'HOLD'),
+                                reason='ENTRY',
+                            ):
+                                successful_buy_count += 1
+                                # Update available capital
+                                available_funds_for_trade = self.portfolio.cash
+                                current_open_trades_count = len(
+                                    self.portfolio.open_trades)
+                                if current_open_trades_count >= effective_max_open_trades:
+                                    logger.info(
+                                        "Maximum number of open trades reached, stopping further buys.")
+                                    break
+                            else:
+                                blocked_buy_attempts.append({
+                                    **attempt_meta,
+                                    'reason': 'execute_trade_failed',
+                                })
+                        else:
+                            logger.warning(
+                                f"Insufficient available funds ({self.portfolio.cash:.2f} {self.config.base_currency}) for a trade of {position_size:.2f} {self.config.base_currency} for {coin}.")
+                            blocked_buy_attempts.append({
+                                **attempt_meta,
+                                'reason': (
+                                    'insufficient_available_funds '
+                                    f'({self.portfolio.cash:.2f} < {position_size:.2f})'
+                                ),
+                            })
+                    else:
+                        logger.warning(
+                            f"Price data for {coin} not found, cannot buy.")
+                        blocked_buy_attempts.append({
+                            **attempt_meta,
+                            'reason': 'missing_price_data',
+                        })
+                else:
+                    logger.debug(
+                        f"{coin} already in portfolio or open position.")
+            if top_buy_recommendations and successful_buy_count == 0:
+                self._log_blocked_buy_attempt_candidates(
+                    blocked_buy_attempts)
+        elif current_open_trades_count >= effective_max_open_trades:
+            logger.info(
+                f"Maximum number of open trades ({effective_max_open_trades}) reached. No new buys.")
+        else:
+            logger.info(
+                f"Insufficient available funds ({available_funds_for_trade:.2f} {self.config.base_currency}) for minimum trade ({min_required_cash:.2f} {self.config.base_currency}).")
+
+
+    def run(self):
+        """Main loop of the bot."""
+        self._log_startup_banner()
         try:
             while True:
                 self.iteration += 1
+                iteration_started = time.monotonic()
                 logger.info(
                     f"\n🕒 Iteration {self.iteration} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
                 # Step 1: Update balance and portfolio
                 self._update_portfolio_balance()
+                if self.config.simulation_initial_balance_from_kraken:
+                    self.portfolio.simulation_iteration = self.iteration
 
                 # Step 2: Fetch market data (prices, volumes)
                 current_market_data = self._get_market_data()
@@ -4238,438 +4629,31 @@ class CryptoTradingBot:
                     extra_coins=list(self.portfolio.open_trades.keys())
                 )
 
-                occupied_positions = set(self.portfolio.open_trades.keys()) | set(
-                    self.portfolio.holdings.keys())
-                available_trade_slots = max(
-                    0, self.config.max_open_trades - len(self.portfolio.open_trades))
-                dynamic_excluded_entry_pairs = self._dynamic_excluded_entry_pairs()
-                if dynamic_excluded_entry_pairs:
-                    logger.info(
-                        "Dynamically excluded lossmaker entry pairs: %s",
-                        ', '.join(sorted(
-                            f"{coin}/{source}" for coin, source in dynamic_excluded_entry_pairs)),
-                    )
-                degraded_entry_sources = self._degraded_entry_sources()
-                if degraded_entry_sources:
-                    logger.info(
-                        "Dynamically degraded entry sources (fallback/force-fill blocked): %s",
-                        ', '.join(sorted(degraded_entry_sources)),
-                    )
-                recent_pnl_guard = self._recent_pnl_guard_state()
-                recent_pnl_guard_active = bool(
-                    recent_pnl_guard.get('active', False))
-                if recent_pnl_guard_active:
-                    logger.warning(
-                        "Recent PnL guard active: trades=%d, pnl=%.6f %s, pf=%.4f, reason=%s",
-                        int(recent_pnl_guard.get('recent_trades', 0)),
-                        float(recent_pnl_guard.get(
-                            'recent_realized_pnl', 0.0)),
-                        self.config.base_currency,
-                        float(recent_pnl_guard.get(
-                            'recent_profit_factor', 999.0)),
-                        str(recent_pnl_guard.get('reason', 'n/a')),
-                    )
-
-                def _entry_pair_allowed(coin: str, data: Dict[str, Any]) -> bool:
-                    source = str(data.get('signal_source',
-                                 'rules')).strip().lower()
-                    return (str(coin).upper(), source) not in dynamic_excluded_entry_pairs
-
-                downtrend_filter_results = {
-                    coin: self._passes_downtrend_reversal_filter(data)
-                    for coin, data in market_analysis.items()
-                }
-                uptrend_filter_results = {
-                    coin: self._passes_uptrend_entry_filter(data)
-                    for coin, data in market_analysis.items()
-                }
-                entry_market_mode = self._entry_market_mode(market_analysis)
-
-                # Only suggest coins not yet held.
-                strict_buy_candidates = [
-                    coin for coin, data in market_analysis.items()
-                    if coin not in occupied_positions
-                    and data.get('recommendation') in ['STRONG BUY', 'BUY']
-                    and data.get('score', 0) >= self.config.min_entry_score
-                    and (
-                        not recent_pnl_guard_active
-                        or str(data.get('signal_source', 'rules')).strip().lower() == 'catboost'
-                    )
-                    and _entry_pair_allowed(coin, data)
-                ]
-                top_buy_recommendations = strict_buy_candidates[:min(
-                    self.config.top_n_for_analysis, available_trade_slots)]
-
-                # Fallback: fill remaining slots with solid non-SELL candidates.
-                # If exit_on_downtrend is active, exclude down-trend coins from entries.
-                _excluded_signals_fallback = ['SELL', 'WEAK SELL']
-                if self.config.exit_on_downtrend:
-                    _excluded_signals_fallback.append('HOLD (Down-Trend)')
-                fallback_base_candidates = [
-                    coin for coin, data in market_analysis.items()
-                    if coin not in occupied_positions
-                    and coin not in top_buy_recommendations
-                    if data.get('score', 0) >= self.config.fallback_min_score
-                    and str(data.get('signal_source', 'rules')).strip().lower() not in degraded_entry_sources
-                    and self._allows_entry_signal(
-                        str(data.get('recommendation', '')),
-                        downtrend_filter_results.get(
-                            coin, (False, 'not_evaluated'))[0],
-                        set(_excluded_signals_fallback),
-                    )
-                    and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                    and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                    and _entry_pair_allowed(coin, data)
-                ]
-                fallback_filter_results = {
-                    coin: self._passes_fallback_entry_filter(
-                        coin, market_analysis.get(coin, {}))
-                    for coin in fallback_base_candidates
-                }
-                fallback_candidates = []
-                fallback_allowed = (
-                    self.config.enable_fallback_entry
-                    and not recent_pnl_guard_active
-                    and available_trade_slots > len(top_buy_recommendations)
-                    and (
-                        not self.config.defensive_entry_mode_enabled
-                        or entry_market_mode != 'defensive'
-                    )
-                )
-                fallback_suppression_reason = 'allowed'
-                if not self.config.enable_fallback_entry:
-                    fallback_suppression_reason = 'fallback_disabled'
-                elif available_trade_slots <= len(top_buy_recommendations):
-                    fallback_suppression_reason = 'no_free_slots'
-                elif self.config.defensive_entry_mode_enabled and entry_market_mode == 'defensive':
-                    fallback_suppression_reason = 'entry_mode_defensive'
-                if fallback_allowed:
-                    fallback_candidates = [
-                        coin for coin in fallback_base_candidates
-                        if fallback_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                    ]
-                    if fallback_candidates:
-                        missing_slots = available_trade_slots - \
-                            len(top_buy_recommendations)
-                        top_buy_recommendations.extend(
-                            fallback_candidates[:missing_slots])
-                        best_coin = top_buy_recommendations[0]
-                        best_data = market_analysis.get(best_coin, {})
-                        logger.info(
-                            f"ℹ️ Fallback entry activated (slots filled): lead candidate {best_coin} ({best_data.get('recommendation', 'n/a')}, score {best_data.get('score', 0)}).")
-
-                # Optional more aggressive slot filling: use neutral candidates even without RSI filter,
-                # down-trend coins are also excluded when exit_on_downtrend is active.
-                force_fill_candidates = []
-                force_fill_allowed = (
-                    self.config.force_fill_slots
-                    and not recent_pnl_guard_active
-                    and available_trade_slots > len(top_buy_recommendations)
-                    and (
-                        not self.config.defensive_entry_mode_enabled
-                        or entry_market_mode == 'normal'
-                    )
-                )
-                if force_fill_allowed:
-                    force_fill_candidates = [
-                        coin for coin, data in market_analysis.items()
-                        if coin not in occupied_positions
-                        and coin not in top_buy_recommendations
-                        and data.get('score', 0) >= self.config.force_fill_min_score
-                        and str(data.get('signal_source', 'rules')).strip().lower() not in degraded_entry_sources
-                        and self._allows_entry_signal(
-                            str(data.get('recommendation', '')),
-                            downtrend_filter_results.get(
-                                coin, (False, 'not_evaluated'))[0],
-                            set(_excluded_signals_fallback),
-                        )
-                        and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                        and uptrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                        and _entry_pair_allowed(coin, data)
-                    ]
-                    if force_fill_candidates:
-                        missing_slots = available_trade_slots - \
-                            len(top_buy_recommendations)
-                        top_buy_recommendations.extend(
-                            force_fill_candidates[:missing_slots])
-                        logger.info(
-                            f"⚙️ Force-fill active: {min(len(force_fill_candidates), missing_slots)} additional candidates added (min score {self.config.force_fill_min_score}).")
-
-                logger.info(
-                    f"🔍 Market analysis complete. Top {len(top_buy_recommendations)} buy recommendations:")
-
-                if not top_buy_recommendations and market_analysis:
-                    recommendation_mix = dict(Counter(
-                        data.get('recommendation', 'UNKNOWN')
-                        for data in market_analysis.values()
-                    ))
-                    downtrend_reversal_eligible = sum(
-                        1
-                        for coin, data in market_analysis.items()
-                        if data.get('recommendation') == 'HOLD (Down-Trend)'
-                        and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
-                    )
-                    logger.info(
-                        "ℹ️ No entry candidates this round: strict=%d, fallback=%d, force_fill=%d, downtrend_reversal_eligible=%d, entry_mode=%s, recommendation_mix=%s",
-                        len(strict_buy_candidates),
-                        len(fallback_candidates),
-                        len(force_fill_candidates),
-                        downtrend_reversal_eligible,
-                        entry_market_mode,
-                        recommendation_mix,
-                    )
-                    self._log_blocked_uptrend_candidates(
-                        market_analysis,
-                        uptrend_filter_results,
-                    )
-                    self._log_blocked_downtrend_reversal_candidates(
-                        market_analysis,
-                        downtrend_filter_results,
-                    )
-                    self._log_fallback_entry_diagnostics(
-                        market_analysis,
-                        fallback_base_candidates,
-                        fallback_filter_results,
-                        fallback_allowed,
-                        fallback_suppression_reason,
-                        entry_market_mode,
-                    )
-                    for coin, data in list(market_analysis.items())[:5]:
-                        signal_confidence = data.get('signal_confidence')
-                        confidence_text = ''
-                        if signal_confidence is not None:
-                            confidence_text = f", confidence={float(signal_confidence) * 100:.0f}%"
-                        logger.info(
-                            "  - %s: rec=%s, rule=%s, score=%s, rule_score=%s, RSI=%.2f, source=%s%s",
-                            coin,
-                            data.get('recommendation', 'n/a'),
-                            data.get('rule_recommendation', 'n/a'),
-                            data.get('score', 0),
-                            data.get('rule_score', 0),
-                            float(data.get('rsi', np.nan)),
-                            data.get('signal_source', 'n/a'),
-                            confidence_text,
-                        )
-
-                for i, coin in enumerate(top_buy_recommendations):
-                    data = market_analysis.get(coin, {})
-                    logger.info(f"  {i+1}. {coin}: {data.get('recommendation', 'HOLD')} "
-                                f"(Price: {data.get('price', 0):.4f} {self.config.base_currency}, "
-                                f"Score: {data.get('score', 0)}%, "
-                                f"Volumen: {data.get('volume', 0):,.0f} {self.config.base_currency}, "
-                                f"RSI: {data.get('rsi', np.nan):.2f})")
+                top_buy_recommendations = self._select_entry_candidates(
+                    market_analysis)
 
                 # Step 4: Exit logic - close positions on SELL signals
-                if self.config.enable_signal_exits and self.portfolio.open_trades:
-                    sell_signal_coins = []
-                    for coin in list(self.portfolio.open_trades.keys()):
-                        signal = market_analysis.get(
-                            coin, {}).get('recommendation')
-                        if signal in ['SELL', 'WEAK SELL']:
-                            sell_signal_coins.append(coin)
-
-                    if sell_signal_coins:
-                        logger.info(
-                            f"📉 Exit signals detected for {len(sell_signal_coins)} coins: {sell_signal_coins}")
-                        for coin in sell_signal_coins:
-                            price_data = current_market_data.get(coin)
-                            trade_info = self.portfolio.open_trades.get(coin)
-                            if not price_data or not trade_info:
-                                continue
-                            current_price = price_data['price']
-                            amount_coin = trade_info['amount_coin']
-                            self._execute_trade(
-                                coin,
-                                "sell",
-                                current_price,
-                                amount_coin * current_price,
-                                reason='📉 SIGNAL-EXIT'
-                            )
+                self._execute_signal_exits(current_market_data, market_analysis)
 
                 # Step 5: Trade logic - open new positions
-                current_open_trades_count = len(self.portfolio.open_trades)
-                available_funds_for_trade = self.portfolio.cash
-                effective_trade_amount = self._effective_trade_amount(
-                    portfolio_value_live)
-                effective_max_open_trades = self._effective_max_open_trades(
-                    portfolio_value_live)
-                min_required_cash = self.config.min_trade_amount if self.config.allow_partial_trades else effective_trade_amount
-                can_open_positions, block_reason = self._can_open_new_positions(
-                    portfolio_value_live)
-
-                if not can_open_positions:
-                    logger.warning(
-                        f"⛔ Risk guardrail blocking new positions: {block_reason}")
-                elif available_funds_for_trade >= min_required_cash and current_open_trades_count < effective_max_open_trades:
-                    logger.info(
-                        f"Attempting to open new positions. Available: {available_funds_for_trade:.2f} {self.config.base_currency}, Open trades: {current_open_trades_count}/{effective_max_open_trades}, Min amount: {min_required_cash:.2f} {self.config.base_currency}, Effective trade amount: {effective_trade_amount:.2f} {self.config.base_currency}.")
-                    blocked_buy_attempts: List[Dict[str, Any]] = []
-                    successful_buy_count = 0
-                    for coin in top_buy_recommendations:
-                        # Only trade if no position is already open
-                        if coin not in self.portfolio.open_trades and coin not in self.portfolio.holdings:
-                            coin_data = market_analysis.get(coin, {})
-                            attempt_meta = {
-                                'coin': coin,
-                                'signal_source': coin_data.get('signal_source', 'rules'),
-                                'score': coin_data.get('score', 0),
-                                'recommendation': coin_data.get('recommendation', 'HOLD'),
-                                'position_size_text': 'n/a',
-                                'cash_text': f"{self.portfolio.cash:.2f}",
-                                'cooldown_text': 'n/a',
-                            }
-                            price_data = current_market_data.get(coin)
-                            if price_data:
-                                current_price = price_data['price']
-                                atr = self._get_atr_for_coin(coin, period=14)
-                                target_position_size = self._calculate_position_size(
-                                    coin,
-                                    current_price,
-                                    atr,
-                                    portfolio_value=portfolio_value_live,
-                                    trade_amount_cap=effective_trade_amount,
-                                )
-                                reserved_cash = self.portfolio.cash * self.config.cash_reserve_pct
-                                max_affordable = max(
-                                    self.portfolio.cash - reserved_cash, 0.0)
-                                position_size = min(
-                                    target_position_size, max_affordable)
-                                attempt_meta['position_size_text'] = f"{position_size:.2f}"
-                                attempt_meta['cash_text'] = f"{self.portfolio.cash:.2f}"
-
-                                # Very small ATR risk amounts should not completely block entries
-                                # as long as the minimum trade is still affordable with the cash reserve.
-                                if position_size < self.config.min_trade_amount and max_affordable >= self.config.min_trade_amount:
-                                    position_size = self.config.min_trade_amount
-                                    attempt_meta['position_size_text'] = f"{position_size:.2f}"
-
-                                if position_size < self.config.min_trade_amount:
-                                    logger.info(
-                                        f"Skipping {coin}: effective trade amount {position_size:.2f} {self.config.base_currency} is below MIN_TRADE_AMOUNT {self.config.min_trade_amount:.2f}.")
-                                    blocked_buy_attempts.append({
-                                        **attempt_meta,
-                                        'reason': (
-                                            'below_min_trade_amount '
-                                            f'({position_size:.2f} < {self.config.min_trade_amount:.2f})'
-                                        ),
-                                    })
-                                    continue
-
-                                if self.portfolio.cash >= position_size:
-                                    logger.info(
-                                        f"ℹ️ Attempting to buy {coin}...")
-                                    signal_source = coin_data.get(
-                                        'signal_source', 'rules')
-                                    signal_confidence = coin_data.get(
-                                        'signal_confidence')
-                                    passes_filter, filter_reason = self._passes_entry_momentum_filter(
-                                        coin_data)
-                                    if not passes_filter:
-                                        logger.info(
-                                            f"⛔ Momentum filter blocked entry for {coin}: {filter_reason}")
-                                        blocked_buy_attempts.append({
-                                            **attempt_meta,
-                                            'reason': filter_reason,
-                                        })
-                                        continue
-                                    effective_cooldown, cooldown_mode = self._resolve_reentry_cooldown_seconds(
-                                        current_price, atr)
-                                    in_cooldown, cooldown_remaining = self._is_coin_in_reentry_cooldown(
-                                        coin, cooldown_seconds=effective_cooldown)
-                                    if in_cooldown:
-                                        cooldown_text = (
-                                            f"{cooldown_remaining}s remaining "
-                                            f"(effective={effective_cooldown}s, {cooldown_mode})"
-                                        )
-                                        logger.info(
-                                            f"⛔ Re-entry cooldown active for {coin}: {cooldown_remaining}s remaining "
-                                            f"(effective={effective_cooldown}s, base={self.config.reentry_cooldown_seconds}s, {cooldown_mode})")
-                                        blocked_buy_attempts.append({
-                                            **attempt_meta,
-                                            'reason': 'reentry_cooldown_active',
-                                            'cooldown_text': cooldown_text,
-                                        })
-                                        continue
-                                    if self._execute_trade(
-                                        coin,
-                                        "buy",
-                                        current_price,
-                                        position_size,
-                                        atr=atr,
-                                        signal_source=signal_source,
-                                        signal_confidence=signal_confidence,
-                                        recommendation=coin_data.get(
-                                            'recommendation', 'HOLD'),
-                                        reason='ENTRY',
-                                    ):
-                                        successful_buy_count += 1
-                                        # Update available capital
-                                        available_funds_for_trade = self.portfolio.cash
-                                        current_open_trades_count = len(
-                                            self.portfolio.open_trades)
-                                        if current_open_trades_count >= effective_max_open_trades:
-                                            logger.info(
-                                                "Maximum number of open trades reached, stopping further buys.")
-                                            break
-                                    else:
-                                        blocked_buy_attempts.append({
-                                            **attempt_meta,
-                                            'reason': 'execute_trade_failed',
-                                        })
-                                else:
-                                    logger.warning(
-                                        f"Insufficient available funds ({self.portfolio.cash:.2f} {self.config.base_currency}) for a trade of {position_size:.2f} {self.config.base_currency} for {coin}.")
-                                    blocked_buy_attempts.append({
-                                        **attempt_meta,
-                                        'reason': (
-                                            'insufficient_available_funds '
-                                            f'({self.portfolio.cash:.2f} < {position_size:.2f})'
-                                        ),
-                                    })
-                            else:
-                                logger.warning(
-                                    f"Price data for {coin} not found, cannot buy.")
-                                blocked_buy_attempts.append({
-                                    **attempt_meta,
-                                    'reason': 'missing_price_data',
-                                })
-                        else:
-                            logger.debug(
-                                f"{coin} already in portfolio or open position.")
-                    if top_buy_recommendations and successful_buy_count == 0:
-                        self._log_blocked_buy_attempt_candidates(
-                            blocked_buy_attempts)
-                elif current_open_trades_count >= effective_max_open_trades:
-                    logger.info(
-                        f"Maximum number of open trades ({effective_max_open_trades}) reached. No new buys.")
-                else:
-                    logger.info(
-                        f"Insufficient available funds ({available_funds_for_trade:.2f} {self.config.base_currency}) for minimum trade ({min_required_cash:.2f} {self.config.base_currency}).")
-
+                self._open_new_positions(
+                    current_market_data,
+                    market_analysis,
+                    top_buy_recommendations,
+                    portfolio_value_live,
+                )
                 # Step 6: Monitor open trades (stop-loss, take-profit, time, signals)
                 if self.portfolio.open_trades:
                     logger.info(
-                        f"💼 Monitoring {len(self.portfolio.open_trades)} open trades...")
+                        "💼 Monitoring %d open trades after %.1fs of iteration work...",
+                        len(self.portfolio.open_trades),
+                        time.monotonic() - iteration_started,
+                    )
                     self._manage_open_trades(
                         current_market_data, market_analysis)
 
                 # Step 7: Display portfolio status
-                portfolio_value = self.portfolio.get_value(
-                    {coin: data['price'] for coin, data in current_market_data.items()})
-                if self.portfolio.initial_portfolio_value is None:
-                    self.portfolio.initial_portfolio_value = portfolio_value
-                    if self.config.dry_run:
-                        self.portfolio.save_state()
-                logger.info(
-                    f"📈 Portfolio value: {portfolio_value:.2f} {self.config.base_currency}")
-                logger.info(
-                    f"  - Cash: {self.portfolio.cash:.2f} {self.config.base_currency}")
-                logger.info(f"  - Holdings: {self.portfolio.holdings}")
-                logger.info(
-                    f"  - Open trades details: {self.portfolio.open_trades}")
-                self._write_analytics_snapshot(
-                    portfolio_value, market_analysis)
-
+                self._log_portfolio_status(current_market_data, market_analysis)
                 if self.iteration % max(1, self.config.performance_report_every) == 0:
                     self._log_performance_report()
 
@@ -4686,87 +4670,9 @@ class CryptoTradingBot:
 
         except KeyboardInterrupt:
             logger.info("\n🛑 Bot stopping...")
-        except Exception as e:
-            logger.critical(
-                f"Critical, unexpected error in main loop: {e}", exc_info=True)
         finally:
             self.analytics_writer.close()
             logger.info("👋 Bot stopped")
-
-
-class Backtester:
-    """Backtesting module for the trading strategy on historical data."""
-
-    def __init__(self, data_file="training_data.csv", initial_cash=10000, base_currency="EUR"):
-        self.data_file = data_file
-        self.initial_cash = initial_cash
-        self.base_currency = base_currency
-        self.trades = []
-        self.equity_curve = []
-
-    def run(self, strategy_func, **kwargs):
-        df = pd.read_csv(self.data_file)
-        df = df.sort_values(["coin", "timestamp"]).reset_index(drop=True)
-        cash = self.initial_cash
-        holdings = {}
-        self.equity_curve = []
-        self.trades = []
-
-        for _, row in df.iterrows():
-            coin = row["coin"]
-            price = row["close"]
-            signal = strategy_func(row, **kwargs)
-
-            if signal == "kaufen" and cash > 0:
-                amount = cash / price
-                holdings[coin] = holdings.get(coin, 0) + amount
-                self.trades.append(
-                    (row["timestamp"], coin, "buy", price, amount))
-                cash = 0
-            elif signal == "verkaufen" and holdings.get(coin, 0) > 0:
-                amount = holdings[coin]
-                cash += amount * price
-                self.trades.append(
-                    (row["timestamp"], coin, "sell", price, amount))
-                holdings[coin] = 0
-
-            equity = cash + sum(holdings.get(c, 0) *
-                                row["close"] for c in holdings)
-            self.equity_curve.append(equity)
-
-        self._report()
-
-    def _report(self):
-        if not self.equity_curve:
-            print("No backtest run.")
-            return
-        total_return = (
-            self.equity_curve[-1] - self.initial_cash) / self.initial_cash * 100
-        max_drawdown = self._max_drawdown(self.equity_curve)
-        print("\nBacktest report:")
-        print(
-            f"  Starting capital: {self.initial_cash:.2f} {self.base_currency}")
-        print(
-            f"  End capital:   {self.equity_curve[-1]:.2f} {self.base_currency}")
-        print(f"  Total return: {total_return:.2f}%")
-        print(f"  Max drawdown:  {max_drawdown:.2f}%")
-        print(f"  Trades:        {len(self.trades)}")
-
-    def _max_drawdown(self, curve):
-        curve = np.array(curve)
-        highwater = np.maximum.accumulate(curve)
-        drawdowns = (curve - highwater) / highwater
-        return drawdowns.min() * 100
-
-
-def simple_strategy(row, rsi_buy=30, rsi_sell=70):
-    # Example strategy: RSI-based buy/sell signals
-    if "rsi" in row:
-        if row["rsi"] < rsi_buy:
-            return "kaufen"
-        if row["rsi"] > rsi_sell:
-            return "verkaufen"
-    return "halten"
 
 
 if __name__ == "__main__":
@@ -4777,17 +4683,34 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--backtest", action="store_true",
                         help="Start backtest on training data")
+    parser.add_argument(
+        "--backtest-fee-rate",
+        type=float,
+        default=0.002,
+        help="Estimated exchange fee per side as a decimal (default: 0.002)",
+    )
+    parser.add_argument(
+        "--backtest-slippage",
+        type=float,
+        default=0.001,
+        help="Estimated slippage per side as a decimal (default: 0.001)",
+    )
     args, _ = parser.parse_known_args()
 
     if args.backtest:
         print("\nStarting backtest on training data...",)
         backtester = Backtester(
-            data_file="training_data.csv", initial_cash=10000)
+            data_file="training_data.csv",
+            initial_cash=10000,
+            fee_per_trade=args.backtest_fee_rate,
+            slippage=args.backtest_slippage,
+        )
         backtester.run(simple_strategy)
 
     try:
         config = BotConfig()
-        if not config.simulate_data and (not config.api_key or not config.api_secret):
+        if (not config.simulate_data and not config.simulation_initial_balance_from_kraken
+                and (not config.api_key or not config.api_secret)):
             logger.critical(
                 "❌ API keys not found in .env file and simulation mode is DISABLED!")
             logger.info("Please create a .env file with:")
@@ -4799,8 +4722,8 @@ if __name__ == "__main__":
 
         # Test whether pandas and numpy are correctly installed (required for indicator calculation)
         try:
-            import pandas as pd  # noqa: F401
-            import numpy as np  # noqa: F401
+            import numpy as np
+            import pandas as pd
         except ImportError:
             logger.critical(
                 "❌ Pandas or Numpy are not installed. These are required for indicator calculation. Please install them with 'pip install pandas numpy'.")
@@ -4834,7 +4757,8 @@ if __name__ == "__main__":
             f"   OHLCV limit (for indicators): {config.ohlcv_limit} candles")
 
         bot = CryptoTradingBot(config)
+        _install_sigterm_handler()
         bot.run()
-    except Exception as e:
+    except (ImportError, OSError, TypeError, ValueError, KeyError) as e:
         logger.critical(f"Initialisation error: {e}", exc_info=True)
         sys.exit(1)

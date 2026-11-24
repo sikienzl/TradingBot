@@ -1,6 +1,7 @@
 # data_preparation.py
-import pandas as pd
 import os
+
+import pandas as pd
 
 
 def prepare_training_data(input_file="full_crypto_data.csv", output_file="training_data.csv"):
@@ -52,11 +53,12 @@ def prepare_training_data(input_file="full_crypto_data.csv", output_file="traini
         # Keep only coins with enough data
         valid_coins = value_counts[value_counts >= min_valid].index
         df = df[df['coin'].isin(valid_coins)]
+        df = df.sort_values(['coin', 'timestamp'])
 
         # 4. Calculate technical indicators (if missing)
         print("📈 Calculating missing indicators...")
 
-        if 'rsi' not in df.columns or df['rsi'].isna().all():
+        if 'rsi' not in df.columns or df['rsi'].isna().any():
             # Calculate RSI per coin to avoid cross-coin contamination at boundaries.
             def _rsi_per_group(close: "pd.Series") -> "pd.Series":
                 delta = close.diff()
@@ -65,7 +67,11 @@ def prepare_training_data(input_file="full_crypto_data.csv", output_file="traini
                 rs = gain / loss
                 return 100 - (100 / (1 + rs))
 
-            df['rsi'] = df.groupby('coin')['close'].transform(_rsi_per_group)
+            calculated_rsi = df.groupby('coin')['close'].transform(_rsi_per_group)
+            if 'rsi' in df.columns:
+                df['rsi'] = df['rsi'].fillna(calculated_rsi)
+            else:
+                df['rsi'] = calculated_rsi
 
         # 5. Prepare data for training
         print("🛠️ Finalizing data...")
@@ -82,6 +88,7 @@ def prepare_training_data(input_file="full_crypto_data.csv", output_file="traini
 
         # Sort by coin and time
         df = df.sort_values(['coin', 'timestamp'])
+        df = df[final_columns]
 
         # 6. Save data
         df.to_csv(output_file, index=False)
@@ -91,8 +98,16 @@ def prepare_training_data(input_file="full_crypto_data.csv", output_file="traini
         print(f"   - Coins included: {df['coin'].nunique()}")
         return True
 
-    except Exception as e:
-        print(f"❌ Error during data preparation: {str(e)}")
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        AttributeError,
+        KeyError,
+        pd.errors.ParserError,
+        pd.errors.EmptyDataError,
+    ) as e:
+        print(f"❌ Error during data preparation: {e!s}")
         return False
 
 

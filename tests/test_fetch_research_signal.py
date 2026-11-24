@@ -1,12 +1,11 @@
 """Tests for scripts/fetch_research_signal.py"""
 
-import json
-import unittest
-from unittest.mock import MagicMock, patch
-
 # Allow importing the script as a module without running main()
 import importlib.util
+import json
 import os
+import unittest
+from unittest.mock import MagicMock, patch
 
 SCRIPT_PATH = os.path.join(os.path.dirname(
     __file__), "..", "scripts", "fetch_research_signal.py")
@@ -97,9 +96,11 @@ class TestFetchFng(unittest.TestCase):
         mock_response.__enter__ = lambda s: s
         mock_response.__exit__ = MagicMock(return_value=False)
 
-        with patch("urllib.request.urlopen", return_value=mock_response):
-            with self.assertRaises(ValueError):
-                self.mod._fetch_fng()
+        with (
+            patch("urllib.request.urlopen", return_value=mock_response),
+            self.assertRaises(ValueError),
+        ):
+            self.mod._fetch_fng()
 
     def test_returns_first_entry(self):
         entry = {"value": "72", "value_classification": "Greed",

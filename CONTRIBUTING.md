@@ -22,6 +22,20 @@ pip install -r requirements.txt
 .venv/bin/python -m pytest tests/ -v
 ```
 
+To generate a coverage report for SonarQube, run from the repository root:
+
+```sh
+.venv/bin/python -m pytest tests/ --cov=src --cov=scripts --cov-report=term &&
+.venv/bin/python -m coverage xml -o coverage.xml &&
+pysonar \
+  --sonar-host-url=http://localhost:9000 \
+  --sonar-project-key=TradingBot \
+  -Dsonar.python.coverage.reportPaths=coverage.xml
+```
+
+Set `SONAR_TOKEN` securely in your shell before running the scanner. The XML
+report is generated locally and is not committed.
+
 ## Coding Guidelines
 
 - Keep changes focused and minimal.

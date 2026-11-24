@@ -1,18 +1,12 @@
 #!/usr/bin/env python3
-from trading_bot import BotConfig, CryptoTradingBot, logger as bot_logger
 import argparse
 import logging
+import math
 import os
-import sys
 from collections import Counter
-from pathlib import Path
 
-
-SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
+from src.trading_bot import BotConfig, CryptoTradingBot
+from src.trading_bot import logger as bot_logger
 
 DEFAULT_COINS = ["BTC", "ETH", "SOL", "XRP",
                  "ADA", "DOGE", "TRX", "CHZ", "VVV"]
@@ -38,7 +32,7 @@ def _has_valid_number(value) -> bool:
         numeric = float(value)
     except (TypeError, ValueError):
         return False
-    return numeric == numeric
+    return math.isfinite(numeric)
 
 
 def _build_bot(regime: str, seed: int, top_n: int, coins: list[str]) -> CryptoTradingBot:
@@ -225,10 +219,6 @@ def main() -> int:
                 f"score={entry['score']} | rsi={_format_rsi(entry['rsi'])} | price={entry['price']:.4f}"
             )
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
 
 
 if __name__ == "__main__":

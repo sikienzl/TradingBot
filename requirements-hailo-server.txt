@@ -1,0 +1,6 @@
+# Python service dependencies for a HailoRT host.
+# Create the service venv with --system-site-packages so it can import the
+# host-installed hailo_platform bindings and matching NumPy runtime.
+fastapi==0.121.1
+pydantic==2.12.4
+uvicorn==0.38.0

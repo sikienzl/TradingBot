@@ -1,14 +1,15 @@
-from unittest.mock import patch, MagicMock
 import base64
+import binascii
 import time
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.get_account_balance import (
     get_nonce,
-    sign,
     get_signature,
     request,
+    sign,
 )
 
 
@@ -50,8 +51,8 @@ class TestSign:
         assert isinstance(signature, str)
         # Try to decode base64
         try:
-            base64.b64decode(signature)
-        except Exception:
+            base64.b64decode(signature, validate=True)
+        except (binascii.Error, ValueError):
             pytest.fail("Signature is not valid base64")
 
     def test_sign_deterministic(self):
@@ -85,8 +86,8 @@ class TestGetSignature:
         signature = get_signature(private_key, data, nonce, path)
         assert isinstance(signature, str)
         try:
-            base64.b64decode(signature)
-        except Exception:
+            base64.b64decode(signature, validate=True)
+        except (binascii.Error, ValueError):
             pytest.fail("Signature is not valid base64")
 
     def test_get_signature_uses_nonce_in_hash(self):

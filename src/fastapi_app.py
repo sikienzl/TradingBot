@@ -12,8 +12,10 @@ from src.api_models import (
 )
 from src.go_no_go_scorecard import ScorecardDataError, evaluate_scorecard
 from src.predict_catboost import CatBoostTradingPredictor
-from src.research_signal import load_research_signal_payload, normalize_research_payload_model
-
+from src.research_signal import (
+    load_research_signal_payload,
+    normalize_research_payload_model,
+)
 
 app = FastAPI(
     title="Trading Bot Typed API",
@@ -43,23 +45,30 @@ def _validate_scorecard_path(file: str) -> pathlib.Path:
             resolved = pathlib.Path(file).resolve()
         else:
             resolved = (project_root / file).resolve()
-    except Exception as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         raise HTTPException(
             status_code=400, detail="Invalid file path.") from exc
 
-    if _SCORECARD_ALLOWED_DIR is not None:
-        if not str(resolved).startswith(str(_SCORECARD_ALLOWED_DIR) + os.sep) and resolved != _SCORECARD_ALLOWED_DIR:
-            raise HTTPException(
-                status_code=403,
-                detail="Access denied: file is outside the allowed directory.",
-            )
-    elif not pathlib.Path(file).is_absolute():
+    if (
+        _SCORECARD_ALLOWED_DIR is not None
+        and not str(resolved).startswith(str(_SCORECARD_ALLOWED_DIR) + os.sep)
+        and resolved != _SCORECARD_ALLOWED_DIR
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: file is outside the allowed directory.",
+        )
+    elif (
+        _SCORECARD_ALLOWED_DIR is None
+        and not pathlib.Path(file).is_absolute()
+        and not str(resolved).startswith(str(project_root) + os.sep)
+        and resolved != project_root
+    ):
         # Relative path: block traversal that escapes the project root.
-        if not str(resolved).startswith(str(project_root) + os.sep) and resolved != project_root:
-            raise HTTPException(
-                status_code=403,
-                detail="Access denied: relative path escapes the project root.",
-            )
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: relative path escapes the project root.",
+        )
     return resolved
 
 
@@ -74,7 +83,7 @@ def get_research_signal(
 ) -> ResearchSignalPayload:
     try:
         return load_research_signal_payload(path)
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
@@ -96,7 +105,7 @@ def predict_catboost_signal(payload: CatBoostPredictionRequest) -> CatBoostPredi
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return CatBoostPredictionResponse(

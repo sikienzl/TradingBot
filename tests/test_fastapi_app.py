@@ -1,8 +1,7 @@
 from fastapi.testclient import TestClient
 
-import src.fastapi_app as fastapi_app
+from src import fastapi_app
 from src.fastapi_app import app
-
 
 client = TestClient(app)
 
@@ -30,6 +29,16 @@ def test_normalize_research_signal_endpoint_returns_typed_features():
     assert body["research_sentiment_score"] == -0.4
     assert body["research_regime_bear"] == 1.0
     assert body["research_regime_sideways"] == 0.0
+
+
+def test_research_signal_endpoint_rejects_non_object_json(tmp_path):
+    signal_file = tmp_path / "signal.json"
+    signal_file.write_text("[]", encoding="utf-8")
+
+    response = client.get("/research-signal", params={"path": str(signal_file)})
+
+    assert response.status_code == 422
+    assert "JSON object" in response.json()["detail"]
 
 
 def test_scorecard_endpoint_returns_typed_scorecard(tmp_path):

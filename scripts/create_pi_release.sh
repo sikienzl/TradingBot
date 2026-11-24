@@ -51,29 +51,33 @@ BUILD_DIR="$(mktemp -d)"
 STAGE="${BUILD_DIR}/${PACKAGE_NAME}"
 trap 'rm -rf "$BUILD_DIR"; rm -f "$RELEASE_BODY_FILE"' EXIT
 
+if [[ -n "$(git status --porcelain)" ]]; then
+  die "Working tree is not clean. Commit or stash release changes before building and tagging."
+fi
+
 info "Building release ${TAG} ..."
 
 # ── Stage files ──────────────────────────────────────────────────────────────
 mkdir -p "$STAGE"
 
+mkdir -p "$STAGE/src"
+for source_file in "$ROOT_DIR"/src/*.py; do
+  [[ -f "$source_file" ]] || continue
+  cp "$source_file" "$STAGE/src/"
+done
+
 INCLUDE_FILES=(
-  # Python source
-  trading_bot.py
-  get_data.py
-  data_preperation.py
-  predict.py
-  predict_catboost.py
-  research_signal.py
-  go_no_go_scorecard.py
-  analyze_trade_journal.py
-  get_account_balance.py
   # Config / documentation
   requirements.txt
   requirements-pi.txt
   README.md
   SERVER_README.md
+  CHANGELOG.md
+  LICENSE
   .env.example
   .env.live.example
+  .env.simulation.example
+  docs/postgres_analytics_schema.md
   # Deploy helpers
   deploy
   scripts/run_weekly_scorecard.sh
@@ -127,9 +131,12 @@ EOF
 
 # ── Artifact sanity checks (release blocking) ───────────────────────────────
 REQUIRED_STAGE_FILES=(
-  "${PACKAGE_NAME}/trading_bot.py"
-  "${PACKAGE_NAME}/predict_catboost.py"
-  "${PACKAGE_NAME}/research_signal.py"
+  "${PACKAGE_NAME}/src/trading_bot.py"
+  "${PACKAGE_NAME}/src/predict_catboost.py"
+  "${PACKAGE_NAME}/src/research_signal.py"
+  "${PACKAGE_NAME}/src/analyze_trade_journal.py"
+  "${PACKAGE_NAME}/CHANGELOG.md"
+  "${PACKAGE_NAME}/docs/postgres_analytics_schema.md"
   "${PACKAGE_NAME}/scripts/install_pi.sh"
   "${PACKAGE_NAME}/scripts/run_weekly_scorecard.sh"
   "${PACKAGE_NAME}/version.txt"

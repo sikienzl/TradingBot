@@ -1,0 +1,20 @@
+[Unit]
+Description=Public Kraken market data recorder
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=%h/trading-market-recorder/storage.env
+ExecStartPre=/bin/sh -c 'test -n "$$MARKET_RECORDER_FS_UUID" && test "$$(/usr/bin/findmnt -rn -M /mnt/nvme_data -o UUID)" = "$$MARKET_RECORDER_FS_UUID" && test -d /mnt/nvme_data/trading-market-recorder/data'
+ExecStart=/usr/bin/sg docker -c "/usr/bin/docker run --rm --name trading-market-recorder --network host --memory=256m --cpus=0.25 --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m --cap-drop=ALL --security-opt=no-new-privileges --mount type=bind,src=/mnt/nvme_data/trading-market-recorder/data,dst=/data --env PYTHONDONTWRITEBYTECODE=1 --entrypoint python3 trading-market-recorder:local -m src.public_market_recorder --data-dir /data --symbols ADA/EUR,ETH/EUR,LINK/EUR,NEAR/EUR,SOL/EUR,SUI/EUR"
+ExecStop=/usr/bin/sg docker -c "/usr/bin/docker stop --time 30 trading-market-recorder"
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=30
+TimeoutStopSec=45
+UMask=0077
+
+[Install]
+WantedBy=default.target

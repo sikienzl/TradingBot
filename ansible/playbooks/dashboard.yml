@@ -1,0 +1,6 @@
+---
+- name: Deploy the authenticated paper-trading dashboard
+  hosts: paper_dashboard
+  become: true
+  roles:
+    - public_paper_dashboard

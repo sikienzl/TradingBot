@@ -1,6 +1,9 @@
 import json
 
-from src.research_signal import load_research_signal_payload, normalize_research_payload_model
+from src.research_signal import (
+    load_research_signal_payload,
+    normalize_research_payload_model,
+)
 
 
 def test_normalize_research_payload_model_clamps_and_sets_sideways_default():

@@ -1,8 +1,9 @@
-import ccxt
-import talib
-import pandas as pd
-import time
 import sqlite3
+import time
+
+import ccxt
+import pandas as pd
+import talib
 
 
 class CryptoDataFetcher:
@@ -27,8 +28,8 @@ class CryptoDataFetcher:
             })
             exchange.load_markets()
             return exchange
-        except Exception as e:
-            print(f"❌ Exchange initialisation failed: {str(e)}")
+        except (AttributeError, TypeError, ccxt.BaseError) as e:
+            print(f"❌ Exchange initialisation failed: {e!s}")
             return None
 
     def get_available_pairs(self, exchange):
@@ -47,7 +48,7 @@ class CryptoDataFetcher:
                 ohlcv = exchange.fetch_ohlcv(
                     symbol, self.timeframe, limit=self.days)
                 return ohlcv
-            except Exception as err:
+            except (ccxt.NetworkError, ccxt.ExchangeError) as err:
                 last_error = err
                 wait_time = (attempt + 1) * 5
                 print(
@@ -79,8 +80,8 @@ class CryptoDataFetcher:
             df['bb_upper'], df['bb_middle'], df['bb_lower'] = talib.BBANDS(
                 df['close'])
             return True
-        except Exception as e:
-            print(f"Indicator calculation failed: {str(e)}")
+        except (TypeError, ValueError) as e:
+            print(f"Indicator calculation failed: {e!s}")
             return False
 
     def process_symbol(self, exchange, symbol):
@@ -129,9 +130,7 @@ class CryptoDataFetcher:
     def save_to_csv(self, filename="crypto_data.csv"):
         """Saves all data to a CSV file"""
         try:
-            all_dfs = []
-            for df in self.data.values():
-                all_dfs.append(df)
+            all_dfs = list(self.data.values())
 
             if not all_dfs:
                 print("No data available to save")
@@ -141,8 +140,8 @@ class CryptoDataFetcher:
             combined.to_csv(filename, index=False)
             print(f"Daten erfolgreich in {filename} gespeichert")
             return True
-        except Exception as e:
-            print(f"Error saving file: {str(e)}")
+        except (OSError, ValueError) as e:
+            print(f"Error saving file: {e!s}")
             return False
 
     def save_to_sqlite(self, filename="crypto_data.db"):
@@ -155,8 +154,8 @@ class CryptoDataFetcher:
             conn.close()
             print(f"Daten erfolgreich in {filename} gespeichert")
             return True
-        except Exception as e:
-            print(f"Fehler beim Speichern in SQLite: {str(e)}")
+        except (sqlite3.Error, ValueError) as e:
+            print(f"Fehler beim Speichern in SQLite: {e!s}")
             return False
 
     def get_sample_data(self, symbol=None):

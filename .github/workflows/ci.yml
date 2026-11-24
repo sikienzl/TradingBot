@@ -29,6 +29,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check deployment configuration
+        run: python scripts/check_deployment_config.py
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -63,12 +66,7 @@ jobs:
         run: |
           set -o pipefail
           set +e
-          ruff check . \
-            --exclude build \
-            --exclude .venv \
-            --exclude results \
-            --exclude catboost_info \
-            --output-format=github | tee ruff-report.txt
+          ruff check . --output-format=github | tee ruff-report.txt
           echo "ruff_exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Ruff summary
@@ -99,6 +97,56 @@ jobs:
             exit 1
           fi
 
+  typecheck:
+    name: Type check (mypy, informational)
+    runs-on: ubuntu-latest
+    # Informational only: this job never gates the build. It surfaces typing
+    # regressions in the PR/commit summary without failing CI.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install mypy
+        run: |
+          python -m pip install --upgrade pip
+          pip install "mypy>=1.13"
+
+      - name: Run mypy
+        id: mypy
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          set +e
+          mypy | tee mypy-report.txt
+          echo "mypy_exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Mypy summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Mypy Type Check (informational)"
+            echo
+            if [[ "${{ steps.mypy.outputs.mypy_exit_code }}" == "0" ]]; then
+              echo "- Status: passed"
+            else
+              echo "- Status: findings reported (non-blocking)"
+              echo
+              echo "Sample findings:"
+              echo '```text'
+              head -n 80 mypy-report.txt || true
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
   tests:
     name: Unit tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -126,7 +174,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest numpy pandas scikit-learn catboost ccxt python-dotenv pydantic fastapi uvicorn httpx
+          pip install pytest pytest-cov numpy pandas scikit-learn catboost ccxt python-dotenv pydantic fastapi uvicorn httpx
 
       - name: Verify module imports
         env:
@@ -143,7 +191,8 @@ jobs:
         run: |
           set -o pipefail
           set +e
-          pytest tests/ -v --maxfail=1 --junitxml=pytest-report.xml | tee pytest-output.txt
+          pytest tests/ -v --junitxml=pytest-report.xml \
+            --cov=src --cov-report=term-missing --cov-report=xml | tee pytest-output.txt
           echo "pytest_exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Upload test artifacts
@@ -185,6 +234,45 @@ jobs:
             echo "Pytest failed. See summary and artifacts for details."
             exit 1
           fi
+
+  # The Hailo experiment test drives the real train -> ONNX export path, which
+  # needs the optional `hailo-export` extra. The slim matrix jobs above skip it,
+  # so this job installs the extra and runs that file for real.
+  hailo-export-tests:
+    name: Hailo export tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgomp1
+
+      - name: Install test dependencies with hailo-export extra
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov numpy pandas scikit-learn catboost ccxt python-dotenv pydantic fastapi uvicorn httpx
+          pip install "torch==2.9.1" "onnx>=1.16"
+
+      - name: Run Hailo export tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/src
+        run: |
+          pytest tests/test_hailo_experiment.py -v
 
   build-wheel:
     name: Build wheel (py3.12)

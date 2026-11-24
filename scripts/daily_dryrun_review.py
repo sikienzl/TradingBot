@@ -15,13 +15,15 @@ import html
 import json
 import os
 import re
+import sys
+import urllib.error
 import urllib.request
 from collections import deque
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 
-def _parse_ts(value: str) -> Optional[datetime]:
+def _parse_ts(value: str) -> datetime | None:
     if not value:
         return None
     raw = value.strip()
@@ -35,22 +37,19 @@ def _parse_ts(value: str) -> Optional[datetime]:
         # trade_journal timestamps are usually ISO; ignore malformed rows.
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
-def _read_trade_rows(path: str) -> List[Dict[str, Any]]:
+def _read_trade_rows(path: str) -> list[dict[str, Any]]:
     if not os.path.exists(path):
         return []
 
     import csv
 
-    rows: List[Dict[str, Any]] = []
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         reader = csv.DictReader(f)
-        for row in reader:
-            rows.append(row)
-    return rows
+        return list(reader)
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
@@ -62,7 +61,7 @@ def _to_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def _review_trades(rows: List[Dict[str, Any]], cutoff_utc: datetime) -> Dict[str, Any]:
+def _review_trades(rows: list[dict[str, Any]], cutoff_utc: datetime) -> dict[str, Any]:
     sells = []
     buys = 0
     for row in rows:
@@ -79,7 +78,7 @@ def _review_trades(rows: List[Dict[str, Any]], cutoff_utc: datetime) -> Dict[str
     realized = 0.0
     wins = 0
     losses = 0
-    pnl_values: List[float] = []
+    pnl_values: list[float] = []
     for row in sells:
         pnl = _to_float(row.get("pnl_base"), 0.0)
         pnl_values.append(pnl)
@@ -97,13 +96,14 @@ def _review_trades(rows: List[Dict[str, Any]], cutoff_utc: datetime) -> Dict[str
         "closed_trades": closed,
         "wins": wins,
         "losses": losses,
+        "break_even": closed - wins - losses,
         "win_rate_pct": round(win_rate, 4),
         "realized_pnl": round(realized, 8),
         "avg_pnl_per_trade": round(avg_pnl, 8),
     }
 
 
-def _scan_bot_log(path: str, cutoff_utc: datetime) -> Dict[str, Any]:
+def _scan_bot_log(path: str, cutoff_utc: datetime) -> dict[str, Any]:
     if not os.path.exists(path):
         return {
             "buy_attempts": 0,
@@ -129,7 +129,7 @@ def _scan_bot_log(path: str, cutoff_utc: datetime) -> Dict[str, Any]:
         ts_text = line[:23]
         try:
             ts = datetime.strptime(
-                ts_text, "%Y-%m-%d %H:%M:%S,%f").replace(tzinfo=timezone.utc)
+                ts_text, "%Y-%m-%d %H:%M:%S,%f").replace(tzinfo=UTC)
         except ValueError:
             continue
         if ts < cutoff_utc:
@@ -156,7 +156,7 @@ def _scan_bot_log(path: str, cutoff_utc: datetime) -> Dict[str, Any]:
     }
 
 
-def _read_ai_state(path: str) -> Dict[str, Any]:
+def _read_ai_state(path: str) -> dict[str, Any]:
     empty = {
         "available": False,
         "model": "",
@@ -225,7 +225,7 @@ def _read_env_value(path: str, env_key: str) -> str:
     return ""
 
 
-def _read_ai_spend_from_api(env_path: str) -> Dict[str, Any]:
+def _read_ai_spend_from_api(env_path: str) -> dict[str, Any]:
     api_key = _read_env_value(env_path, "MAMMOUTH_API_KEY")
     api_url = _read_env_value(
         env_path, "AI_COPILOT_API_URL") or "https://api.mammouth.ai/v1/chat/completions"
@@ -257,7 +257,7 @@ def _read_ai_spend_from_api(env_path: str) -> Dict[str, Any]:
     return result
 
 
-def _build_text(report: Dict[str, Any]) -> str:
+def _build_text(report: dict[str, Any]) -> str:
     t = report["trades"]
     log_activity = report["log_activity"]
     a = report["ai_copilot"]
@@ -271,6 +271,9 @@ def _build_text(report: Dict[str, Any]) -> str:
         "[Trades]",
         f"buys: {t['buys']}",
         f"closed_trades: {t['closed_trades']}",
+        f"wins: {t['wins']}",
+        f"losses: {t['losses']}",
+        f"break_even: {t['break_even']}",
         f"win_rate_pct: {t['win_rate_pct']}",
         f"realized_pnl: {t['realized_pnl']}",
         f"avg_pnl_per_trade: {t['avg_pnl_per_trade']}",
@@ -323,7 +326,7 @@ def _fmt_timestamp(value: str) -> str:
     return html.escape(str(value))
 
 
-def _fmt_change_map(changes: Dict[str, Any]) -> str:
+def _fmt_change_map(changes: dict[str, Any]) -> str:
     if not changes:
         return "No changes recorded"
     parts = []
@@ -335,7 +338,7 @@ def _fmt_change_map(changes: Dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
-def _fmt_suggestion(suggestion: Dict[str, Any]) -> str:
+def _fmt_suggestion(suggestion: dict[str, Any]) -> str:
     if not suggestion:
         return "No suggestion recorded"
     changes = suggestion.get("changes", {})
@@ -354,7 +357,7 @@ def _fmt_suggestion(suggestion: Dict[str, Any]) -> str:
     return " | ".join(parts)
 
 
-def _build_ai_summary_rows(label: str, state: Dict[str, Any]) -> List[str]:
+def _build_ai_summary_rows(label: str, state: dict[str, Any]) -> list[str]:
     return [
         f"<tr><th>{html.escape(label)} model</th><td>{html.escape(state.get('model', '') or '-')}</td></tr>",
         f"<tr><th>{html.escape(label)} available</th><td>{html.escape(str(bool(state.get('available', False))))}</td></tr>",
@@ -371,7 +374,7 @@ def _build_ai_summary_rows(label: str, state: Dict[str, Any]) -> List[str]:
     ]
 
 
-def _build_html(report: Dict[str, Any]) -> str:
+def _build_html(report: dict[str, Any]) -> str:
     trades = report["trades"]
     log_activity = report["log_activity"]
     ai_copilot = report["ai_copilot"]
@@ -479,6 +482,7 @@ def _build_html(report: Dict[str, Any]) -> str:
                     <tr><th>Closed trades</th><td>{trades['closed_trades']}</td></tr>
                     <tr><th>Wins</th><td>{trades['wins']}</td></tr>
                     <tr><th>Losses</th><td>{trades['losses']}</td></tr>
+                    <tr><th>Break-even</th><td>{trades['break_even']}</td></tr>
                     <tr><th>Win rate</th><td>{_fmt_number(trades['win_rate_pct'], 2)}%</td></tr>
                     <tr><th>Realized PnL</th><td>{_fmt_number(trades['realized_pnl'], 8)}</td></tr>
                     <tr><th>Avg. PnL per trade</th><td>{_fmt_number(trades['avg_pnl_per_trade'], 8)}</td></tr>
@@ -528,7 +532,7 @@ def main() -> None:
         "--output-html", default="results/daily_review/latest_review.html")
     args = parser.parse_args()
 
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     cutoff_utc = now_utc - timedelta(hours=max(1, args.lookback_hours))
 
     rows = _read_trade_rows(args.journal)
@@ -541,8 +545,16 @@ def main() -> None:
         if api_usage:
             ai_copilot.update(api_usage)
             ai_copilot["available"] = True
-    except Exception:
-        pass
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        print(f"AI spend lookup failed: {exc}", file=sys.stderr)
 
     ai_copilot["model"] = ai_copilot.get("model") or _read_env_value(
         args.env_file, "AI_COPILOT_MODEL")

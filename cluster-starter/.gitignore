@@ -1,0 +1,7 @@
+.venv/
+.ansible/
+inventory/*
+!inventory/example/
+!inventory/vault.example.yml
+inventory/**/group_vars/**/vault.yml
+*.retry

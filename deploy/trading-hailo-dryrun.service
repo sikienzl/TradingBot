@@ -1,0 +1,16 @@
+[Unit]
+Description=Trading Hailo dry-run inference (localhost only)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/trading-hailo-dryrun
+EnvironmentFile=%h/trading-hailo-dryrun/service.env
+ExecStart=%h/trading-hailo-dryrun/.venv/bin/uvicorn src.hailo_service:app --host 127.0.0.1 --port 18001
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

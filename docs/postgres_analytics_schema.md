@@ -1,7 +1,10 @@
-# PostgreSQL Analytics Schema Proposal
+# PostgreSQL Analytics Schema
 
 This schema is intended for optional analytics-only writes from the trading bot.
-The bot remains operational without PostgreSQL. When enabled, it only appends rows.
+The bot remains operational without PostgreSQL. When enabled, it appends trade
+and portfolio rows, creates the schema, and applies additive migrations to
+existing tables. `scripts/init_postgres_analytics.sql` can also be used for
+manual provisioning.
 
 ## Goals
 
@@ -50,8 +53,22 @@ create table if not exists trading_analytics.trade_events (
     reason text,
     dry_run boolean not null,
     base_currency text not null,
+    run_id text not null default 'legacy',
+    config_hash text not null default 'legacy',
+    mfe_pct double precision,
+    mae_pct double precision,
     created_at timestamptz not null default now()
 );
+
+-- Additive migration for installations with the original trade_events table.
+alter table trading_analytics.trade_events
+    add column if not exists run_id text not null default 'legacy';
+alter table trading_analytics.trade_events
+    add column if not exists config_hash text not null default 'legacy';
+alter table trading_analytics.trade_events
+    add column if not exists mfe_pct double precision;
+alter table trading_analytics.trade_events
+    add column if not exists mae_pct double precision;
 
 create index if not exists trade_events_event_ts_idx
     on trading_analytics.trade_events (event_ts desc);
@@ -67,6 +84,12 @@ Typical questions this answers:
 - Which coins lose most often via `MAX-HOLD-TIME`?
 - How does `catboost` vs `rules` perform over the last 30 days?
 - What is average `pnl_pct` by exit reason?
+- How do PnL and observed excursions differ by bot run or configuration?
+
+`run_id` identifies a bot process; `config_hash` fingerprints non-secret
+settings. `mfe_pct` / `mae_pct` are the best/worst prices observed by the bot
+while monitoring the position, not exchange-candle intrabar extremes.
+Historical rows are assigned `legacy` by the database migration defaults.
 
 ### `portfolio_snapshots`
 

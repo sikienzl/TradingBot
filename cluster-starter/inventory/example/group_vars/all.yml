@@ -1,0 +1,65 @@
+---
+# All mutating components are opt-in. Configure and enable them deliberately.
+enable_common: false
+enable_account: false
+enable_docker: false
+enable_nas: false
+enable_netdata: false
+enable_storage: false
+enable_k3s: false
+enable_hailo: false
+enable_postgresql: false
+enable_postgresql_k8s: false
+enable_prometheus: false
+enable_cluster_metadata: false
+
+service_account_name: trading
+service_account_authorized_key: REPLACE_WITH_PUBLIC_SSH_KEY
+
+# CIFS credentials must be defined in an encrypted Ansible Vault file.
+nas_share: //REPLACE_WITH_NAS_HOST/REPLACE_WITH_SHARE
+nas_mount_path: /mnt/REPLACE_WITH_MOUNT_NAME
+nas_version: "3.0"
+
+# Existing Btrfs is mounted, never reformatted. Set mode to format only for
+# a blank, unmounted whole disk after verifying its serial and backups.
+storage_device: /dev/disk/by-id/REPLACE_WITH_DISK_ID
+storage_expected_serial: REPLACE_WITH_DISK_SERIAL
+storage_mount_path: /srv/REPLACE_WITH_STORAGE_DIRECTORY
+storage_mode: existing
+storage_format_approved: false
+storage_format_confirm_serial: REPLACE_WITH_DISK_SERIAL
+
+# Pin a specific K3s release and the checksum of the installer script.
+k3s_version: REPLACE_WITH_EXACT_K3S_VERSION
+k3s_installer_url: https://get.k3s.io
+k3s_installer_sha256: REPLACE_WITH_INSTALLER_SHA256
+k3s_server_address: REPLACE_WITH_MASTER_IP_OR_DNS
+k3s_allow_version_change: false
+
+# Provide a compatible vendor DKMS .deb and its SHA-256, not an unpinned URL.
+hailo_deb_url: REPLACE_WITH_HAILO_DRIVER_DEB_URL
+hailo_deb_sha256: REPLACE_WITH_HAILO_DRIVER_DEB_SHA256
+hailo_module_name: hailo_pci
+
+# Debian 12 default. Choose a version available from your OS repositories.
+postgresql_version: "15"
+postgresql_db: REPLACE_WITH_DATABASE
+postgresql_user: REPLACE_WITH_DATABASE_USER
+postgresql_listen_address: "127.0.0.1"
+postgresql_allow_remote: false
+postgresql_client_cidr: REPLACE_WITH_AUTHORIZED_CLIENT_CIDR
+postgresql_k8s_namespace: REPLACE_WITH_NAMESPACE
+postgresql_k8s_service: REPLACE_WITH_SERVICE_NAME
+postgresql_k8s_endpoint_ip: REPLACE_WITH_MASTER_REACHABLE_IP
+
+prometheus_listen_address: "127.0.0.1:9090"
+prometheus_scrape_targets:
+  - REPLACE_WITH_MASTER_IP_OR_DNS:9100
+  - REPLACE_WITH_WORKER_IP_OR_DNS:9100
+
+# Labels describe placement only; they do not provision Kubernetes storage.
+master_node_labels:
+  starter.example/role: control-plane
+worker_node_labels:
+  starter.example/role: worker

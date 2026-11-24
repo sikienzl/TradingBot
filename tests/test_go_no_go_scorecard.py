@@ -1,11 +1,11 @@
 import pandas as pd
 
 from src.go_no_go_scorecard import (
-    _safe_float,
-    _max_drawdown_base,
+    ScorecardResult,
     _compute_metrics,
     _evaluate_verdict,
-    ScorecardResult,
+    _max_drawdown_base,
+    _safe_float,
 )
 
 
@@ -64,6 +64,20 @@ class TestMaxDrawdownBase:
         series = pd.Series([100.0])
         result = _max_drawdown_base(series)
         assert result == 0.0
+
+
+def test_scorecard_drawdown_includes_starting_capital_before_first_trade():
+    df = pd.DataFrame(
+        {
+            "action": ["sell", "sell"],
+            "pnl_base": [-5.0, 10.0],
+        }
+    )
+
+    metrics = _compute_metrics(df, starting_capital=100.0)
+
+    assert metrics.max_drawdown_base == -5.0
+    assert metrics.max_drawdown_pct == 5.0
 
 
 class TestEvaluateVerdict:
@@ -350,6 +364,22 @@ class TestComputeMetrics:
         assert result.recent_closed_trades == 0
         assert result.catboost_closed_trades == 0
         assert result.rules_closed_trades == 0
+
+    def test_compute_metrics_counts_break_even_separately(self):
+        df = pd.DataFrame([
+            {"action": "sell", "pnl_base": 1.0, "signal_source": "catboost"},
+            {"action": "sell", "pnl_base": -1.0, "signal_source": "rules"},
+            {"action": "sell", "pnl_base": 0.0, "signal_source": "rules"},
+        ])
+
+        result = _compute_metrics(df, starting_capital=20.0)
+
+        assert result.closed_trades == 3
+        assert result.win_rate == (1.0 / 3.0) * 100.0
+        assert result.break_even_trades == 1
+        assert result.recent_break_even_trades == 1
+        assert result.catboost_break_even_trades == 0
+        assert result.rules_break_even_trades == 1
 
 
 class TestScorecardResultDataclass:

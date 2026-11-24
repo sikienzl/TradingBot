@@ -1,0 +1,29 @@
+---
+- name: Validate Kubernetes database endpoint
+  ansible.builtin.assert:
+    that:
+      - postgresql_k8s_namespace is match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+      - postgresql_k8s_service is match('^[a-z]([-a-z0-9]*[a-z0-9])?$')
+      - postgresql_k8s_endpoint_ip == postgresql_listen_address
+- name: Verify endpoint is an IP address
+  ansible.builtin.command:
+    argv: [python3, -c, "import ipaddress,sys; ipaddress.ip_address(sys.argv[1])", "{{ postgresql_k8s_endpoint_ip }}"]
+  changed_when: false
+  check_mode: false
+- name: Create protected manifests directory
+  ansible.builtin.file:
+    path: /etc/cluster-starter
+    state: directory
+    mode: "0700"
+- name: Render database service and credentials manifest
+  ansible.builtin.template:
+    src: database-k8s.yml.j2
+    dest: /etc/cluster-starter/database-k8s.yml
+    mode: "0600"
+  no_log: true
+- name: Apply database service and credentials
+  ansible.builtin.command:
+    argv: [k3s, kubectl, apply, -f, /etc/cluster-starter/database-k8s.yml]
+  register: postgresql_kubernetes_apply
+  changed_when: "'created' in postgresql_kubernetes_apply.stdout or 'configured' in postgresql_kubernetes_apply.stdout"
+  no_log: true

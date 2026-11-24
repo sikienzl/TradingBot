@@ -1,9 +1,34 @@
 import logging
-from datetime import datetime, timedelta, timezone
+import signal
+from datetime import UTC, datetime, timedelta
 
+import ccxt
 import pandas as pd
+import pytest
 
-from src.trading_bot import BotConfig, CryptoTradingBot
+from src.trading_bot import (
+    BotConfig,
+    CryptoTradingBot,
+    _install_sigterm_handler,
+    _order_fill_details,
+)
+
+
+def test_sigterm_uses_bot_shutdown_handler(monkeypatch):
+    installed = {}
+    monkeypatch.setattr(
+        "src.trading_bot.signal.signal",
+        lambda signum, handler: installed.update({signum: handler}),
+    )
+
+    _install_sigterm_handler()
+
+    assert signal.SIGTERM in installed
+    try:
+        installed[signal.SIGTERM](signal.SIGTERM, None)
+    except KeyboardInterrupt:
+        return
+    raise AssertionError("SIGTERM should use the bot's graceful shutdown path.")
 
 
 def _make_test_bot(monkeypatch):
@@ -17,6 +42,150 @@ def _make_test_bot(monkeypatch):
     bot = CryptoTradingBot(config)
     bot.portfolio.save_state = lambda filepath=None: True
     return bot
+
+
+def test_order_fill_details_use_actual_partial_fill_and_average():
+    filled, average, cost = _order_fill_details(
+        {
+            "status": "closed",
+            "amount": 1.0,
+            "filled": 0.4,
+            "average": 102.0,
+            "cost": 40.8,
+        },
+        requested_amount=1.0,
+        fallback_price=100.0,
+    )
+
+    assert filled == 0.4
+    assert average == 102.0
+    assert cost == 40.8
+
+
+def test_order_fill_details_reject_unconfirmed_fill():
+    try:
+        _order_fill_details(
+            {"status": "open", "amount": 1.0},
+            requested_amount=1.0,
+            fallback_price=100.0,
+        )
+    except ValueError as exc:
+        assert "filled amount" in str(exc)
+    else:
+        raise AssertionError("An unconfirmed order fill must be rejected.")
+
+
+@pytest.mark.parametrize(
+    "invalid_fields",
+    [
+        {"filled": 0},
+        {"filled": -0.1},
+        {"filled": 1.01},
+        {"filled": float("nan")},
+        {"average": float("inf")},
+        {"cost": -1},
+    ],
+)
+def test_order_fill_details_rejects_invalid_exchange_values(invalid_fields):
+    order = {
+        "status": "closed",
+        "filled": 0.5,
+        "average": 100.0,
+        "cost": 50.0,
+        **invalid_fields,
+    }
+
+    with pytest.raises(ValueError, match="invalid fill details"):
+        _order_fill_details(order, requested_amount=1.0, fallback_price=100.0)
+
+
+def test_confirm_order_fill_refreshes_incomplete_exchange_response(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.exchange = type(
+        "ExchangeStub",
+        (),
+        {
+            "cancel_order": lambda self, order_id, symbol: {},
+            "fetch_order": lambda self, order_id, symbol: {
+                "status": "closed",
+                "filled": 0.75,
+                "average": 101.0,
+                "cost": 75.75,
+            }
+        },
+    )()
+
+    details = bot._confirm_order_fill(
+        {"id": "order-1", "status": "open", "amount": 1.0},
+        "BTC/EUR",
+        requested_amount=1.0,
+        fallback_price=100.0,
+    )
+
+    assert details == (0.75, 101.0, 75.75)
+
+
+def test_confirm_order_fill_uses_final_status_after_cancel_error(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    calls = []
+
+    class ExchangeStub:
+        def cancel_order(self, order_id, symbol):
+            calls.append(("cancel", order_id, symbol))
+            raise ccxt.NetworkError("cancel response lost")
+
+        def fetch_order(self, order_id, symbol):
+            calls.append(("fetch", order_id, symbol))
+            return {
+                "id": order_id,
+                "status": "closed",
+                "filled": 0.25,
+                "average": 101.0,
+                "cost": 25.25,
+            }
+
+    bot.exchange = ExchangeStub()
+    details = bot._confirm_order_fill(
+        {"id": "order-cancel-timeout", "status": "open", "amount": 1.0},
+        "BTC/EUR",
+        requested_amount=1.0,
+        fallback_price=100.0,
+    )
+
+    assert details == (0.25, 101.0, 25.25)
+    assert calls == [
+        ("cancel", "order-cancel-timeout", "BTC/EUR"),
+        ("fetch", "order-cancel-timeout", "BTC/EUR"),
+    ]
+
+
+def test_confirm_order_fill_rejects_order_that_remains_open(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.exchange = type(
+        "ExchangeStub",
+        (),
+        {
+            "cancel_order": lambda self, order_id, symbol: {},
+            "fetch_order": lambda self, order_id, symbol: {
+                "id": order_id,
+                "status": "open",
+                "filled": 0.5,
+                "amount": 1.0,
+            },
+        },
+    )()
+
+    try:
+        bot._confirm_order_fill(
+            {"id": "order-2", "status": "open", "amount": 1.0},
+            "BTC/EUR",
+            requested_amount=1.0,
+            fallback_price=100.0,
+        )
+    except ValueError as exc:
+        assert "non-terminal" in str(exc)
+    else:
+        raise AssertionError("An open order must not be accounted as a final fill.")
 
 
 def test_daily_loss_guard_blocks_new_entries(monkeypatch):
@@ -34,7 +203,7 @@ def test_buy_limit_per_hour_blocks(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.max_buys_per_hour = 2
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     bot.buy_timestamps_utc = [
         now - timedelta(minutes=10), now - timedelta(minutes=1)]
 
@@ -65,6 +234,62 @@ def test_loss_streak_sets_pause(monkeypatch):
     can_open, reason = bot._can_open_new_positions(100.0)
     assert can_open is False
     assert "BUY pause" in reason
+
+
+def test_close_performance_counts_break_even_and_reports_positive_only_win_rate(
+    monkeypatch, caplog, tmp_path
+):
+    bot = _make_test_bot(monkeypatch)
+    entry_trade = {
+        "buy_price": 100.0,
+        "amount_coin": 1.0,
+        "timestamp": datetime.now(),
+        "signal_source": "rules",
+    }
+
+    bot._record_close_performance(entry_trade, sell_price=101.0, sell_amount=1.0)
+    bot._record_close_performance(entry_trade, sell_price=99.0, sell_amount=1.0)
+    bot.consecutive_losses = 1
+    bot._record_close_performance(entry_trade, sell_price=100.0, sell_amount=1.0)
+
+    journal_file = tmp_path / "trade_journal.csv"
+    pd.DataFrame(
+        [
+            {
+                "action": "sell", "coin": "ETH", "pnl_base": 1.0,
+                "hold_seconds": 1.0, "reason": "test",
+            },
+            {
+                "action": "sell", "coin": "ETH", "pnl_base": -1.0,
+                "hold_seconds": 1.0, "reason": "test",
+            },
+            {
+                "action": "sell", "coin": "ETH", "pnl_base": 0.0,
+                "hold_seconds": 1.0, "reason": "test",
+            },
+        ]
+    ).to_csv(journal_file, index=False)
+    bot.config.performance_log_enabled = True
+    bot.config.performance_log_file = str(journal_file)
+
+    assert bot.performance["wins"] == 1
+    assert bot.performance["losses"] == 1
+    assert bot.performance["break_even"] == 1
+    assert bot.performance["closed_trades"] == 3
+    assert bot.consecutive_losses == 0
+
+    snapshot_performance = bot._ai_copilot_snapshot()["performance"]
+    assert snapshot_performance["break_even"] == 1
+    assert snapshot_performance["win_rate_pct"] == (1 / 3) * 100.0
+    snapshot = bot._ai_copilot_snapshot()
+    assert snapshot["recent_trade_summary"]["recent_break_even_count"] == 1
+    assert snapshot["recent_trade_summary"]["coin_sell_summary"]["ETH"][
+        "break_even_count"
+    ] == 1
+
+    caplog.set_level(logging.INFO)
+    bot._log_performance_report()
+    assert "Wins=1 | Losses=1 | BreakEven=1 | WinRate=33.3%" in caplog.text
 
 
 def test_tabular_gate_allows_same_direction_confirmation(monkeypatch):
@@ -784,6 +1009,27 @@ def test_lossmaker_exclusions_are_merged_into_excluded_coins(monkeypatch):
             "XRP"}.issubset(config.excluded_coins)
 
 
+def test_default_entry_exclusion_and_atr_volatility_guard(monkeypatch):
+    monkeypatch.setattr("src.trading_bot.load_dotenv", lambda: None)
+    monkeypatch.delenv("EXCLUDED_COINS", raising=False)
+    monkeypatch.delenv("MIN_ENTRY_ATR_PCT", raising=False)
+    monkeypatch.setenv("SIMULATE_DATA", "true")
+    monkeypatch.setenv("DRY_RUN", "true")
+    monkeypatch.setenv("USE_TABULAR_MODEL", "false")
+    monkeypatch.setenv("USE_ML_MODEL", "false")
+    monkeypatch.setenv("PERFORMANCE_LOG_ENABLED", "false")
+
+    bot = CryptoTradingBot(BotConfig())
+
+    assert "EURC" in bot.config.excluded_coins
+    assert bot.config.min_entry_atr_pct == 0.012
+    assert bot._entry_volatility_guard({"atr_pct": 0.012}) == (True, "ok")
+    allowed, reason = bot._entry_volatility_guard({"atr_pct": 0.0119})
+    assert allowed is False
+    assert reason.startswith("atr_pct_below_minimum")
+    assert bot._entry_volatility_guard({}) == (False, "atr_pct_unavailable")
+
+
 def test_analytics_db_connect_kwargs_support_url_and_split_fields(monkeypatch):
     monkeypatch.setenv("ANALYTICS_DB_ENABLED", "true")
     monkeypatch.setenv("ANALYTICS_DB_URL",
@@ -1266,7 +1512,7 @@ def test_downtrend_reversal_weak_signal_exit_closes_trade_early(monkeypatch):
     assert "ETH" not in bot.portfolio.open_trades
 
 
-def test_coin_specific_max_hold_seconds_override(monkeypatch):
+def test_coin_specific_max_hold_seconds_override(monkeypatch, caplog):
     bot = _make_test_bot(monkeypatch)
     bot.config.partial_take_profit_enabled = False
     bot.config.trailing_stop_enabled = False
@@ -1301,12 +1547,118 @@ def test_coin_specific_max_hold_seconds_override(monkeypatch):
 
     monkeypatch.setattr(bot, "_execute_trade", _fake_execute_trade)
 
-    bot._manage_open_trades({"SUI": {"price": 100.0}})
+    with caplog.at_level("WARNING"):
+        bot._manage_open_trades({"SUI": {"price": 100.0}})
 
     assert executed["coin"] == "SUI"
     assert executed["action"] == "sell"
     assert "MAX-HOLD-TIME reached (500s >= 420s)" in executed["reason"]
     assert "SUI" not in bot.portfolio.open_trades
+    assert "coin=SUI" in caplog.text
+    assert "limit_seconds=420" in caplog.text
+    assert "overdue_seconds=" in caplog.text
+    assert "atr_fetch_seconds=" in caplog.text
+
+
+def test_failed_exit_sell_retains_open_position(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.partial_take_profit_enabled = False
+    bot.config.trailing_stop_enabled = False
+    bot.config.break_even_enabled = False
+    bot.config.exit_on_downtrend = False
+    bot.config.max_hold_seconds = 1
+    bot.config.coin_max_hold_seconds = {}
+    bot.portfolio.holdings["BTC"] = 1.0
+    bot.portfolio.open_trades["BTC"] = {
+        "buy_price": 100.0,
+        "amount_coin": 1.0,
+        "amount_base": 100.0,
+        "timestamp": datetime.now() - timedelta(seconds=10),
+        "peak_price": 100.0,
+        "partial_tp_taken": False,
+        "partial_tp_timestamp": None,
+        "signal_source": "rules",
+        "signal_confidence": None,
+        "recommendation": "BUY",
+    }
+    monkeypatch.setattr(bot, "_get_atr_for_coin", lambda coin, period=14: 5.0)
+    monkeypatch.setattr(bot, "_execute_trade", lambda *args, **kwargs: False)
+
+    bot._manage_open_trades({"BTC": {"price": 100.0}})
+
+    assert "BTC" in bot.portfolio.open_trades
+    assert bot.portfolio.open_trades["BTC"]["amount_coin"] == 1.0
+
+
+def test_partial_exit_sell_retains_remaining_open_position(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.partial_take_profit_enabled = False
+    bot.config.trailing_stop_enabled = False
+    bot.config.break_even_enabled = False
+    bot.config.exit_on_downtrend = False
+    bot.config.max_hold_seconds = 1
+    bot.config.coin_max_hold_seconds = {}
+    bot.portfolio.holdings["BTC"] = 1.0
+    bot.portfolio.open_trades["BTC"] = {
+        "buy_price": 100.0,
+        "amount_coin": 1.0,
+        "amount_base": 100.0,
+        "timestamp": datetime.now() - timedelta(seconds=10),
+        "peak_price": 100.0,
+        "partial_tp_taken": False,
+        "partial_tp_timestamp": None,
+        "signal_source": "rules",
+        "signal_confidence": None,
+        "recommendation": "BUY",
+    }
+    monkeypatch.setattr(bot, "_get_atr_for_coin", lambda coin, period=14: 5.0)
+
+    def _fake_execute_trade(coin, action, price, amount_in_base_currency, **kwargs):
+        bot.portfolio.open_trades[coin]["amount_coin"] = 0.4
+        return True
+
+    monkeypatch.setattr(bot, "_execute_trade", _fake_execute_trade)
+
+    bot._manage_open_trades({"BTC": {"price": 100.0}})
+
+    assert bot.portfolio.open_trades["BTC"]["amount_coin"] == 0.4
+
+
+def test_failed_partial_take_profit_does_not_skip_other_exit_checks(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.partial_take_profit_enabled = True
+    bot.config.partial_take_profit_atr_mult = 1.0
+    bot.config.partial_take_profit_fraction = 0.5
+    bot.config.trailing_stop_enabled = False
+    bot.config.break_even_enabled = False
+    bot.config.max_hold_seconds = 1
+    bot.portfolio.holdings["BTC"] = 1.0
+    bot.portfolio.open_trades["BTC"] = {
+        "buy_price": 100.0,
+        "amount_coin": 1.0,
+        "amount_base": 100.0,
+        "timestamp": datetime.now() - timedelta(seconds=10),
+        "peak_price": 100.0,
+        "partial_tp_taken": False,
+        "partial_tp_timestamp": None,
+        "signal_source": "rules",
+        "signal_confidence": None,
+        "recommendation": "BUY",
+    }
+    monkeypatch.setattr(bot, "_get_atr_for_coin", lambda coin, period=14: 2.0)
+    outcomes = iter([False, True])
+    actions = []
+
+    def _fake_execute_trade(coin, action, price, amount_in_base_currency, **kwargs):
+        actions.append(action)
+        return next(outcomes)
+
+    monkeypatch.setattr(bot, "_execute_trade", _fake_execute_trade)
+
+    bot._manage_open_trades({"BTC": {"price": 102.5}})
+
+    assert actions == ["sell", "sell"]
+    assert "BTC" not in bot.portfolio.open_trades
 
 
 def test_dynamic_lossmaker_exclusions_detect_recent_timeout_losers(monkeypatch, tmp_path):
@@ -1447,7 +1799,7 @@ def test_reentry_cooldown_blocks_recently_sold_coin(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.reentry_cooldown_seconds = 600
     bot.last_sell_timestamps_utc["BTC"] = datetime.now(
-        timezone.utc) - timedelta(seconds=120)
+        UTC) - timedelta(seconds=120)
 
     blocked, remaining = bot._is_coin_in_reentry_cooldown("BTC")
 
@@ -1459,7 +1811,7 @@ def test_reentry_cooldown_allows_after_expiry(monkeypatch):
     bot = _make_test_bot(monkeypatch)
     bot.config.reentry_cooldown_seconds = 300
     bot.last_sell_timestamps_utc["ETH"] = datetime.now(
-        timezone.utc) - timedelta(seconds=301)
+        UTC) - timedelta(seconds=301)
 
     blocked, remaining = bot._is_coin_in_reentry_cooldown("ETH")
 
@@ -1575,3 +1927,25 @@ def test_partial_take_profit_remainder_exits_on_weak_signal(monkeypatch):
     assert "BTC" not in bot.portfolio.open_trades
     assert bot.portfolio.holdings.get("BTC", 0.0) == 0.0
     assert bot.portfolio.cash == 50.5
+
+
+def test_open_trade_extremes_are_updated_and_persisted(monkeypatch):
+    bot = _make_test_bot(monkeypatch)
+    bot.config.trailing_stop_enabled = False
+    bot.config.break_even_enabled = False
+    bot.config.partial_take_profit_enabled = False
+    bot.portfolio.cash = 0.0
+    bot.portfolio.holdings["BTC"] = 1.0
+    bot.portfolio.add_trade("BTC", 100.0, 1.0, 100.0)
+    bot.portfolio.open_trades["BTC"]["peak_price"] = 102.0
+    bot.portfolio.open_trades["BTC"]["trough_price"] = 98.0
+    monkeypatch.setattr(bot, "_get_atr_for_coin", lambda coin, period=14: 5.0)
+    saved = []
+    bot.portfolio.save_state = lambda filepath=None: saved.append(True)
+
+    bot._manage_open_trades({"BTC": {"price": 105.0}})
+
+    trade = bot.portfolio.open_trades["BTC"]
+    assert trade["peak_price"] == 105.0
+    assert trade["trough_price"] == 98.0
+    assert saved == [True]

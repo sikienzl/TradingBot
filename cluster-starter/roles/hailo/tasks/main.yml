@@ -1,0 +1,39 @@
+---
+- name: Validate vendor driver artifact
+  ansible.builtin.assert:
+    that:
+      - hailo_deb_url is match('^https://')
+      - "'REPLACE_WITH' not in hailo_deb_url"
+      - hailo_deb_sha256 is match('^[a-fA-F0-9]{64}$')
+      - hailo_module_name is match('^[a-zA-Z0-9_]+$')
+- name: Install DKMS build prerequisites for running kernel
+  ansible.builtin.apt:
+    name:
+      - dkms
+      - build-essential
+      - "linux-headers-{{ ansible_facts.kernel }}"
+    state: present
+    update_cache: true
+- name: Download checksum-pinned vendor driver
+  ansible.builtin.get_url:
+    url: "{{ hailo_deb_url }}"
+    dest: /usr/local/src/cluster-starter-hailo-driver.deb
+    checksum: "sha256:{{ hailo_deb_sha256 }}"
+    mode: "0644"
+- name: Install Hailo driver package
+  ansible.builtin.apt:
+    deb: /usr/local/src/cluster-starter-hailo-driver.deb
+- name: Check whether driver is already loaded
+  ansible.builtin.stat:
+    path: "/sys/module/{{ hailo_module_name }}"
+  register: hailo_loaded
+- name: Load the driver
+  ansible.builtin.command:
+    argv: [modprobe, "{{ hailo_module_name }}"]
+  when: not hailo_loaded.stat.exists
+  changed_when: true
+- name: Load the driver on boot
+  ansible.builtin.copy:
+    content: "{{ hailo_module_name }}\n"
+    dest: /etc/modules-load.d/cluster-starter-hailo.conf
+    mode: "0644"

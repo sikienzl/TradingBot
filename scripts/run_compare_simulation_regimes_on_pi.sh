@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PI_HOST=${PI_HOST:-siegfried@192.168.62.87}
+PI_HOST=${PI_HOST:-${TRADING_HOST:-}}
 PI_APP_DIR=${PI_APP_DIR:-/opt/trading_2}
 PI_SERVICE_USER=${PI_SERVICE_USER:-trading}
 PI_PYTHON=${PI_PYTHON:-$PI_APP_DIR/.venv/bin/python}
@@ -9,12 +9,17 @@ PI_SCRIPT=${PI_SCRIPT:-$PI_APP_DIR/scripts/compare_simulation_regimes.py}
 
 run_local() {
     cd "$PI_APP_DIR"
-    sudo -u "$PI_SERVICE_USER" "$PI_PYTHON" "$PI_SCRIPT" "$@"
+    sudo -u "$PI_SERVICE_USER" env PYTHONPATH="$PI_APP_DIR" "$PI_PYTHON" "$PI_SCRIPT" "$@"
 }
 
 if [[ "$PI_HOST" == "local" || "$PI_HOST" == "localhost" ]]; then
     run_local "$@"
     exit 0
+fi
+
+if [[ -z "$PI_HOST" ]]; then
+    echo "Set PI_HOST or TRADING_HOST to a trading@host destination (or use PI_HOST=local)." >&2
+    exit 2
 fi
 
 ssh "$PI_HOST" bash -s -- \
@@ -32,5 +37,5 @@ pi_script=$4
 shift 4
 
 cd "$pi_app_dir"
-sudo -u "$pi_service_user" "$pi_python" "$pi_script" "$@"
+sudo -u "$pi_service_user" env PYTHONPATH="$pi_app_dir" "$pi_python" "$pi_script" "$@"
 EOF

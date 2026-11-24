@@ -1,0 +1,87 @@
+---
+- name: Validate inventory and prepare both nodes
+  hosts: masters:workers
+  gather_facts: false
+  pre_tasks:
+    - name: Require exactly one master and one worker with explicit addresses
+      ansible.builtin.assert:
+        that:
+          - groups['masters'] | length == 1
+          - groups['workers'] | length == 1
+          - (groups['masters'] | intersect(groups['workers']) | length) == 0
+          - ansible_host is defined
+          - "'REPLACE_WITH' not in ansible_host"
+          - ansible_user is defined
+          - "'REPLACE_WITH' not in ansible_user"
+          - not enable_postgresql_k8s | bool or enable_postgresql | bool
+          - not enable_postgresql_k8s | bool or enable_k3s | bool
+          - not enable_cluster_metadata | bool or enable_k3s | bool
+        fail_msg: Populate the example inventory before connecting.
+    - name: Collect facts
+      ansible.builtin.setup:
+    - name: Require a Debian-family host
+      ansible.builtin.assert:
+        that: ansible_facts.os_family == 'Debian'
+  roles:
+    - role: common
+      when: enable_common | bool
+    - role: account
+      when: enable_account | bool
+    - role: docker
+      when: enable_docker | bool
+    - role: nas
+      when: enable_nas | bool
+    - role: netdata
+      when: enable_netdata | bool
+    - role: node_exporter
+      when: enable_prometheus | bool
+
+- name: Prepare optional master storage
+  hosts: masters
+  roles:
+    - role: storage
+      when: enable_storage | bool
+
+- name: Install K3s server
+  hosts: masters
+  roles:
+    - role: k3s
+      vars:
+        k3s_role: server
+      when: enable_k3s | bool
+
+- name: Install K3s agents and optional Hailo driver
+  hosts: workers
+  roles:
+    - role: k3s
+      vars:
+        k3s_role: agent
+      when: enable_k3s | bool
+    - role: hailo
+      when: enable_hailo | bool
+
+- name: Configure master services and node labels
+  hosts: masters
+  pre_tasks:
+    - name: Wait for the worker to register and become ready
+      ansible.builtin.command:
+        argv:
+          - k3s
+          - kubectl
+          - wait
+          - --for=condition=Ready
+          - "node/{{ hostvars[groups['workers'][0]].k3s_node_name }}"
+          - --timeout=180s
+      changed_when: false
+      register: worker_ready
+      retries: 12
+      delay: 5
+      until: worker_ready.rc == 0
+      when: enable_k3s | bool
+  roles:
+    - role: postgresql
+      when: enable_postgresql | bool
+    - role: prometheus
+      when: enable_prometheus | bool
+    - role: cluster_metadata
+      when: enable_cluster_metadata | bool

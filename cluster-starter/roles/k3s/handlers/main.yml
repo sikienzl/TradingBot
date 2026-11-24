@@ -1,0 +1,5 @@
+---
+- name: Restart K3s
+  ansible.builtin.service:
+    name: "{{ 'k3s' if k3s_role == 'server' else 'k3s-agent' }}"
+    state: restarted

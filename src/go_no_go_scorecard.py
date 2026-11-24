@@ -1,11 +1,16 @@
 import argparse
 import json
-from typing import List
 
 import numpy as np
 import pandas as pd
 
-from src.api_models import ScorecardMetrics, ScorecardResponse, ScorecardResult, ScorecardVerdict, ScorecardThresholds
+from src.api_models import (
+    ScorecardMetrics,
+    ScorecardResponse,
+    ScorecardResult,
+    ScorecardThresholds,
+    ScorecardVerdict,
+)
 
 
 class ScorecardDataError(ValueError):
@@ -48,7 +53,7 @@ def _evaluate_verdict(
     min_catboost_vs_rules_pnl_delta: float = -1e18,
     min_source_trades_for_delta: int = 0,
 ) -> ScorecardResult:
-    reasons: List[str] = []
+    reasons: list[str] = []
 
     # Hard no-go conditions
     if closed_trades < max(1, int(min_closed_trades * 0.5)):
@@ -69,7 +74,7 @@ def _evaluate_verdict(
     if reasons:
         return ScorecardResult(verdict=ScorecardVerdict.NO_GO, reasons=reasons)
 
-    soft_fails: List[str] = []
+    soft_fails: list[str] = []
     if closed_trades < min_closed_trades:
         soft_fails.append(
             f"Trade count still too low: {closed_trades} < {min_closed_trades}")
@@ -122,14 +127,24 @@ def _compute_metrics(df: pd.DataFrame, starting_capital: float, recent_trades_wi
     avg_pnl = float(sells["pnl_base"].mean()) if closed > 0 else 0.0
     win_rate = float((sells["pnl_base"] > 0).mean()
                      * 100.0) if closed > 0 else 0.0
+    break_even_trades = int((sells["pnl_base"] == 0).sum())
 
     gross_profit = float(sells.loc[sells["pnl_base"] > 0, "pnl_base"].sum())
     gross_loss = float(-sells.loc[sells["pnl_base"] < 0, "pnl_base"].sum())
     # Cap at 999.0 so the value remains JSON-serialisable (JSON has no Infinity literal).
     profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 999.0
 
-    equity = sells["pnl_base"].cumsum(
-    ) if closed > 0 else pd.Series(dtype=float)
+    equity = (
+        pd.concat(
+            [
+                pd.Series([starting_capital], dtype=float),
+                starting_capital + sells["pnl_base"].cumsum().reset_index(drop=True),
+            ],
+            ignore_index=True,
+        )
+        if closed > 0
+        else pd.Series(dtype=float)
+    )
     max_dd_base = _max_drawdown_base(equity)
     max_dd_pct = abs(max_dd_base) / max(starting_capital, 1e-9) * 100.0
 
@@ -139,6 +154,7 @@ def _compute_metrics(df: pd.DataFrame, starting_capital: float, recent_trades_wi
         recent["pnl_base"].sum()) if recent_closed > 0 else 0.0
     recent_win_rate = float(
         (recent["pnl_base"] > 0).mean() * 100.0) if recent_closed > 0 else 0.0
+    recent_break_even_trades = int((recent["pnl_base"] == 0).sum())
 
     signal_source = sells.get("signal_source", pd.Series(
         index=sells.index, dtype=object)).fillna("").astype(str).str.strip().str.lower()
@@ -146,6 +162,9 @@ def _compute_metrics(df: pd.DataFrame, starting_capital: float, recent_trades_wi
     rules_sells = sells[signal_source == "rules"]
     catboost_closed = len(catboost_sells)
     rules_closed = len(rules_sells)
+    catboost_break_even_trades = int(
+        (catboost_sells["pnl_base"] == 0).sum())
+    rules_break_even_trades = int((rules_sells["pnl_base"] == 0).sum())
     catboost_realized_pnl = float(
         catboost_sells["pnl_base"].sum()) if catboost_closed > 0 else 0.0
     rules_realized_pnl = float(
@@ -154,6 +173,7 @@ def _compute_metrics(df: pd.DataFrame, starting_capital: float, recent_trades_wi
 
     return ScorecardMetrics(
         closed_trades=closed,
+        break_even_trades=break_even_trades,
         realized_pnl=realized_pnl,
         avg_pnl=avg_pnl,
         win_rate=win_rate,
@@ -163,11 +183,14 @@ def _compute_metrics(df: pd.DataFrame, starting_capital: float, recent_trades_wi
         max_drawdown_base=max_dd_base,
         max_drawdown_pct=max_dd_pct,
         recent_closed_trades=recent_closed,
+        recent_break_even_trades=recent_break_even_trades,
         recent_realized_pnl=recent_realized_pnl,
         recent_win_rate=recent_win_rate,
         catboost_closed_trades=catboost_closed,
+        catboost_break_even_trades=catboost_break_even_trades,
         catboost_realized_pnl=catboost_realized_pnl,
         rules_closed_trades=rules_closed,
+        rules_break_even_trades=rules_break_even_trades,
         rules_realized_pnl=rules_realized_pnl,
         catboost_vs_rules_pnl_delta=catboost_vs_rules_pnl_delta,
     )
@@ -351,6 +374,7 @@ def main() -> None:
     print("=== Go/No-Go Scorecard ===")
     print(f"File:                 {args.file}")
     print(f"Closed trades:        {response.metrics.closed_trades}")
+    print(f"Break-even trades:    {response.metrics.break_even_trades}")
     print(f"Win rate:             {response.metrics.win_rate:.2f}%")
     print(
         f"Realized PnL:         {response.metrics.realized_pnl:.6f} {args.base_currency}")

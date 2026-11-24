@@ -1,0 +1,25 @@
+---
+# Pin to a release tag or immutable commit for repeatable deployments.
+public_paper_dashboard_git_repository: https://github.com/sikienzl/TradingBot.git
+public_paper_dashboard_git_version: REPLACE_WITH_RELEASE_TAG_OR_COMMIT
+public_paper_dashboard_image_tag: "{{ public_paper_dashboard_git_version }}"
+
+public_paper_dashboard_service_user: trading
+public_paper_dashboard_service_group: trading
+public_paper_dashboard_service_home: /var/lib/trading
+public_paper_dashboard_checkout_path: /opt/tradingbot-dashboard
+public_paper_dashboard_data_dir: REPLACE_WITH_EXISTING_PAPER_DATA_DIRECTORY
+public_paper_dashboard_reports_dir: REPLACE_WITH_EXISTING_PAPER_REPORTS_DIRECTORY
+public_paper_dashboard_config_dir: /var/lib/trading/paper-dashboard
+public_paper_dashboard_tls_dir: /var/lib/trading/paper-dashboard/tls
+public_paper_dashboard_port: 8443
+
+# These are local files on the Ansible controller; keep them out of Git.
+public_paper_dashboard_tls_certificate_source: "{{ playbook_dir }}/../files/dashboard.crt"
+public_paper_dashboard_tls_private_key_source: "{{ playbook_dir }}/../files/dashboard.key"
+
+# Site-specific values are loaded from the encrypted vault.yml.
+public_paper_dashboard_bind_host: "{{ vault_public_paper_dashboard_bind_host }}"
+public_paper_dashboard_allowed_networks: "{{ vault_public_paper_dashboard_allowed_networks }}"
+public_paper_dashboard_username: paper-viewer
+public_paper_dashboard_password: "{{ vault_public_paper_dashboard_password }}"

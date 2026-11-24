@@ -1,0 +1,38 @@
+---
+- name: Validate cluster metadata prerequisites
+  ansible.builtin.assert:
+    that:
+      - enable_k3s | bool
+      - hostvars[groups['workers'][0]].k3s_node_name is defined
+- name: Label master
+  ansible.builtin.command:
+    argv:
+      - k3s
+      - kubectl
+      - label
+      - node
+      - "{{ k3s_node_name }}"
+      - "{{ item.key }}={{ item.value }}"
+      - --overwrite
+  loop: "{{ (master_node_labels | combine({'starter.example/storage': 'true'} if enable_storage | bool else {})) | dict2items }}"
+  register: cluster_metadata_master_label
+  retries: 20
+  delay: 6
+  until: cluster_metadata_master_label.rc == 0
+  changed_when: "'not labeled' not in cluster_metadata_master_label.stdout"
+- name: Label worker after it joins
+  ansible.builtin.command:
+    argv:
+      - k3s
+      - kubectl
+      - label
+      - node
+      - "{{ hostvars[groups['workers'][0]].k3s_node_name }}"
+      - "{{ item.key }}={{ item.value }}"
+      - --overwrite
+  loop: "{{ (worker_node_labels | combine({'starter.example/accelerator': 'hailo'} if enable_hailo | bool else {})) | dict2items }}"
+  register: cluster_metadata_worker_label
+  retries: 20
+  delay: 6
+  until: cluster_metadata_worker_label.rc == 0
+  changed_when: "'not labeled' not in cluster_metadata_worker_label.stdout"

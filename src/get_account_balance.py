@@ -1,13 +1,15 @@
 # Get all asset balances.
 
-import http.client
-import urllib.request
-import urllib.parse
+import base64
 import hashlib
 import hmac
-import base64
+import http.client
 import json
 import time
+import urllib.parse
+import urllib.request
+from typing import Any
+
 
 def main():
    response = request(
@@ -25,7 +27,7 @@ def request(method: str = "GET", path: str = "", query: dict | None = None, body
    if query is not None and len(query) > 0:
       query_str = urllib.parse.urlencode(query)
       url += "?" + query_str
-   nonce = ""
+   nonce: Any = ""
    if len(public_key) > 0:
       if body is None:
          body = {}

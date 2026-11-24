@@ -1,6 +1,7 @@
 import argparse
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 
 
 def safe_float(series: pd.Series) -> pd.Series:
@@ -13,6 +14,39 @@ def compute_max_drawdown_base(equity_curve: pd.Series) -> float:
     running_max = equity_curve.cummax()
     drawdown_base = equity_curve - running_max
     return float(drawdown_base.min()) if not drawdown_base.empty else 0.0
+
+
+def report_journal_freshness(
+    df: pd.DataFrame,
+    as_of: pd.Timestamp | None = None,
+    stale_after_hours: float = 24.0,
+) -> None:
+    print("\n--- Journal Freshness ---")
+    if "timestamp" not in df.columns:
+        print("No timestamp column; journal age cannot be evaluated.")
+        return
+
+    timestamps = pd.to_datetime(df["timestamp"], utc=True, errors="coerce").dropna()
+    if timestamps.empty:
+        print("No valid timestamps; journal age cannot be evaluated.")
+        return
+
+    latest = timestamps.max()
+    reference = pd.Timestamp.now(tz="UTC") if as_of is None else pd.Timestamp(as_of)
+    if reference.tzinfo is None:
+        reference = reference.tz_localize("UTC")
+    else:
+        reference = reference.tz_convert("UTC")
+    age_hours = (reference - latest).total_seconds() / 3600.0
+    print(f"Latest journal event: {latest.isoformat()}")
+    print(f"Journal age:          {age_hours:.1f} hours")
+    if age_hours < 0:
+        print("WARNING: Latest journal timestamp is in the future.")
+    elif age_hours > stale_after_hours:
+        print(
+            f"WARNING: No journal event for more than {stale_after_hours:g} hours; "
+            "do not treat the latest trade metrics as current."
+        )
 
 
 def report_daily(sells: pd.DataFrame, base_currency: str) -> None:
@@ -33,6 +67,7 @@ def report_daily(sells: pd.DataFrame, base_currency: str) -> None:
         sells=("action", "count"),
         wins=("pnl_base", lambda x: int((x > 0).sum())),
         losses=("pnl_base", lambda x: int((x < 0).sum())),
+        break_even=("pnl_base", lambda x: int((x == 0).sum())),
         pnl=("pnl_base", "sum"),
         avg_pnl=("pnl_base", "mean"),
         avg_hold_s=("hold_seconds", "mean"),
@@ -61,12 +96,14 @@ def _print_trade_slice_summary(label: str, trades: pd.DataFrame, base_currency: 
 
     pnl = float(trades["pnl_base"].sum())
     win_rate = float((trades["pnl_base"] > 0).mean() * 100.0)
+    break_even = int((trades["pnl_base"] == 0).sum())
     avg_pnl = float(trades["pnl_base"].mean())
     avg_hold = float(trades["hold_seconds"].mean()
                      ) if "hold_seconds" in trades.columns else 0.0
     print(
         f"{label:16s} trades={len(trades):4d} pnl={pnl:+.6f} {base_currency} "
-        f"win_rate={win_rate:6.2f}% avg_pnl={avg_pnl:+.6f} avg_hold={avg_hold:7.2f}s"
+        f"win_rate={win_rate:6.2f}% break_even={break_even} "
+        f"avg_pnl={avg_pnl:+.6f} avg_hold={avg_hold:7.2f}s"
     )
 
 
@@ -84,6 +121,48 @@ def report_coin_source_breakdown(sells: pd.DataFrame, base_currency: str) -> Non
                            dropna=False, observed=True)
     for (coin, source), part in sorted(grouped, key=lambda item: (item[0][0], item[0][1])):
         _print_trade_slice_summary(f"{coin}/{source}", part, base_currency)
+        if len(part) < 20:
+            print("  Small sample (<20 trades); descriptive only.")
+
+
+def report_run_config_breakdown(sells: pd.DataFrame, base_currency: str) -> None:
+    if sells.empty or not {"run_id", "config_hash"}.issubset(sells.columns):
+        return
+
+    work = sells.copy()
+    work["run_id"] = work["run_id"].fillna("").replace("", "legacy").astype(str)
+    work["config_hash"] = (
+        work["config_hash"].fillna("").replace("", "legacy").astype(str))
+    print("\n--- By Run / Configuration ---")
+    grouped = work.groupby(["run_id", "config_hash"], dropna=False)
+    for (run_id, config_hash), part in grouped:
+        print(
+            f"run_id={run_id} config_hash={config_hash[:12]} "
+            f"trades={len(part)} pnl={part['pnl_base'].sum():+.6f} {base_currency}"
+        )
+
+
+def report_exit_excursions(sells: pd.DataFrame) -> None:
+    required = {"mfe_pct", "mae_pct", "reason", "pnl_pct"}
+    if sells.empty or not required.issubset(sells.columns):
+        return
+
+    work = sells.copy()
+    work["mfe_pct"] = pd.to_numeric(work["mfe_pct"], errors="coerce")
+    work["mae_pct"] = pd.to_numeric(work["mae_pct"], errors="coerce")
+    work = work.dropna(subset=["mfe_pct", "mae_pct"])
+    if work.empty:
+        return
+
+    print("\n--- Observed Excursions by Exit Reason ---")
+    work["reason"] = work["reason"].fillna("unknown").astype(str)
+    grouped = work.groupby("reason", dropna=False).agg(
+        trades=("mfe_pct", "size"),
+        avg_pnl_pct=("pnl_pct", "mean"),
+        avg_mfe_pct=("mfe_pct", "mean"),
+        avg_mae_pct=("mae_pct", "mean"),
+    )
+    print(grouped.to_string(float_format=lambda value: f"{value:.3f}"))
 
 
 def report_hold_time_bands(sells: pd.DataFrame, base_currency: str) -> None:
@@ -100,6 +179,7 @@ def report_hold_time_bands(sells: pd.DataFrame, base_currency: str) -> None:
         trades=("pnl_base", "size"),
         pnl=("pnl_base", "sum"),
         win_rate=("pnl_base", lambda x: float((x > 0).mean() * 100.0)),
+        break_even=("pnl_base", lambda x: int((x == 0).sum())),
         avg_pnl=("pnl_base", "mean"),
     ).reset_index()
     print(grouped.to_string(index=False, float_format=lambda v: f"{v:.6f}"))
@@ -126,6 +206,7 @@ def report_confidence_bands(sells: pd.DataFrame, base_currency: str) -> None:
         trades=("pnl_base", "size"),
         pnl=("pnl_base", "sum"),
         win_rate=("pnl_base", lambda x: float((x > 0).mean() * 100.0)),
+        break_even=("pnl_base", lambda x: int((x == 0).sum())),
         avg_pnl=("pnl_base", "mean"),
     ).reset_index()
     print(grouped.to_string(index=False, float_format=lambda v: f"{v:.6f}"))
@@ -162,6 +243,15 @@ def optimize_confidence_threshold(
         print("No numeric signal_confidence values available.")
         return
 
+    if "timestamp" in work.columns:
+        work = work.sort_values("timestamp").reset_index(drop=True)
+    split_index = int(len(work) * 0.7)
+    training = work.iloc[:split_index]
+    holdout = work.iloc[split_index:]
+    if training.empty or holdout.empty:
+        print("Not enough chronological data for a training/holdout split.")
+        return
+
     thresholds = np.arange(
         threshold_min,
         threshold_max + (threshold_step * 0.5),
@@ -170,7 +260,7 @@ def optimize_confidence_threshold(
 
     rows = []
     for th in thresholds:
-        filt = work[work["signal_confidence"] >= th]
+        filt = training[training["signal_confidence"] >= th]
         n = len(filt)
         if n == 0:
             continue
@@ -190,19 +280,37 @@ def optimize_confidence_threshold(
         return
 
     res = pd.DataFrame(rows).sort_values("threshold").reset_index(drop=True)
-    print(res.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
-
     eligible = res[res["trades"] >= min_trades].copy()
     if eligible.empty:
         print(
-            f"No threshold with at least {min_trades} trades. Using all available trades as reference.")
+            f"No training threshold has at least {min_trades} trades; "
+            "no candidate selected."
+        )
         return
 
-    best = eligible.sort_values(["pnl", "avg_pnl"], ascending=False).iloc[0]
+    best = eligible.sort_values(
+        ["avg_pnl", "pnl"], ascending=False).iloc[0]
+    selected_holdout = holdout[
+        holdout["signal_confidence"] >= best["threshold"]]
     print(
-        f"\nEmpfohlener Threshold: {best['threshold']:.2f} | "
-        f"trades={int(best['trades'])} | win_rate={best['win_rate']:.2f}% | "
-        f"pnl={best['pnl']:.6f} {base_currency} | avg_pnl={best['avg_pnl']:.6f} {base_currency}")
+        f"Training-selected candidate (first 70%, not a deployment recommendation): "
+        f"threshold={best['threshold']:.2f} | trades={int(best['trades'])} | "
+        f"avg_pnl={best['avg_pnl']:.6f} {base_currency}"
+    )
+    if selected_holdout.empty:
+        print("Chronological holdout (last 30%): no trades met the selected threshold.")
+    else:
+        holdout_pnl = float(selected_holdout["pnl_base"].sum())
+        holdout_avg = float(selected_holdout["pnl_base"].mean())
+        holdout_win_rate = float(
+            (selected_holdout["pnl_base"] > 0).mean() * 100.0)
+        holdout_break_even = int((selected_holdout["pnl_base"] == 0).sum())
+        print(
+            f"Chronological holdout (last 30%): trades={len(selected_holdout)} | "
+            f"win_rate={holdout_win_rate:.2f}% | "
+            f"break_even={holdout_break_even} | pnl={holdout_pnl:.6f} "
+            f"{base_currency} | avg_pnl={holdout_avg:.6f} {base_currency}"
+        )
 
 
 def summarize(df: pd.DataFrame, base_currency: str) -> None:
@@ -229,6 +337,7 @@ def summarize(df: pd.DataFrame, base_currency: str) -> None:
     closed = len(sells)
     wins = (sells["pnl_base"] > 0).sum()
     losses = (sells["pnl_base"] < 0).sum()
+    break_even = (sells["pnl_base"] == 0).sum()
     win_rate = (wins / closed * 100.0) if closed > 0 else 0.0
 
     total_realized = float(sells["pnl_base"].sum()) if closed > 0 else 0.0
@@ -250,7 +359,7 @@ def summarize(df: pd.DataFrame, base_currency: str) -> None:
     print(f"Rows total:          {len(df)}")
     print(f"Buys:                {len(buys)}")
     print(f"Sells (closed):      {closed}")
-    print(f"Wins / Losses:       {wins} / {losses}")
+    print(f"Wins / Losses / BE:   {wins} / {losses} / {break_even}")
     print(f"Win rate:            {win_rate:.2f}%")
     print(f"Realized PnL:        {total_realized:.6f} {base_currency}")
     print(f"Avg PnL per sell:    {avg_pnl:.6f} {base_currency}")
@@ -310,11 +419,16 @@ def run_full_report(
     threshold_step: float,
     min_trades: int,
 ) -> None:
+    report_journal_freshness(df)
     summarize(df, base_currency)
     sells = df[df["action"] == "sell"].copy(
     ) if "action" in df.columns else pd.DataFrame()
+    if "timestamp" in sells.columns:
+        sells = sells.sort_values("timestamp").reset_index(drop=True)
     report_daily(sells, base_currency)
     report_coin_source_breakdown(sells, base_currency)
+    report_run_config_breakdown(sells, base_currency)
+    report_exit_excursions(sells)
     report_hold_time_bands(sells, base_currency)
     report_confidence_bands(sells, base_currency)
     report_recent_windows(sells, base_currency)
@@ -350,7 +464,12 @@ def main() -> None:
     except FileNotFoundError:
         print(f"Datei nicht gefunden: {args.file}")
         return
-    except Exception as exc:
+    except (
+        OSError,
+        UnicodeError,
+        pd.errors.ParserError,
+        pd.errors.EmptyDataError,
+    ) as exc:
         print(f"Fehler beim Lesen: {exc}")
         return
 
