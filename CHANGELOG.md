@@ -106,6 +106,14 @@ a version heading is assigned when a release is prepared.
   probe and the clock — arrive as arguments or callbacks, so every exit branch is
   now unit-testable without constructing a bot. Covered by 41 new tests in
   `tests/test_exit_policy.py`.
+- `src/entry_filters.py`, the five entry gates that used to be methods inside
+  `src/trading_bot.py`: `passes_entry_momentum_filter` (short-term momentum,
+  EMA(20) alignment and the sharp-pump screen), `passes_uptrend_entry_filter`,
+  `passes_downtrend_reversal_filter`, `passes_fallback_entry_filter` and
+  `entry_volatility_guard` (ATR(14)/price). Each gate is a pure
+  `(config, coin_data) -> (bool, reason)` predicate with the config injected, so
+  every rejection reason and per-coin override is unit-testable without a bot,
+  an exchange or a model. Covered by 72 new tests in `tests/test_entry_filters.py`.
 
 ### Changed
 
@@ -175,6 +183,19 @@ a version heading is assigned when a release is prepared.
   uptrend-rules hold/PnL/signal matrices with their per-coin overrides, and every
   core stop-loss, take-profit, max-hold and signal branch) and produced identical
   return values, log lines and portfolio state.
+- `src/trading_bot.py` shrank from 3931 to 3772 lines now that the entry gates
+  live in `src/entry_filters.py`. `_passes_entry_momentum_filter()`,
+  `_passes_uptrend_entry_filter()`, `_passes_downtrend_reversal_filter()`,
+  `_passes_fallback_entry_filter()` and `_entry_volatility_guard()` are thin
+  delegators with the previous signatures, so the candidate shortlist, the
+  diagnostics logs and the `src/entry_selection.py` helpers stay with the bot and
+  the existing tests that call bot methods still apply. The architecture ceiling
+  was ratcheted to the new size and `entry_filters` was registered as a layer-1
+  module. The old and new code were compared over 439 scenarios (every
+  recommendation, missing/NaN/inf metric, per-coin override, allow-list and
+  disabled-flag branch of all five gates) and produced identical return values
+  and log output; the moved bodies are also AST-identical apart from the
+  `self.config` to `config` rename.
 
 ### Fixed
 
