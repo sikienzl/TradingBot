@@ -5,7 +5,6 @@ import json
 import logging
 import math
 import os
-import shutil
 import signal
 import stat
 import sys
@@ -26,13 +25,30 @@ from dotenv import load_dotenv  # noqa: F401  (re-exported: tests patch src.trad
 from src.analytics import PostgresAnalyticsWriter
 from src.backtesting import Backtester, simple_strategy
 from src.bot_config import BotConfig
+from src.indicator_service import (
+    calculate_atr,
+    calculate_macd,
+    calculate_rsi,
+    calculate_sma,
+)
 from src.journal_guards import (
     _compute_degraded_entry_sources,
     _compute_dynamic_lossmaker_entry_pairs,
     _compute_recent_pnl_guard_state,
 )
+from src.market_data import fetch_market_data, fetch_ohlcv
 from src.portfolio import Portfolio
 from src.simulation import SimulationEngine
+from src.state_store import (
+    cooldown_remaining_minutes as _state_cooldown_remaining_minutes,
+)
+from src.state_store import current_day_key as _state_current_day_key
+from src.state_store import current_month_key as _state_current_month_key
+from src.state_store import normalize_ai_state as _state_normalize_ai_state
+from src.state_store import read_ai_copilot_state as _state_read_ai_copilot_state
+from src.state_store import read_auto_tune_state as _state_read_auto_tune_state
+from src.state_store import write_ai_copilot_state as _state_write_ai_copilot_state
+from src.state_store import write_auto_tune_state as _state_write_auto_tune_state
 from src.strategy_rules import rule_recommendation as get_rule_recommendation
 
 logger = logging.getLogger(__name__)
@@ -811,43 +827,14 @@ class CryptoTradingBot:
         )
 
     def _read_auto_tune_state(self) -> dict:
-        path = self.config.auto_tune_state_file
-        if not path or not os.path.exists(path):
-            return {}
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
-            return {}
+        return _state_read_auto_tune_state(self.config.auto_tune_state_file)
 
     def _write_auto_tune_state(self, state: dict):
-        path = self.config.auto_tune_state_file
-        if not path:
-            return
-        try:
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(state, f, ensure_ascii=True, indent=2)
-        except (OSError, TypeError, ValueError) as e:
-            logger.warning(
-                f"Auto-tune state could not be saved: {e}")
+        _state_write_auto_tune_state(state, self.config.auto_tune_state_file)
 
     def _cooldown_remaining_minutes(self, state: dict) -> float:
-        cooldown = max(0, self.config.auto_tune_cooldown_minutes)
-        if cooldown <= 0:
-            return 0.0
-        last = state.get('last_applied_at')
-        if not last:
-            return 0.0
-        try:
-            last_dt = datetime.fromisoformat(last)
-            # Backward-compatible: treat naive timestamps as UTC.
-            if last_dt.tzinfo is None:
-                last_dt = last_dt.replace(tzinfo=UTC)
-        except (TypeError, ValueError):
-            return 0.0
-        elapsed_minutes = (datetime.now(UTC) -
-                           last_dt).total_seconds() / 60.0
-        return max(0.0, cooldown - elapsed_minutes)
+        return _state_cooldown_remaining_minutes(
+            state, self.config.auto_tune_cooldown_minutes)
 
     def _maybe_auto_tune_tabular_confidence(self):
         """Applies the recommended tabular threshold if requested."""
@@ -893,87 +880,21 @@ class CryptoTradingBot:
                 f"ℹ️ AUTO_TUNE disabled. Recommended TABULAR_MIN_CONFIDENCE: {recommended:.2f}")
 
     def _read_ai_copilot_state(self, path: str | None = None) -> dict:
-        path = path or self.config.ai_copilot_state_file
-        if not path:
-            return {}
-
-        candidates = [path, f'{path}.bak']
-        last_error = None
-        for candidate in candidates:
-            if not os.path.exists(candidate):
-                continue
-            try:
-                with open(candidate, 'r', encoding='utf-8') as f:
-                    state = json.load(f)
-                if candidate != path:
-                    logger.warning(
-                        'Recovered AI co-pilot state from backup file')
-                return state
-            except (
-                OSError,
-                UnicodeError,
-                json.JSONDecodeError,
-                TypeError,
-                ValueError,
-            ) as exc:
-                last_error = exc
-
-        if last_error is not None:
-            logger.warning(
-                f'AI co-pilot state could not be loaded: {last_error}')
-        return {}
+        return _state_read_ai_copilot_state(
+            path or self.config.ai_copilot_state_file)
 
     def _write_ai_copilot_state(self, state: dict, path: str | None = None):
-        path = path or self.config.ai_copilot_state_file
-        if not path:
-            return
-        tmp_path = f'{path}.tmp'
-        backup_path = f'{path}.bak'
-        try:
-            if os.path.exists(path):
-                try:
-                    shutil.copyfile(path, backup_path)
-                except OSError as exc:
-                    logger.warning(
-                        f'AI co-pilot state backup could not be updated: {exc}')
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(state, f, ensure_ascii=True, indent=2)
-            os.replace(tmp_path, path)
-        except (OSError, TypeError, ValueError) as e:
-            try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except OSError:
-                pass
-            logger.warning(f"AI co-pilot state could not be saved: {e}")
+        _state_write_ai_copilot_state(
+            state, path or self.config.ai_copilot_state_file)
 
     def _current_month_key(self) -> str:
-        now = datetime.now(UTC)
-        return f"{now.year:04d}-{now.month:02d}"
+        return _state_current_month_key()
 
     def _current_day_key(self) -> str:
-        now = datetime.now(UTC)
-        return f"{now.year:04d}-{now.month:02d}-{now.day:02d}"
+        return _state_current_day_key()
 
     def _normalize_ai_state(self, state: dict, monthly_call_cap: int, budget_cap_usd: float) -> dict:
-        month_key = self._current_month_key()
-        day_key = self._current_day_key()
-        state['budget_cap_usd'] = float(budget_cap_usd)
-        state['calls_cap_monthly'] = int(monthly_call_cap)
-        if state.get('month_key') != month_key:
-            state['month_key'] = month_key
-            state['monthly_calls'] = 0
-            state['monthly_spend_usd'] = 0.0
-        if state.get('day_key') != day_key:
-            state['day_key'] = day_key
-            state['daily_calls'] = 0
-            state['consecutive_errors'] = 0
-            state.pop('last_suspended_at', None)
-        state.setdefault('monthly_calls', 0)
-        state.setdefault('daily_calls', 0)
-        state.setdefault('monthly_spend_usd', 0.0)
-        state.setdefault('consecutive_errors', 0)
-        return state
+        return _state_normalize_ai_state(state, monthly_call_cap, budget_cap_usd)
 
     def _estimate_ai_cost_usd(self, prompt_tokens: int, completion_tokens: int, input_cost_per_mtok: float, output_cost_per_mtok: float) -> float:
         input_cost = (max(0, prompt_tokens) / 1_000_000.0) * \
@@ -1951,8 +1872,8 @@ class CryptoTradingBot:
 
     def _get_market_data(self) -> dict[str, dict]:
         """Fetches current ticker data (price, volume) for all relevant coins."""
-        market_data: dict[str, dict] = {}
         if self.config.simulate_data:
+            market_data: dict[str, dict] = {}
             for coin in self.all_coins:
                 symbol = f'{coin}/{self.config.base_currency}'
                 sim_df = self._build_simulated_ohlcv_data(
@@ -1963,52 +1884,13 @@ class CryptoTradingBot:
                 }
             return market_data
 
-        if self.exchange is None:
-            logger.error(
-                "Exchange is not initialised, cannot fetch market data.")
-            return {}
-
-        symbols = list(self.all_symbols)
-        if not symbols:
-            return {}
-
-        batch_size = max(1, self.config.ticker_batch_size)
-        retries = max(0, self.config.ticker_fetch_retries)
-        delay_seconds = max(0.0, self.config.ticker_retry_delay_seconds)
-
-        for start in range(0, len(symbols), batch_size):
-            batch = symbols[start:start + batch_size]
-            tickers = None
-            for attempt in range(retries + 1):
-                try:
-                    tickers = self.exchange.fetch_tickers(batch)
-                    break
-                except (ccxt.NetworkError, ccxt.ExchangeError) as e:
-                    if attempt >= retries:
-                        logger.error(
-                            f"Error fetching ticker data for batch {start//batch_size + 1}: {e}")
-                    else:
-                        wait = delay_seconds * (attempt + 1)
-                        logger.warning(
-                            f"Retrying ticker batch {start//batch_size + 1}/{(len(symbols)-1)//batch_size + 1} "
-                            f"after error: {e} (wait {wait:.1f}s)")
-                        if wait > 0:
-                            time.sleep(wait)
-
-            if not tickers:
-                continue
-
-            for symbol in batch:
-                ticker = tickers.get(symbol)
-                if ticker and ticker['last'] is not None and ticker['quoteVolume'] is not None:
-                    coin = symbol.split('/')[0]
-                    market_data[coin] = {
-                        'price': ticker['last'],
-                        # Volume in base currency
-                        'volume': ticker['quoteVolume']
-                    }
-
-        return market_data
+        return fetch_market_data(
+            self.exchange,
+            list(self.all_symbols),
+            batch_size=self.config.ticker_batch_size,
+            retries=self.config.ticker_fetch_retries,
+            delay_seconds=self.config.ticker_retry_delay_seconds,
+        )
 
     def _build_simulated_ohlcv_data(self, symbol: str, timeframe: str = '1h', limit: int = 100) -> pd.DataFrame:
         """Builds deterministic simulated OHLCV data via the simulation engine."""
@@ -2019,80 +1901,15 @@ class CryptoTradingBot:
         if self.config.simulate_data or self.exchange is None:
             return self._build_simulated_ohlcv_data(symbol, timeframe=timeframe, limit=limit)
 
-        retries = max(0, self.config.ohlcv_fetch_retries)
-        delay_seconds = max(0.0, self.config.ohlcv_retry_delay_seconds)
-
-        for attempt in range(retries + 1):
-            started_at = time.monotonic()
-            try:
-                ohlcv = self.exchange.fetch_ohlcv(
-                    symbol, timeframe, limit=limit)
-                elapsed = time.monotonic() - started_at
-                if elapsed >= self.config.slow_analysis_warning_seconds:
-                    logger.warning(
-                        f"Slow OHLCV fetch for {symbol}: {elapsed:.1f}s "
-                        f"(timeframe={timeframe}, limit={limit})")
-                if not ohlcv:
-                    logger.warning(f"No OHLCV data available for {symbol}.")
-                    return None
-                df = pd.DataFrame(
-                    ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                return df
-            except (ccxt.NetworkError, ccxt.ExchangeError) as e:
-                elapsed = time.monotonic() - started_at
-                if attempt >= retries:
-                    logger.error(
-                        f"Error fetching OHLCV data for {symbol} after {elapsed:.1f}s: {e}")
-                    return None
-                wait = delay_seconds * (attempt + 1)
-                logger.warning(
-                    f"Retrying OHLCV fetch for {symbol} after {elapsed:.1f}s error: {e} "
-                    f"(attempt {attempt + 2}/{retries + 1}, wait {wait:.1f}s)")
-                if wait > 0:
-                    time.sleep(wait)
-        return None
-
-    def _calculate_rsi(self, data: pd.Series, period: int) -> float:
-        """Calculates the Relative Strength Index (RSI)."""
-        if len(data) < period + 1:
-            return np.nan  # Not enough data
-        delta = data.diff()
-        gain = delta.where(delta > 0, 0)
-        loss = -delta.where(delta < 0, 0)
-        avg_gain = gain.rolling(window=period).mean()
-        avg_loss = loss.rolling(window=period).mean()
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-        return rsi.iloc[-1]  # Last RSI value
-
-    def _calculate_sma(self, data: pd.Series, period: int) -> float:
-        """Calculates the Simple Moving Average (SMA)."""
-        if len(data) < period:
-            return np.nan
-        return data.rolling(window=period).mean().iloc[-1]
-
-    def _calculate_macd(self, data: pd.Series, fast: int = 12, slow: int = 26) -> float:
-        """Calculates the MACD (EMA12 - EMA26)."""
-        if len(data) < slow:
-            return np.nan
-        ema_fast = data.ewm(span=fast, adjust=False).mean()
-        ema_slow = data.ewm(span=slow, adjust=False).mean()
-        return (ema_fast - ema_slow).iloc[-1]
-
-    def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> float:
-        """Calculates the Average True Range (ATR) for the given DataFrame."""
-        if len(df) < period + 1:
-            return np.nan
-        high = df['high']
-        low = df['low']
-        close = df['close']
-        tr1 = high - low
-        tr2 = (high - close.shift()).abs()
-        tr3 = (low - close.shift()).abs()
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        atr = tr.rolling(window=period).mean()
-        return atr.iloc[-1]
+        return fetch_ohlcv(
+            self.exchange,
+            symbol,
+            timeframe,
+            limit,
+            retries=self.config.ohlcv_fetch_retries,
+            delay_seconds=self.config.ohlcv_retry_delay_seconds,
+            slow_warning_seconds=self.config.slow_analysis_warning_seconds,
+        )
 
     def _effective_trade_amount(self, portfolio_value: float) -> float:
         effective_trade_amount = self.config.trade_amount
@@ -2152,7 +1969,7 @@ class CryptoTradingBot:
             symbol, timeframe=self.config.ohlcv_timeframe, limit=period+20)
         if ohlcv_df is None or len(ohlcv_df) < period+1:
             return np.nan
-        return self._calculate_atr(ohlcv_df, period=period)
+        return calculate_atr(ohlcv_df, period=period)
 
     @staticmethod
     def _recommendation_bias(recommendation: str) -> int:
@@ -2848,7 +2665,7 @@ class CryptoTradingBot:
         if self.ml_predictor is None:
             return recommendation, score, signal_source, signal_confidence
         try:
-            macd = self._calculate_macd(ohlcv_df['close'])
+            macd = calculate_macd(ohlcv_df['close'])
             row_data = pd.DataFrame([{
                 'coin': coin,
                 'timestamp': int(ohlcv_df['timestamp'].iloc[-1].timestamp() * 1000),
@@ -2902,10 +2719,10 @@ class CryptoTradingBot:
             return None
 
         # Calculate indicators
-        rsi = self._calculate_rsi(ohlcv_df['close'], self.config.rsi_period)
-        sma_short = self._calculate_sma(
+        rsi = calculate_rsi(ohlcv_df['close'], self.config.rsi_period)
+        sma_short = calculate_sma(
             ohlcv_df['close'], self.config.sma_period_short)
-        sma_long = self._calculate_sma(
+        sma_long = calculate_sma(
             ohlcv_df['close'], self.config.sma_period_long)
         close = ohlcv_df['close']
         ema_20 = float(close.ewm(span=20, adjust=False).mean().iloc[-1])
@@ -2925,7 +2742,7 @@ class CryptoTradingBot:
         tab_sell_proba = None
         tabular_sell_veto = False
         macd_hist = None
-        atr_14 = float(self._calculate_atr(ohlcv_df, 14))
+        atr_14 = float(calculate_atr(ohlcv_df, 14))
         atr_pct = (
             atr_14 / current_price
             if math.isfinite(atr_14) and math.isfinite(current_price) and current_price > 0
