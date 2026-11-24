@@ -31,6 +31,10 @@ prepared; this file intentionally remains under **Unreleased** until then.
 
 ### Changed
 
+- Fail the public paper daily observation (exit 1) when neither the journal nor
+  the bot log shows activity within `--max-data-age-hours`, so a stopped
+  collector can no longer look like an idle day; the JSON is still written and
+  `latest.json` keeps the last healthy report.
 - Redact the Hailo service token from startup configuration logs.
 - Extend existing CSV journals atomically with the new columns and mark
   historical rows as `legacy`.

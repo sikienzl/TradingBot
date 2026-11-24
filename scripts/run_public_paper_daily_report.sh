@@ -12,6 +12,7 @@ mkdir -p "$OUT_DIR"
 args=(--journal "$PAPER_DIR/data/trade_journal.csv"
       --log "${PUBLIC_PAPER_LOG:-$PAPER_DIR/data/trading_bot.log}"
       --config "$PAPER_DIR/paper.env" --log-timezone "${PUBLIC_PAPER_LOG_TIMEZONE:-UTC}"
+      --max-data-age-hours "${PUBLIC_PAPER_MAX_DATA_AGE_HOURS:-26}"
       --output "$OUT_DIR/report-$DAY.json")
 if [[ -n "${PUBLIC_PAPER_COMPARE_JOURNAL:-}" ]]; then
   args+=(--compare-journal "$PUBLIC_PAPER_COMPARE_JOURNAL"
