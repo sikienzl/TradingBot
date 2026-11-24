@@ -152,7 +152,21 @@ a version heading is assigned when a release is prepared.
   injected, so the complete guardrail matrix is unit-testable without an
   exchange, an API key or a network. Covered by 72 new tests in
   `tests/test_ai_copilot_service.py`.
-
+- `src/dry_run_execution.py`, the simulated (dry-run / paper) execution cluster
+  that used to live in `CryptoTradingBot`: `execute_dry_run_trade` (the cost-mode
+  aware entry point), `plan_dry_run_fill` (the slippage/fee fill maths and its
+  invalid-request guards), `dry_run_buy` and `dry_run_sell` (the simulated
+  accounting, journal row and persistence branches), plus
+  `resolve_dry_run_sell_entry`, `dry_run_sell_proceeds`,
+  `apply_dry_run_sell_to_holdings`, `record_dry_run_sell_close`,
+  `dry_run_sell_gross_net_pnl` and `update_open_trades_after_dry_run_sell`. The
+  config, portfolio and performance dict are injected and everything the bot owns
+  — the journal writers, the public-paper transaction commit, the close
+  performance bookkeeping, the excursion metrics, the cost-basis helper, the
+  cooldown timestamps and the clock — arrives through a frozen `DryRunHooks`
+  dataclass, so the fill maths and the simulated accounting are unit-testable
+  without constructing a bot. Covered by 39 new tests in
+  `tests/test_dry_run_execution.py`.
 ### Changed
 
 - `read_ai_copilot_usage()` now exists once, in `src/export_pnl_metrics.py`. The
@@ -280,6 +294,21 @@ a version heading is assigned when a release is prepared.
   file fallback) and produced identical return values, config mutations, state
   files, raised exceptions and log output; the moved bodies are also
   AST-identical apart from the injected collaborators.
+- `src/trading_bot.py` shrank from 3001 to 2884 lines now that the simulated
+  execution cluster lives in `src/dry_run_execution.py`. The ten bot methods keep
+  their names and signatures as thin delegators and `_dry_run_hooks()` builds the
+  injected callbacks per call, so the existing tests that drive
+  `_execute_trade()` or patch a bot method still apply. The architecture ceiling
+  was ratcheted to the new size and `dry_run_execution` was registered as a
+  layer-1 module. The old and new code were compared over six end-to-end
+  scenarios driven through `_execute_trade()` on a real bot (costs on and off,
+  zero fee/slippage, public-paper mode, a restart that switches cost tracking on
+  under a legacy position, and seeded edge positions - missing basis, corrupt
+  quantity, NaN buy price, negative basis, repeated partial take-profits),
+  covering 38 trade calls, 122 log lines and 25 journal rows, and produced
+  identical return values, log output, journal rows and portfolio/performance
+  state; the moved bodies are also AST-identical apart from the injected
+  collaborators.
 
 ### Fixed
 
