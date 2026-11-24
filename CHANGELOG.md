@@ -40,9 +40,31 @@ a version heading is assigned when a release is prepared.
   bot-owned state (occupied positions, free slots, excluded pairs, degraded
   sources) and the logging, so behaviour and the existing tests are unchanged.
   Covered by 28 new tests in `tests/test_entry_selection.py`.
+- `src/pnl_prometheus_format.py`, the Prometheus exposition renderer that used to
+  be one 308-line function inside `src/export_pnl_metrics.py`. Gauge and
+  labelled-gauge helpers, one section per metric family (trades, portfolio, AI
+  co-pilot, AI shadow suggestions, recent-PnL guard, per-coin) and proper label
+  escaping replace the single flat writer, and the module has no I/O so it can be
+  reused by both PnL exporters. Covered by 24 new tests in
+  `tests/test_pnl_prometheus_format.py`, including the invariant that every
+  emitted series also declares its HELP and TYPE header.
 
 ### Changed
 
+- `read_ai_copilot_usage()` now exists once, in `src/export_pnl_metrics.py`. The
+  HTTP exporter's near-identical 50-line copy is gone and
+  `pnl_exporter.MetricsHandler` delegates to the shared implementation, which
+  gained `quiet=` to suppress the stderr diagnostics and `backup_state_path=` to
+  fall back to the `.bak` state file; the exporter keeps its own AI spend lookup
+  on top. The dead `MIN_DRAWDOWN_PCT_BASE_USD` and `SHADOW_SUGGESTION_META_RE`
+  constants in `src/pnl_exporter.py` were removed with it.
+- The rendered exposition text is byte-identical to before: the previous
+  formatter and the new module were diffed over five scenarios (full HTTP
+  metrics, a one-shot run without freshness keys, empty coin maps, a guard
+  reason that needs escaping, and an infinite profit factor).
+- `src/export_pnl_metrics.py` shrank from 1024 to 731 lines and
+  `src/pnl_exporter.py` from 281 to 246; the architecture ceiling for the
+  former was ratcheted to the new size.
 - The duplicated uptrend and downtrend-reversal candidate loggers are now one
   `log_blocked_gate_candidates()` helper with a gate label, and the
   no-candidates summary moved to its own `_log_no_entry_candidates()` method.
