@@ -989,14 +989,18 @@ The `.github/workflows/release.yml` workflow publishes one GitHub Release per
 two-node CM5 cluster are deployed differently:
 
 - `trading-bot-pi-<version>.tar.gz` - single Raspberry Pi: runtime scripts,
-  `requirements-pi.txt`, systemd units and the one-shot `scripts/install_pi.sh`.
+  the `docs/` guides, `requirements-pi.txt`, systemd units (including the
+  weekly scorecard, research-signal and auto-tuning timers) and the one-shot
+  `scripts/install_pi.sh`.
 - `trading-cluster-<version>.tar.gz` - CM5 cluster: `src/`, the `docker/`
-  Dockerfiles, cluster units and env templates, `requirements-hailo-shadow.txt`
-  and `requirements-dashboard.txt`, plus a `version.txt` with the version and
-  commit. Built by `.github/scripts/cluster_release.py`, which is deterministic
-  (sorted members, fixed metadata) so the checksum is reproducible. The LLM
-  adapter, Hailo SDK packages and HEF files are excluded by design; images are
-  built on the nodes.
+  Dockerfiles, cluster units and env templates, `requirements-hailo-server.txt`,
+  `requirements-hailo-shadow.txt` and `requirements-dashboard.txt`, the generic
+  `ansible/` paper-dashboard starter (example inventories and vault templates
+  only), plus a `version.txt`
+  with the version and commit. Built by `.github/scripts/cluster_release.py`,
+  which is deterministic (sorted members, fixed metadata) so the checksum is
+  reproducible. The LLM adapter, Hailo SDK packages and HEF files are excluded
+  by design; images are built on the nodes.
 
 Both archives ship with a `.sha256` file. The packaging allowlist and the
 required-file check are covered by `.github/scripts/tests/test_cluster_release.py`.

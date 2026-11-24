@@ -57,12 +57,17 @@ jobs:
              "${PKG}/"
 
           # Documentation and env templates used at runtime on Pi
-           cp README.md SERVER_README.md .env.example .env.live.example "${PKG}/"
+          cp README.md SERVER_README.md .env.example .env.live.example "${PKG}/"
+          # The packaged README links into docs/, so the guides must ship too.
+          cp -r docs "${PKG}/docs"
 
           # Scripts & deploy (installer + systemd units)
           mkdir -p "${PKG}/scripts" "${PKG}/deploy"
           cp scripts/run_weekly_scorecard.sh \
              scripts/run_node_exporter_textfile_example.sh \
+             scripts/run_weekly_tuning_cycle.sh \
+             scripts/apply_tuning_recommendation.py \
+             scripts/recommend_tuning_change.py \
              scripts/start_sim_bot.sh \
              scripts/stop_sim_bot.sh \
              scripts/install_pi.sh \
@@ -77,6 +82,8 @@ jobs:
              deploy/scorecard.timer \
              deploy/scorecard-status.service \
              deploy/scorecard-status.timer \
+             deploy/tuning-cycle.service \
+             deploy/tuning-cycle.timer \
              deploy/node-exporter-textfile.service \
              deploy/prometheus.yml \
              deploy/trading-alerts.yml \
@@ -113,6 +120,11 @@ jobs:
             "${PKG}/src/research_signal.py"
             "${PKG}/scripts/install_pi.sh"
             "${PKG}/scripts/install_monitoring_pi.sh"
+            "${PKG}/scripts/run_weekly_tuning_cycle.sh"
+            "${PKG}/deploy/tuning-cycle.service"
+            "${PKG}/deploy/tuning-cycle.timer"
+            "${PKG}/docs/USAGE.md"
+            "${PKG}/docs/DEPLOYMENT.md"
             "${PKG}/deploy/prometheus.yml"
             "${PKG}/deploy/scorecard-status.timer"
             "${PKG}/deploy/research-signal.service"
@@ -276,9 +288,10 @@ jobs:
 
           Pi package (\`trading-bot-pi-${VERSION}.tar.gz\`):
 
-          - Runtime Python scripts
+          - Runtime Python scripts and the \`docs/\` guides
           - Pi-optimised \`requirements-pi.txt\`
-          - Systemd service & timer units (\`deploy/\`)
+          - Systemd service & timer units (\`deploy/\`), including the
+            weekly scorecard, research-signal and auto-tuning timers
           - One-shot installer (\`scripts/install_pi.sh\`)
 
           Cluster package (\`trading-cluster-${VERSION}.tar.gz\`):
@@ -286,7 +299,10 @@ jobs:
           - \`src/\`, \`docker/\` Dockerfiles and \`docs/\`
           - Cluster units and env templates (\`deploy/\`), including the Hailo
             inference, tunnel, shadow and public-paper services
-          - \`requirements-hailo-shadow.txt\` and \`requirements-dashboard.txt\`
+          - Generic \`ansible/\` paper-dashboard starter (example inventories
+            and vault templates only)
+          - \`requirements-hailo-server.txt\`, \`requirements-hailo-shadow.txt\`
+            and \`requirements-dashboard.txt\`
           - CatBoost decision model; the LLM adapter and Hailo SDK/HEF artifacts are excluded
 
           EOF

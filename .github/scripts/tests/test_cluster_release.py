@@ -63,6 +63,10 @@ class ClusterReleaseTest(unittest.TestCase):
             "src/__pycache__/trading_bot.cpython-314.pyc",
             "trade_journal.csv",
             ".env",
+            "ansible/inventory/hosts.yml",
+            "ansible/group_vars/paper_dashboard/vault.yml",
+            "ansible/.vault_pass.txt",
+            "ansible/files/dashboard.key",
         ):
             with self.subTest(name=name):
                 self.assertFalse(release.allowed_path(name))
@@ -74,8 +78,14 @@ class ClusterReleaseTest(unittest.TestCase):
             "src/hailo_service.py",
             "scripts/run_public_paper_daily_report.sh",
             "requirements-hailo-shadow.txt",
+            "requirements-hailo-server.txt",
             "model/catboost_trading_model/catboost_model.cbm",
             ".env.paper_kraken.example",
+            "ansible/README.md",
+            "ansible/playbooks/dashboard.yml",
+            "ansible/inventory/hosts.yml.example",
+            "ansible/group_vars/paper_dashboard/vault.yml.example",
+            "ansible/roles/public_paper_dashboard/templates/dashboard.env.j2",
         ):
             with self.subTest(name=name):
                 self.assertTrue(release.allowed_path(name))
@@ -97,6 +107,9 @@ class ClusterReleaseTest(unittest.TestCase):
             ("deploy/x.env.example", b"ANALYTICS_DB_PASSWORD=hunter2\n"),
             ("deploy/private.env", b"KRAKEN_API_KEY=abc\n"),
             ("src/trading_bot.py", b"-----BEGIN OPENSSH PRIVATE KEY-----\n"),
+            ("ansible/group_vars/paper_dashboard/vault.yml.example", b"$ANSIBLE_VAULT;1.1;AES256\n"),
+            ("ansible/group_vars/paper_dashboard/vars.yml.example", b"vault_public_paper_dashboard_password: hunter2\n"),
+            ("ansible/roles/public_paper_dashboard/defaults/main.yml", b"public_paper_dashboard_api_key: abc123\n"),
         ):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 release.check_content(name, data)
@@ -106,6 +119,10 @@ class ClusterReleaseTest(unittest.TestCase):
             ("deploy/hailo-shadow.env.example", b"HAILO_API_TOKEN=\n"),
             ("deploy/x.env.example", b"DASHBOARD_PASSWORD=replace-with-a-long-random-password\n"),
             ("deploy/x.env.example", b"KRAKEN_API_KEY=REPLACE_WITH_KEY\n"),
+            ("ansible/group_vars/paper_dashboard/vault.yml.example", b"vault_public_paper_dashboard_password: REPLACE_WITH_LONG_RANDOM_PASSWORD\n"),
+            ("ansible/group_vars/paper_dashboard/vars.yml.example", b'public_paper_dashboard_password: "{{ vault_public_paper_dashboard_password }}"\n'),
+            ("ansible/roles/public_paper_dashboard/defaults/main.yml", b'public_paper_dashboard_password: ""\n'),
+            ("ansible/roles/public_paper_dashboard/templates/dashboard.env.j2", b"DASHBOARD_PASSWORD={{ public_paper_dashboard_password }}\n"),
         ):
             with self.subTest(name=name):
                 release.check_content(name, data)
