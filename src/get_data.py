@@ -50,6 +50,8 @@ class CryptoDataFetcher:
                 return ohlcv
             except (ccxt.NetworkError, ccxt.ExchangeError) as err:
                 last_error = err
+                if attempt + 1 >= max_retries:
+                    break
                 wait_time = (attempt + 1) * 5
                 print(
                     f"Attempt {attempt + 1}/{max_retries} for {symbol} failed. Waiting {wait_time}s...", end="\r")
@@ -80,7 +82,7 @@ class CryptoDataFetcher:
             df['bb_upper'], df['bb_middle'], df['bb_lower'] = talib.BBANDS(
                 df['close'])
             return True
-        except (TypeError, ValueError) as e:
+        except (KeyError, TypeError, ValueError) as e:
             print(f"Indicator calculation failed: {e!s}")
             return False
 
@@ -96,8 +98,9 @@ class CryptoDataFetcher:
             ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df['symbol'] = symbol
-        df['base'] = symbol.split('/')[0]
-        df['quote'] = symbol.split('/')[1]
+        base, _, quote = symbol.partition('/')
+        df['base'] = base
+        df['quote'] = quote
 
         if self.calculate_indicators(df):
             self.data[symbol] = df

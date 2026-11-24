@@ -5,6 +5,34 @@ a version heading is assigned when a release is prepared.
 
 ## Unreleased
 
+### Added
+
+- `tests/test_architecture.py` locks the package layout that the refactor
+  established. Every module under `src/` is assigned a layer, upward imports
+  (a foundational module importing a composition-root module) and import cycles
+  fail the test suite, `src/trading_bot.py` must stay a leaf apart from the
+  `init_kraken_paper` bootstrap, and the three oversized modules may not grow
+  past their current line counts. This is the guard that keeps the God-class
+  extraction from sliding back.
+- Unit tests for three modules that previously had no coverage at all:
+  `src/get_data.py` (86%), `src/predict.py` (91%) and
+  `scripts/recommend_tuning_change.py` (99%). The exchange tests drive a fake
+  ccxt exchange, so no network access is needed, and the LLM tests stub
+  `torch`/`transformers` when they are not installed.
+- The CI unit-test job now measures branch coverage and includes `scripts/`,
+  matching the command documented in `CONTRIBUTING.md`.
+
+### Fixed
+
+- `fetch_ohlcv_with_retry()` slept for the back-off delay after its final
+  attempt, so an unreachable exchange stalled for an extra 20 seconds per
+  symbol before giving up.
+- `calculate_indicators()` only caught `TypeError` and `ValueError`, so a frame
+  missing the `high`/`low`/`volume` columns escaped as an unhandled `KeyError`
+  instead of returning the documented `False`.
+- `process_symbol()` split the pair with `symbol.split("/")[0]`, which raised
+  `IndexError` for a symbol without a quote currency; it now uses `partition()`.
+
 ## v1.0.27 - 2026-11-24
 
 ### Fixed
