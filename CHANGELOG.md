@@ -30,6 +30,24 @@ a version heading is assigned when a release is prepared.
 - Unit tests for the new modules: `tests/test_indicator_service.py`,
   `tests/test_state_store.py` and `tests/test_market_data.py` (indicator
   values, `.bak` recovery, atomic writes, retry/back-off and batch handling).
+- `src/entry_selection.py`, a pure entry-selection collaborator holding the
+  rules that used to be buried inside the bot's main loop: market-mode
+  classification from the signal mix, filter-reason codes and reason mixes,
+  the shared blocked-candidate diagnostics for the uptrend / downtrend-reversal
+  / fallback / buy-attempt gates, and the strict, fallback and force-fill
+  candidate ranking (including the recent-PnL guard and the entry-guard cache).
+  `TradingBot._select_entry_candidates()` is now a thin delegator that keeps the
+  bot-owned state (occupied positions, free slots, excluded pairs, degraded
+  sources) and the logging, so behaviour and the existing tests are unchanged.
+  Covered by 28 new tests in `tests/test_entry_selection.py`.
+
+### Changed
+
+- The duplicated uptrend and downtrend-reversal candidate loggers are now one
+  `log_blocked_gate_candidates()` helper with a gate label, and the
+  no-candidates summary moved to its own `_log_no_entry_candidates()` method.
+  Cyclomatic complexity of `_select_entry_candidates()` dropped from 52 to 13,
+  and `src/trading_bot.py` shrank from 4581 to 4306 lines.
 
 ### Fixed
 
