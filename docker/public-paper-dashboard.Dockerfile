@@ -9,6 +9,7 @@ WORKDIR /app
 COPY requirements-dashboard.txt /app/
 RUN pip install --no-cache-dir -r requirements-dashboard.txt
 COPY src/public_paper_dashboard.py /app/src/public_paper_dashboard.py
+COPY src/market_observations.py /app/src/market_observations.py
 RUN touch /app/src/__init__.py
 ENV PYTHONPATH=/app
 USER trading
