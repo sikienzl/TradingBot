@@ -201,11 +201,11 @@ a version heading is assigned when a release is prepared.
 ### Changed
 
 - The README header now follows the GitHub colour scheme: `assets/logo-dark.png`
-  (a light emblem on a dark field, 896x1200) is served to dark mode and the
-  transparent emblem to light mode through a `<picture>` element, so the logo
-  stays readable on both backgrounds. The display width is declared per source
-  because the dark artwork has more canvas padding around the emblem; the two
-  values render the scales at the same visual size.
+  (the same emblem in light strokes, 896x1200) is served to dark mode and the
+  dark-stroke transparent emblem to light mode through a `<picture>` element, so
+  the logo stays readable on both backgrounds. The display width is declared per
+  source because the dark artwork has more canvas padding around the emblem; the
+  two values render the scales at the same visual size.
 - The project logo is now a single balanced-scale emblem (Kraken/BTC on one pan,
   the risk shield with a confirmed uptrend in the middle, the model graph on the
   other) at 1376x768 with a transparent background; the previous 353x220 artwork
