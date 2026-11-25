@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Export bot safety, Hailo, and research-feed health to a textfile collector."""
+"""Export bot safety, Hailo, research-feed, and data-staleness health.
+
+Writes a Prometheus textfile-collector fragment. The staleness gauges are what
+make a silently stopped collector or bot process observable: without them a
+report over an empty window still succeeds and every downstream metric simply
+reads as zero.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +16,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
+
+from src.data_staleness import measure_staleness, resolve_log_timezone
 
 
 def _research_age(path: Path, now: datetime) -> float | None:
@@ -43,7 +51,11 @@ def render_metrics(
     kill_switch_file: Path,
     hailo_health_url: str,
     research_signal_file: Path,
+    journal_file: Path,
+    bot_log_file: Path,
+    market_data_dir: Path | None = None,
     *,
+    log_timezone: str = "UTC",
     now: datetime | None = None,
     health_probe=urlopen,
 ) -> str:
@@ -78,6 +90,43 @@ def render_metrics(
             "# TYPE trading_research_signal_age_seconds gauge",
             f"trading_research_signal_age_seconds {research_age:.3f}",
         ])
+
+    staleness = measure_staleness(
+        journal_file, bot_log_file, market_data_dir,
+        log_timezone=resolve_log_timezone(log_timezone), now=now,
+    )
+    for key, help_text in (
+        ("journal", "trade journal rows"),
+        ("bot_log", "bot log lines"),
+    ):
+        lines.extend([
+            (f"# HELP trading_{key}_present Whether {help_text} with a parseable "
+             "timestamp exist."),
+            f"# TYPE trading_{key}_present gauge",
+            f"trading_{key}_present {staleness[f'{key}_present']:.0f}",
+        ])
+        age = staleness[f"{key}_age_seconds"]
+        if age is not None:
+            lines.extend([
+                f"# HELP trading_{key}_age_seconds Age of the newest {help_text}.",
+                f"# TYPE trading_{key}_age_seconds gauge",
+                f"trading_{key}_age_seconds {age:.3f}",
+            ])
+    if market_data_dir is not None:
+        lines.extend([
+            ("# HELP trading_market_data_present Whether market recorder rows with a "
+             "parseable timestamp exist."),
+            "# TYPE trading_market_data_present gauge",
+            f"trading_market_data_present {staleness['market_data_present']:.0f}",
+        ])
+        market_age = staleness["market_data_age_seconds"]
+        if market_age is not None:
+            lines.extend([
+                ("# HELP trading_market_data_age_seconds Age of the newest market "
+                 "recorder row."),
+                "# TYPE trading_market_data_age_seconds gauge",
+                f"trading_market_data_age_seconds {market_age:.3f}",
+            ])
     return "\n".join(lines) + "\n"
 
 
@@ -103,10 +152,15 @@ def write_metrics(output: Path, body: str) -> None:
 
 def main() -> int:
     root = Path(os.getenv("TRADING_DATA_DIR", "."))
+    market_data = os.getenv("TRADING_MARKET_DATA_DIR", "").strip()
     body = render_metrics(
         Path(os.getenv("TRADING_KILL_SWITCH_FILE", ".trading_kill_switch")),
         os.getenv("HAILO_HEALTH_URL", ""),
         Path(os.getenv("RESEARCH_SIGNAL_PATH", str(root / "research_signal_latest.json"))),
+        Path(os.getenv("TRADING_JOURNAL_FILE", str(root / "trade_journal.csv"))),
+        Path(os.getenv("TRADING_BOT_LOG_FILE", str(root / "trading_bot.log"))),
+        Path(market_data) if market_data else None,
+        log_timezone=os.getenv("TRADING_LOG_TIMEZONE", "UTC"),
     )
     output = Path(os.getenv(
         "TRADING_HEALTH_METRICS_FILE",
