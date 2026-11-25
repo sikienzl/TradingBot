@@ -150,12 +150,6 @@ from src.execution_service import (
     order_fill_details as _order_fill_details,  # noqa: F401
 )
 from src.exit_policy import (
-    core_exit_reason as _exit_core_exit_reason,
-)
-from src.exit_policy import (
-    downtrend_reversal_exit_reason as _exit_downtrend_reversal_exit_reason,
-)
-from src.exit_policy import (
     effective_stop_loss_level as _exit_effective_stop_loss_level,
 )
 from src.exit_policy import (
@@ -163,15 +157,6 @@ from src.exit_policy import (
 )
 from src.exit_policy import (
     is_rules_uptrend_trade as _exit_is_rules_uptrend_trade,
-)
-from src.exit_policy import (
-    maybe_partial_take_profit as _exit_maybe_partial_take_profit,
-)
-from src.exit_policy import (
-    partial_tp_remainder_exit_reason as _exit_partial_tp_remainder_exit_reason,
-)
-from src.exit_policy import (
-    uptrend_rules_exit_reason as _exit_uptrend_rules_exit_reason,
 )
 from src.indicator_service import calculate_atr
 from src.journal_guards import (
@@ -186,6 +171,15 @@ from src.market_analysis import (
     dynamic_excluded_coins as _market_analysis_dynamic_excluded_coins,
 )
 from src.market_data import fetch_market_data, fetch_ohlcv
+from src.open_trade_manager import (
+    OpenTradeContext as _OpenTradeContext,
+)
+from src.open_trade_manager import (
+    OpenTradeHooks as _OpenTradeHooks,
+)
+from src.open_trade_manager import (
+    manage_open_trades as _open_trade_manage_open_trades,
+)
 from src.portfolio import Portfolio
 from src.simulation import SimulationEngine
 from src.state_store import (
@@ -1824,233 +1818,25 @@ class CryptoTradingBot:
             logger=logger,
         )
 
-    def _maybe_partial_take_profit(
+    def _manage_open_trades(
         self,
-        coin: str,
-        trade_info: dict,
-        partial_tp_taken: bool,
-        amount_coin: float,
-        current_price: float,
-        partial_take_profit_level: float,
-        partial_fraction: float,
-        atr: float,
-    ) -> bool:
-        """Delegates to :func:`src.exit_policy.maybe_partial_take_profit`."""
-        return _exit_maybe_partial_take_profit(
-            self.config,
-            self.portfolio,
-            self._execute_trade,
-            self._public_paper_mode,
-            coin,
-            trade_info,
-            partial_tp_taken,
-            amount_coin,
-            current_price,
-            partial_take_profit_level,
-            partial_fraction,
-            atr,
-            now=datetime.now,
-        )
-
-    def _partial_tp_remainder_exit_reason(
-        self,
-        exit_reason: str | None,
-        coin: str,
-        partial_tp_taken: bool,
-        partial_tp_timestamp,
-        market_analysis: dict | None,
-    ) -> str | None:
-        """Delegates to :func:`src.exit_policy.partial_tp_remainder_exit_reason`."""
-        return _exit_partial_tp_remainder_exit_reason(
-            self.config,
-            exit_reason,
-            coin,
-            partial_tp_taken,
-            partial_tp_timestamp,
-            market_analysis,
-            now=datetime.now,
-        )
-
-    def _downtrend_reversal_exit_reason(
-        self,
-        exit_reason: str | None,
-        coin: str,
-        trade_info: dict,
-        hold_seconds: float,
-        pnl_pct: float,
-        market_analysis: dict | None,
-    ) -> str | None:
-        """Delegates to :func:`src.exit_policy.downtrend_reversal_exit_reason`."""
-        return _exit_downtrend_reversal_exit_reason(
-            self.config,
-            exit_reason,
-            coin,
-            trade_info,
-            hold_seconds,
-            pnl_pct,
+        current_market_data: dict[str, dict],
+        market_analysis: dict | None = None,
+    ) -> None:
+        """Delegates to :func:`src.open_trade_manager.manage_open_trades`."""
+        _open_trade_manage_open_trades(
+            _OpenTradeContext(
+                config=self.config,
+                portfolio=self.portfolio,
+            ),
+            _OpenTradeHooks(
+                get_atr=self._get_atr_for_coin,
+                execute_trade=self._execute_trade,
+                public_paper_mode=self._public_paper_mode,
+            ),
+            current_market_data,
             market_analysis,
         )
-
-    def _uptrend_rules_exit_reason(
-        self,
-        exit_reason: str | None,
-        coin: str,
-        trade_info: dict,
-        hold_seconds: float,
-        pnl_pct: float,
-        market_analysis: dict | None,
-    ) -> str | None:
-        """Delegates to :func:`src.exit_policy.uptrend_rules_exit_reason`."""
-        return _exit_uptrend_rules_exit_reason(
-            self.config,
-            exit_reason,
-            coin,
-            trade_info,
-            hold_seconds,
-            pnl_pct,
-            market_analysis,
-        )
-
-    def _core_exit_reason(
-        self,
-        exit_reason: str | None,
-        coin: str,
-        current_price: float,
-        stop_loss_level: float,
-        take_profit_level: float,
-        max_hold_seconds: int,
-        hold_seconds: float,
-        pnl_pct: float,
-        market_analysis: dict | None,
-    ) -> str | None:
-        """Delegates to :func:`src.exit_policy.core_exit_reason`."""
-        return _exit_core_exit_reason(
-            self.config,
-            exit_reason,
-            coin,
-            current_price,
-            stop_loss_level,
-            take_profit_level,
-            max_hold_seconds,
-            hold_seconds,
-            pnl_pct,
-            market_analysis,
-        )
-
-    def _manage_open_trades(self, current_market_data: dict[str, dict], market_analysis: dict | None = None):
-        """Monitors open trades for stop-loss, take-profit, time and signal exits."""
-        trades_to_remove = []
-        excursions_updated = False
-        for coin, trade_info in list(self.portfolio.open_trades.items()):
-            buy_price = trade_info['buy_price']
-            amount_coin = trade_info['amount_coin']
-            partial_tp_taken = bool(trade_info.get('partial_tp_taken', False))
-            partial_tp_timestamp = trade_info.get('partial_tp_timestamp')
-            current_price_data = current_market_data.get(coin)
-            if current_price_data is None:
-                logger.warning(
-                    f"Current market data for {coin} not available, cannot monitor trade.")
-                continue
-            current_price = current_price_data['price']
-            peak_price = max(
-                float(trade_info.get('peak_price', buy_price)),
-                buy_price,
-                current_price,
-            )
-            trough_price = min(
-                float(trade_info.get('trough_price', buy_price)),
-                buy_price,
-                current_price,
-            )
-            if (
-                peak_price != float(trade_info.get('peak_price', buy_price))
-                or trough_price != float(trade_info.get('trough_price', buy_price))
-            ):
-                excursions_updated = True
-            trade_info['peak_price'] = peak_price
-            trade_info['trough_price'] = trough_price
-            pnl_pct = (current_price - buy_price) / buy_price * 100
-            hold_seconds = (datetime.now() -
-                            trade_info['timestamp']).total_seconds()
-            max_hold_seconds = self.config.coin_max_hold_seconds.get(
-                coin, self.config.max_hold_seconds)
-            # Fetch ATR for dynamic stops
-            atr_started = time.monotonic()
-            atr = self._get_atr_for_coin(coin, period=14)
-            atr_seconds = time.monotonic() - atr_started
-            observed_hold_seconds = (datetime.now() - trade_info['timestamp']).total_seconds()
-            if max_hold_seconds > 0 and observed_hold_seconds >= max_hold_seconds:
-                logger.warning(
-                    "Position hold limit reached: coin=%s observed_hold_seconds=%.1f "
-                    "limit_seconds=%d overdue_seconds=%.1f atr_fetch_seconds=%.1f; "
-                    "exit is checked during the trading loop, not at an exact deadline",
-                    coin, observed_hold_seconds, max_hold_seconds,
-                    observed_hold_seconds - max_hold_seconds, atr_seconds,
-                )
-            if np.isnan(atr) or atr == 0:
-                atr = buy_price * 0.02  # Fallback: 2% of price
-            stop_loss_level = self._effective_stop_loss_level(
-                trade_info, current_price, atr)
-            take_profit_level = buy_price + self.config.atr_tp_mult * atr
-            partial_take_profit_level = buy_price + \
-                self.config.partial_take_profit_atr_mult * atr
-            peak_price = float(trade_info.get('peak_price', buy_price))
-            logger.info(
-                f"  📊 {coin}: Buy {buy_price:.4f} → Current {current_price:.4f} "
-                f"({pnl_pct:+.2f}%) | SL {stop_loss_level:.4f} | TP {take_profit_level:.4f} "
-                f"| Peak {peak_price:.4f} | Hold time {int(hold_seconds)}s")
-            exit_reason = None
-            partial_fraction = min(
-                max(self.config.partial_take_profit_fraction, 0.0), 1.0)
-            if self._maybe_partial_take_profit(
-                coin, trade_info, partial_tp_taken, amount_coin, current_price,
-                partial_take_profit_level, partial_fraction, atr,
-            ):
-                continue
-            exit_reason = self._partial_tp_remainder_exit_reason(
-                exit_reason, coin, partial_tp_taken, partial_tp_timestamp,
-                market_analysis,
-            )
-            exit_reason = self._downtrend_reversal_exit_reason(
-                exit_reason, coin, trade_info, hold_seconds, pnl_pct,
-                market_analysis,
-            )
-            exit_reason = self._uptrend_rules_exit_reason(
-                exit_reason, coin, trade_info, hold_seconds, pnl_pct,
-                market_analysis,
-            )
-            exit_reason = self._core_exit_reason(
-                exit_reason, coin, current_price, stop_loss_level,
-                take_profit_level, max_hold_seconds, hold_seconds, pnl_pct,
-                market_analysis,
-            )
-            if exit_reason:
-                logger.info(
-                    f"{exit_reason} → Verkauf {coin} @ {current_price:.4f}")
-                if self._execute_trade(
-                    coin,
-                    "sell",
-                    current_price,
-                    amount_coin * current_price,
-                    atr=atr,
-                    reason=exit_reason,
-                ):
-                    remaining_trade = self.portfolio.open_trades.get(coin)
-                    if (
-                        remaining_trade is None
-                        or float(remaining_trade.get("amount_coin", 0.0))
-                        >= amount_coin - 1e-12
-                    ):
-                        trades_to_remove.append(coin)
-                else:
-                    logger.warning(
-                        "Exit sell failed for %s; retaining the position for retry.",
-                        coin,
-                    )
-        for coin in trades_to_remove:
-            self.portfolio.remove_trade(coin)
-        if excursions_updated and self.config.dry_run:
-            self.portfolio.save_state()
 
     def _entry_pair_allowed(
         self,
