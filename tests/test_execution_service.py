@@ -604,6 +604,57 @@ def test_momentum_filter_and_cooldown_block_before_the_order():
         "120s remaining (effective=900s, volatility-scaled)")
 
 
+def test_local_entry_gates_skip_news_veto_call():
+    news_calls = []
+    recorder = _EntryRecorder(momentum=(False, "local_gate"))
+    hooks = recorder.hooks()
+    hooks = EntryHooks(
+        get_atr=hooks.get_atr,
+        compute_position_size=hooks.compute_position_size,
+        passes_momentum_filter=hooks.passes_momentum_filter,
+        resolve_cooldown_seconds=hooks.resolve_cooldown_seconds,
+        in_reentry_cooldown=hooks.in_reentry_cooldown,
+        execute_trade=hooks.execute_trade,
+        log_blocked_attempts=hooks.log_blocked_attempts,
+        news_veto=lambda coin, candidate: news_calls.append(coin) or (False, "clear"),
+    )
+
+    open_new_positions(
+        _Config(), _portfolio(), hooks, {"BTC": {"price": 100.0}},
+        {"BTC": {"score": 80, "recommendation": "BUY"}}, ["BTC"], 1000.0,
+        effective_trade_amount=100.0, effective_max_open_trades=3,
+        can_open_positions=True, block_reason="",
+    )
+
+    assert news_calls == []
+    assert recorder.executed == []
+
+
+def test_news_veto_blocks_candidate_before_order():
+    recorder = _EntryRecorder()
+    hooks = recorder.hooks()
+    hooks = EntryHooks(
+        get_atr=hooks.get_atr,
+        compute_position_size=hooks.compute_position_size,
+        passes_momentum_filter=hooks.passes_momentum_filter,
+        resolve_cooldown_seconds=hooks.resolve_cooldown_seconds,
+        in_reentry_cooldown=hooks.in_reentry_cooldown,
+        execute_trade=hooks.execute_trade,
+        log_blocked_attempts=hooks.log_blocked_attempts,
+        news_veto=lambda _coin, _candidate: (True, "exchange announcement risk"),
+    )
+
+    open_new_positions(
+        _Config(), _portfolio(), hooks, {"BTC": {"price": 100.0}},
+        {"BTC": {"score": 80, "recommendation": "BUY"}}, ["BTC"], 1000.0,
+        effective_trade_amount=100.0, effective_max_open_trades=3,
+        can_open_positions=True, block_reason="",
+    )
+
+    assert recorder.executed == []
+    assert recorder.blocked[0]["reason"] == "news_veto:exchange announcement risk"
+
+
 def test_position_below_the_minimum_trade_amount_is_skipped():
     recorder = _EntryRecorder(position_size=5.0)
 

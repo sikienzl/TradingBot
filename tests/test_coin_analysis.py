@@ -502,7 +502,7 @@ def test_analyze_coin_tabular_buy_entries_disabled_is_gated(caplog) -> None:
     assert "gated for BTC: buy_entries_disabled" in caplog.text
 
 
-def test_analyze_coin_hailo_failure_suppresses_entries(caplog) -> None:
+def test_analyze_coin_hailo_failure_preserves_rule_signal(caplog) -> None:
     tabular = _TabularPredictor(error=RuntimeError("hailo gone"))
     with caplog.at_level("INFO"):
         result = analyze_coin(
@@ -510,13 +510,10 @@ def test_analyze_coin_hailo_failure_suppresses_entries(caplog) -> None:
             None, tabular, "BTC", 100.0, rule_recommender=_rules("BUY", 80),
         )
     assert result is not None
-    assert (result["recommendation"], result["score"]) == ("HOLD", 0)
-    assert result["signal_source"] == "hailo_unavailable"
-    assert result["signal_confidence"] == 0.0
-    assert result["tabular_buy_proba"] == 0.0
-    assert result["tabular_sell_proba"] == 0.0
+    assert (result["recommendation"], result["score"]) == ("BUY", 80)
+    assert result["signal_source"] == "rules"
     assert result["tabular_sell_veto"] is False
-    assert "Hailo prediction for BTC failed" in caplog.text
+    assert "preserving the existing signal" in caplog.text
 
 
 def test_analyze_coin_catboost_failure_keeps_rule_signal(caplog) -> None:

@@ -434,6 +434,14 @@ class BotConfig:
         self.tabular_block_on_sell = _env_bool('TABULAR_BLOCK_ON_SELL', False)
         self.tabular_sell_block_min_proba = float(
             os.getenv('TABULAR_SELL_BLOCK_MIN_PROBA', str(0.50)))
+        self.news_veto_enabled = _env_bool('NEWS_VETO_ENABLED', False)
+        self.news_veto_api_url = _env_str('NEWS_VETO_API_URL', '')
+        self.news_veto_api_key = _env_str('NEWS_VETO_API_KEY', '')
+        self.news_veto_model = _env_str('NEWS_VETO_MODEL', '')
+        self.news_veto_max_calls_per_day = int(
+            os.getenv('NEWS_VETO_MAX_CALLS_PER_DAY', '10'))
+        self.news_veto_state_file = _env_str(
+            'NEWS_VETO_STATE_FILE', 'news_veto_state.json')
         # Optional: automatic recommendation/application of confidence threshold from journal data
 
     def _load_analytics_and_guardrail_settings(self) -> None:

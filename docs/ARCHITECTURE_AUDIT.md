@@ -9,8 +9,8 @@ The live cluster workload inspected is paper/shadow only.
 | # | Core area | Single Raspberry Pi | CM5 cluster |
 |---|---|---|---|
 | 1 | Data basis and model lifecycle | **[⚠️ Partial]** Chronological CatBoost split, purging and Walk-Forward exist; no paired versioned HEF/CPU export or rollback. | **[⚠️ Partial]** Hailo ONNX export and live HEF inference exist; compiler/promotion is separate and CPU/Hailo artifacts are not paired automatically. |
-| 2 | Decision pyramid and hardware fallback | **[⚠️ Partial]** Rules and optional CPU model work without Hailo; ATR gate exists, but no spread/min-volume first-stage gate and no backend fallback chain. | **[⚠️ Partial]** Remote Hailo is available and errors fail closed per candidate; no automatic CPU fallback or final LLM/news veto stage. |
-| 3 | News integration | **[⚠️ Partial]** Optional RSS/FNG research collector exists; no per-item `fetched_at`, durable deduplicated item store, or structured veto schema. | **[⚠️ Partial]** Same collector/runtime limitations; Hailo feature contract does not include news. |
+| 2 | Decision pyramid and hardware fallback | **[⚠️ Partial]** Hailo→CPU→rules fallback is implemented and tested; ATR exists, but a universal pre-inference spread/min-volume gate is still missing. | **[⚠️ Partial]** Remote Hailo falls back to CPU then rules; no distributed inference health/availability test on the deployed cluster. |
+| 3 | News integration | **[⚠️ Partial]** RSS items now retain `published_at`/`fetched_at`, are deduplicated, and can drive an opt-in structured final veto with a daily call limit; persistent historical item storage is not implemented. | **[⚠️ Partial]** Same code is available, but the inspected cluster has no configured paid provider/credentials; Hailo features do not consume news. |
 | 4 | Hard risk and kill switch | **[⚠️ Partial]** A persistent file kill switch now blocks live orders; daily anchor/loss-streak state remains process-local. | **[⚠️ Partial]** The file switch is host-local; no cluster-wide shared switch or distributed ownership is implemented. |
 | 5 | Execution and costs | **[⚠️ Partial]** Reported quote/traded-asset fees are journaled and net PnL stays blank when fees cannot be valued; spread gating is absent. | **[⚠️ Partial]** Same fee handling, but live exchange use is unvalidated and spread gating is absent. |
 | 6 | Single-Pi vs cluster operations | **[⚠️ Partial]** Local process lock, persisted live snapshot, startup balance comparison and open-order refusal are implemented; unknown holdings need manual reconciliation. | **[⚠️ Partial]** Same host-local safeguards, but no distributed lease or cross-node duplicate-order prevention. |
@@ -41,15 +41,14 @@ end-to-end test from training outputs through runtime contract validation.
 
 `src.coin_analysis.analyze_coin` calculates rules, optional general ML, and an
 optional tabular prediction. `src.entry_filters.entry_volatility_guard`
-enforces ATR availability/minimum volatility. The entry path does not currently
-apply a universal spread or minimum-volume gate before model work. The
-Mammouth integration in `src.ai_copilot_service.py` is a bounded parameter
-copilot, not the requested last-stage news veto.
+enforces ATR availability/minimum volatility. A universal spread ceiling and
+minimum-volume gate before model work remain absent. The Mammouth integration
+in `src.ai_copilot_service.py` remains a bounded parameter copilot, separate
+from the opt-in structured news veto.
 
-`src.bot_bootstrap.load_tabular_predictor` selects either remote Hailo or local
-CatBoost from configuration. It does not automatically move from Hailo to CPU;
-Hailo prediction failures suppress that candidate rather than crashing the
-whole bot. CPU model load errors are logged, and rules can remain active.
+`src.bot_bootstrap.load_tabular_predictor` wraps remote Hailo with lazy CPU
+CatBoost fallback, then emits a HOLD result that preserves the existing rules
+signal if CPU loading/prediction also fails. Invalid predictions are rejected.
 `tests/test_hailo_inference.py` covers inference/service contracts, while the
 CI Hailo export job is separate from the slim CPU test job. There is no tested
 backend-selection matrix proving Hailo available -> Hailo, Hailo unavailable ->
@@ -63,19 +62,18 @@ paid call.
 
 ### 3. News feed and veto schema
 
-`scripts/fetch_research_signal.py` supports RSS/Atom and Fear & Greed. It emits
-aggregate `timestamp_utc`, sentiment, confidence, risk, and citations. RSS
-publication dates are parsed for lookback filtering, but undated items pass the
-filter; per-item `published_at` and local `fetched_at` are not retained. Links
-are deduplicated in the aggregate citations, but scored feed items are not
-deduplicated. `src.api_models.ResearchSignalPayload` has no `event_risk` or
-`veto_buy` fields. The feed uses keyword sentiment, not a structured LLM news
-decision. News is not a final veto in `src.coin_analysis.analyze_coin`.
+`scripts/fetch_research_signal.py` supports RSS/Atom and Fear & Greed. RSS
+records now require a valid, non-future publication timestamp, retain per-item
+`published_at` and `fetched_at`, and deduplicate by link or content/time hash.
+`src.api_models.NewsVetoPayload` validates `sentiment_score`, `event_risk`,
+`veto_buy`, and `reason`. `src.news_veto.evaluate_news_veto` can run only after
+momentum and cooldown checks, is disabled by default, uses a persisted daily
+call budget, and fails closed on stale/missing data or malformed/provider
+errors. Item storage is still only in the latest aggregate signal file.
 
-**Next:** Persist each feed item with source ID/link, `published_at`,
-`fetched_at`, and content hash; reject unknown/stale timestamps for historical
-evaluation. Add a validated schema containing `sentiment_score`, `event_risk`,
-`veto_buy`, and `reason`, and call it only after local trade gates pass.
+**Next:** Persist immutable per-item news records for historical replay and
+validate the selected provider's structured-output support and pricing in
+staging before enabling the paid veto.
 
 ### 4. Hard risk and kill switch
 

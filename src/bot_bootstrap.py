@@ -84,16 +84,32 @@ def load_tabular_predictor(logger: logging.Logger, config: Any) -> Any:
     tabular_predictor: Any = None
     if config.use_tabular_model:
         if config.tabular_model_backend == 'hailo':
-            from src.predict_hailo_remote import HailoRemotePredictor
-            tabular_predictor = HailoRemotePredictor(
-                service_url=config.hailo_service_url,
-                api_token=config.hailo_api_token,
-                timeout_seconds=config.hailo_timeout_seconds,
-            )
-            logger.info(
-                "Remote Hailo inference configured at %s",
-                config.hailo_service_url,
-            )
+            from src.inference_fallback import TabularInferenceFallback
+
+            try:
+                from src.predict_hailo_remote import HailoRemotePredictor
+                hailo_predictor = HailoRemotePredictor(
+                    service_url=config.hailo_service_url,
+                    api_token=config.hailo_api_token,
+                    timeout_seconds=config.hailo_timeout_seconds,
+                )
+                logger.info(
+                    "Tabular inference selected backend=hailo at %s",
+                    config.hailo_service_url,
+                )
+            except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                hailo_predictor = None
+                logger.warning("Hailo backend unavailable; falling back to CPU: %s", exc)
+
+            def load_cpu_predictor() -> Any:
+                from src.predict_catboost import CatBoostTradingPredictor
+                return CatBoostTradingPredictor(
+                    config.tabular_model_path,
+                    research_signal_path=config.tabular_research_signal_path,
+                )
+
+            tabular_predictor = TabularInferenceFallback(
+                hailo_predictor, load_cpu_predictor, logger)
         else:
             try:
                 from src.predict_catboost import CatBoostTradingPredictor

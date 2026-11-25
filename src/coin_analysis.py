@@ -312,13 +312,15 @@ def analyze_coin(
             )
             tab_result = tabular_predictor.predict(
                 row_data, confidence_threshold=config.tabular_min_confidence)
+            model_backend = tab_result.get(
+                'backend', config.tabular_model_backend)
             tab_decision = tab_result.get('decision', 'halten')
             tab_confidence = float(tab_result.get('confidence', 0.0))
             tab_proba = tab_result.get('proba', {})
             tab_sell_proba = float(tab_proba.get('verkaufen', 0.0))
             tab_hold_proba = float(tab_proba.get('halten', 0.0))
             tab_buy_proba = float(tab_proba.get('kaufen', 0.0))
-            model_name = config.tabular_model_backend.upper()
+            model_name = str(model_backend).upper()
             logger.info(
                 f"  📊 {model_name} for {coin}: {tab_decision.upper()} "
                 f"(Confidence: {tab_confidence*100:.0f}%, Proba: {tab_proba})")
@@ -338,7 +340,7 @@ def analyze_coin(
                 tabular_sell_veto = True
                 recommendation = 'WEAK SELL'
                 score = min(score, 25)
-                signal_source = config.tabular_model_backend
+                signal_source = model_backend
                 signal_confidence = tab_sell_proba
                 logger.info(
                     f"  🛡️ {model_name} sell-filter active for {coin}: "
@@ -377,7 +379,7 @@ def analyze_coin(
                 )
 
             if should_apply:
-                signal_source = config.tabular_model_backend
+                signal_source = model_backend
                 signal_confidence = tab_confidence
                 if tab_decision == 'kaufen':
                     if recommendation in ['HOLD', 'HOLD (Up-Trend)', 'HOLD (Down-Trend)']:
@@ -394,18 +396,10 @@ def analyze_coin(
         except (IndexError, KeyError, OSError, RuntimeError, TypeError, ValueError) as e:
             if config.tabular_model_backend == 'hailo':
                 logger.error(
-                    "Hailo prediction for %s failed; suppressing this coin's entries: %s",
+                    "Tabular inference unavailable for %s; preserving the existing signal: %s",
                     coin,
                     e,
                 )
-                recommendation = 'HOLD'
-                score = 0
-                signal_source = 'hailo_unavailable'
-                signal_confidence = 0.0
-                tab_sell_proba = 0.0
-                tab_hold_proba = 0.0
-                tab_buy_proba = 0.0
-                tabular_sell_veto = False
             else:
                 logger.warning(
                     f"CatBoost prediction for {coin} failed: {e}")

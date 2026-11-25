@@ -15,6 +15,7 @@ from src.bot_bootstrap import (
     log_startup_details,
     validate_startup_config,
 )
+from src.inference_fallback import TabularInferenceFallback
 
 
 @dataclass
@@ -258,18 +259,19 @@ def test_load_tabular_predictor_hailo_remote(logger: logging.Logger, monkeypatch
         hailo_timeout_seconds=3.5,
     )
     predictor = load_tabular_predictor(logger, config)
-    assert isinstance(predictor, _Remote)
+    assert isinstance(predictor, TabularInferenceFallback)
+    assert isinstance(predictor.primary, _Remote)
     assert seen == {
         "service_url": "http://hailo:8000",
         "api_token": "tok",
         "timeout_seconds": 3.5,
     }
     assert _records(logger) == [
-        "INFO|Remote Hailo inference configured at http://hailo:8000"
+        "INFO|Tabular inference selected backend=hailo at http://hailo:8000"
     ]
 
 
-def test_load_tabular_predictor_hailo_failure_propagates(
+def test_load_tabular_predictor_hailo_initialization_falls_back_to_cpu(
     logger: logging.Logger, monkeypatch
 ) -> None:
     class _Remote:
@@ -281,8 +283,44 @@ def test_load_tabular_predictor_hailo_failure_propagates(
     monkeypatch.setitem(sys.modules, "src.predict_hailo_remote", module)
 
     config = _Config(use_tabular_model=True, tabular_model_backend="hailo")
-    with pytest.raises(RuntimeError, match="hailo down"):
-        load_tabular_predictor(logger, config)
+    predictor = load_tabular_predictor(logger, config)
+    assert isinstance(predictor, TabularInferenceFallback)
+    assert predictor.primary is None
+    assert "falling back to CPU: hailo down" in _records(logger)[0]
+
+
+def test_tabular_fallback_uses_cpu_after_hailo_failure(logger: logging.Logger) -> None:
+    class _Predictor:
+        def predict(self, *_args, **_kwargs):
+            raise RuntimeError("primary unavailable")
+
+    class _Cpu:
+        def predict(self, *_args, **_kwargs):
+            return {"decision": "kaufen", "confidence": 0.8}
+
+    fallback = TabularInferenceFallback(_Predictor(), _Cpu, logger)
+
+    result = fallback.predict(object())
+
+    assert result["decision"] == "kaufen"
+    assert result["backend"] == "cpu"
+    assert "falling back to CPU" in _records(logger)[0]
+
+
+def test_tabular_fallback_uses_rules_when_cpu_is_unavailable(logger: logging.Logger) -> None:
+    class _Predictor:
+        def predict(self, *_args, **_kwargs):
+            return {"decision": "buy", "confidence": 1.0}
+
+    fallback = TabularInferenceFallback(
+        _Predictor(), lambda: (_ for _ in ()).throw(FileNotFoundError("no CPU model")), logger)
+
+    result = fallback.predict(object())
+
+    assert result == {
+        "decision": "halten", "confidence": 0.0, "proba": {}, "backend": "rules_only",
+    }
+    assert any("continuing with rules only" in record for record in _records(logger))
 
 
 def test_load_tabular_predictor_catboost_success(logger: logging.Logger, monkeypatch) -> None:

@@ -186,6 +186,7 @@ from src.market_analysis import (
     dynamic_excluded_coins as _market_analysis_dynamic_excluded_coins,
 )
 from src.market_data import fetch_market_data, fetch_ohlcv
+from src.news_veto import evaluate_news_veto
 from src.open_trade_manager import (
     OpenTradeContext as _OpenTradeContext,
 )
@@ -1960,6 +1961,8 @@ class CryptoTradingBot:
                 in_reentry_cooldown=self._is_coin_in_reentry_cooldown,
                 execute_trade=self._execute_trade,
                 log_blocked_attempts=self._log_blocked_buy_attempt_candidates,
+                news_veto=lambda coin, candidate: evaluate_news_veto(
+                    self.config, coin, candidate),
             ),
             current_market_data,
             market_analysis,

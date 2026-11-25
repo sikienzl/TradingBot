@@ -11,6 +11,7 @@ research_signal_latest.json format consumed by train/predict.
 
 import argparse
 import email.utils
+import hashlib
 import json
 import os
 import sys
@@ -272,6 +273,8 @@ def _fetch_news_signal(
     scored: list[float] = []
     citations: list[str] = []
     recent_titles: list[str] = []
+    news_items: list[dict[str, str]] = []
+    seen_items: set[str] = set()
     positive_hits = 0
     negative_hits = 0
 
@@ -289,21 +292,36 @@ def _fetch_news_signal(
             if used >= max_items_per_feed:
                 break
             published = _parse_any_datetime(item.get("published", ""))
-            if published is not None and published < cutoff:
+            if published is None or published < cutoff or published > now_utc:
                 continue
 
             title = item.get("title", "")
+            link = item.get("link", "").strip()
+            identity = (
+                f"url:{link.casefold()}" if link else
+                f"sha256:{hashlib.sha256((title + published.isoformat()).encode()).hexdigest()}"
+            )
+            if identity in seen_items:
+                continue
+            seen_items.add(identity)
             score, pos_hits, neg_hits = _headline_sentiment(title)
             scored.append(score)
             positive_hits += pos_hits
             negative_hits += neg_hits
             used += 1
 
-            link = item.get("link", "")
             if link:
                 citations.append(link)
             if len(recent_titles) < 12:
                 recent_titles.append(title)
+            news_items.append({
+                "title": title,
+                "link": link,
+                "source_url": url,
+                "published_at": published.isoformat().replace("+00:00", "Z"),
+                "fetched_at": now_utc.isoformat().replace("+00:00", "Z"),
+                "content_sha256": hashlib.sha256(title.encode("utf-8")).hexdigest(),
+            })
 
     if not scored:
         raise ValueError(
@@ -323,6 +341,7 @@ def _fetch_news_signal(
         "risk_score": round(risk_score, 4),
         "market_regime": _to_market_regime(sentiment_score),
         "citations": citations[:25],
+        "news_items": news_items,
         "source_details": {
             "provider": "rss_news",
             "feeds": feeds,
@@ -347,6 +366,7 @@ def _combine_provider_signals(
     weighted_risk = 0.0
     weight_total = 0.0
     citations: list[str] = []
+    news_items: list[dict[str, str]] = []
     details: dict[str, Any] = {
         "providers": {},
         "provider_weights": provider_weights,
@@ -380,6 +400,9 @@ def _combine_provider_signals(
         for citation in signal.get("citations", []):
             if citation and citation not in citations:
                 citations.append(citation)
+        for item in signal.get("news_items", []):
+            if isinstance(item, dict):
+                news_items.append(item)
 
     if weight_total <= 0:
         raise ValueError("Provider weights collapsed to zero")
@@ -405,6 +428,7 @@ def _combine_provider_signals(
         "risk_score": normalized_features["research_risk_score"],
         "market_regime": market_regime,
         "citations": citations[:50],
+        "news_items": news_items,
         "source_details": details,
         "normalized_features": normalized_features,
         "integration": {
