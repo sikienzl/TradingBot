@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="assets/logo-transparent.png" alt="Crypto Trading Bot logo" width="353">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png" width="204">
+    <source media="(prefers-color-scheme: light)" srcset="assets/logo-transparent.png" width="295">
+    <img alt="Crypto Trading Bot logo" src="assets/logo-transparent.png" width="295">
+  </picture>
 </p>
 
 <h1 align="center">Crypto Trading Bot</h1>
