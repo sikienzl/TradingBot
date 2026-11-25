@@ -7,7 +7,9 @@ against a stub exchange without building a bot.
 """
 
 import logging
+import math
 import time
+from typing import Any, cast
 
 import ccxt
 import pandas as pd
@@ -121,7 +123,25 @@ def fetch_market_data(
                 market_data[coin] = {
                     'price': ticker['last'],
                     # Volume in base currency
-                    'volume': ticker['quoteVolume']
+                    'volume': ticker['quoteVolume'],
+                    'bid': ticker.get('bid'),
+                    'ask': ticker.get('ask'),
+                    'spread_bps': _spread_bps(
+                        ticker.get('bid'), ticker.get('ask')),
                 }
 
     return market_data
+
+
+def _spread_bps(bid: object, ask: object) -> float | None:
+    try:
+        bid_value = float(cast(Any, bid))
+        ask_value = float(cast(Any, ask))
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(bid_value) and math.isfinite(ask_value)):
+        return None
+    if bid_value <= 0 or ask_value < bid_value or ask_value + bid_value <= 0:
+        return None
+    midpoint = (ask_value + bid_value) / 2.0
+    return (ask_value - bid_value) / midpoint * 10_000.0

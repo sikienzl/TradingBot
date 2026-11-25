@@ -52,6 +52,7 @@ LAYERS: dict[int, tuple[str, ...]] = {
         "bot_runtime",
         "inference_fallback",
         "news_veto",
+        "model_release",
         "exit_policy",
         "export_pnl_metrics",
         "exporter_paths",

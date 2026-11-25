@@ -143,6 +143,54 @@ python3 -m src.train_catboost_model
 ```
 If the training CSV contains all six `research_*` feature columns, they are used as supplied. The latest research JSON is for inference and is deliberately not copied across historical rows, which would leak future information into training.
 
+#### Paired CPU and Hailo release
+
+For a candidate that must run on both the Pi CPU and Hailo-8, train the CatBoost
+fallback with the fixed Hailo feature contract using the same immutable input
+CSV as the Hailo trainer:
+
+```sh
+python3 -m src.train_catboost_model \
+  --data-path training_data.csv \
+  --output-dir model/cpu-candidate \
+  --feature-contract hailo
+python3 -m src.train_hailo_model \
+  --data-path training_data.csv \
+  --output-dir model/hailo-candidate \
+  --model-id trading-candidate-2026-01
+```
+
+Compile the Hailo ONNX with the compatible x86-64 DFC environment and a
+reviewed calibration set, as described in the [Hailo runbook](../SERVER_README.md#hailo-8-remote-inference-optional).
+Then validate and atomically promote both artifacts together:
+
+```sh
+python3 -m scripts.manage_model_release promote \
+  --release-root /opt/trading-models \
+  --release-id trading-2026-01 \
+  --cpu-model model/cpu-candidate/catboost_model.cbm \
+  --cpu-metadata model/cpu-candidate/metadata.json \
+  --hailo-hef model/hailo-candidate/trading_model.hef \
+  --hailo-metadata model/hailo-candidate/metadata.json
+```
+
+The promoter requires matching feature and label contracts and a matching
+training-data SHA-256, copies artifacts into an immutable release directory,
+records checksums, and atomically switches `/opt/trading-models/active`.
+Configure the CPU predictor to use
+`/opt/trading-models/active/cpu`; configure the Hailo service's HEF and
+metadata paths under `/opt/trading-models/active/hailo`. Keep the prior release
+directory in place. Roll back by reactivating a checksummed earlier release:
+
+```sh
+python3 -m scripts.manage_model_release rollback \
+  --release-root /opt/trading-models --release-id trading-previous
+```
+
+This verifies the package contract and checksums, not profitability or hardware
+compatibility. Run the selected HEF on the target Hailo device and complete the
+paper/shadow evaluation before operator promotion to any live workload.
+
 ### 3. Dry-run / live trading
 ```sh
 python3 -m src.trading_bot
@@ -205,7 +253,16 @@ failures stop live execution.
 Before each live order, the bot queries open orders for that market again and
 refuses to submit while any order is open or the query fails. It does not
 blindly retry a market-order timeout because the first request may have been
-accepted; reconcile the order and account state before restarting.
+accepted; reconcile the order and account state before restarting. An
+ambiguous submit timeout or unconfirmable fill also creates the persistent
+kill-switch marker, blocking the next iteration and subsequent restarts.
+
+For cluster mode only, enable the optional PostgreSQL advisory lease with
+`TRADING_CLUSTER_EXECUTION_LEASE_ENABLED=true`,
+`TRADING_CLUSTER_EXECUTION_LEASE_DATABASE_URL`, and a stable
+`TRADING_EXECUTION_ACCOUNT_ID` shared by all candidate execution nodes. The Pi
+profile does not need this database; the lease is required before more than one
+cluster node can own the same Kraken account.
 
 Create the file named by `TRADING_KILL_SWITCH_FILE` (default
 `.trading_kill_switch`) to block all live buys and sells. Remove it only after
@@ -222,8 +279,12 @@ decisions.
 
 New entries exclude `EURC` by default through `EXCLUDED_COINS`; overriding
 that list is configurable and does not liquidate existing holdings.
-`MIN_ENTRY_ATR_PCT=0.012` requires ATR(14)/price to be at least 1.2% for a
-new-entry candidate. This is a volatility proxy for screening, not an expected
+`MAX_ENTRY_SPREAD_BPS=100` blocks new entries when bid/ask is missing or the
+spread exceeds 1%. It is checked before detailed OHLCV/model analysis and again
+before the final news/order gate. Set it to `0` only when intentionally
+disabling the spread guard. `MIN_ENTRY_ATR_PCT=0.012` requires ATR(14)/price to
+be at least 1.2% for a new-entry candidate. This is a volatility proxy for
+screening, not an expected
 or guaranteed return; set it to `0` to disable the guard. If ATR data is
 unavailable, the candidate is withheld.
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import ccxt
@@ -32,6 +32,7 @@ class _Config:
     min_trade_amount: float = 10.0
     allow_partial_trades: bool = True
     reentry_cooldown_seconds: int = 3600
+    max_entry_spread_bps: float = 0.0
 
 
 class _ExchangeStub:
@@ -266,8 +267,9 @@ def test_real_buy_includes_reported_quote_fee_in_entry_basis():
     assert recorder.journal_rows[0]["execution_cost_mode"] == "live_exchange"
 
 
-def test_real_buy_without_confirmable_fill_leaves_the_portfolio_untouched():
+def test_real_buy_without_confirmable_fill_latches_kill_switch(tmp_path):
     config = _Config()
+    config.kill_switch_file = str(tmp_path / "STOP")
     portfolio = _portfolio()
     performance = _performance()
     recorder = _Recorder(fill_error=ValueError("remains non-terminal"))
@@ -282,6 +284,23 @@ def test_real_buy_without_confirmable_fill_leaves_the_portfolio_untouched():
     assert portfolio.open_trades == {}
     assert performance["buys"] == 0
     assert ("balance",) not in recorder.events
+    assert "uncertain_order_outcome" in (tmp_path / "STOP").read_text()
+
+
+def test_real_buy_submission_timeout_latches_kill_switch(tmp_path):
+    config = _Config()
+    config.kill_switch_file = str(tmp_path / "STOP")
+    exchange = _ExchangeStub(order_error=ccxt.NetworkError("submission timeout"))
+    recorder = _Recorder(fill=(0.5, 100.0, 50.0))
+
+    executed = execute_real_trade(
+        exchange, config, _portfolio(), _performance(), recorder.real_hooks(),
+        "BTC", "buy", 100.0, 50.0,
+    )
+
+    assert executed is False
+    assert "uncertain_order_outcome" in (tmp_path / "STOP").read_text()
+    assert recorder.events == []
 
 
 def test_real_sell_updates_the_remaining_position_on_a_partial_fill():
@@ -408,6 +427,25 @@ def test_real_trade_refuses_to_order_when_exchange_has_open_orders():
     assert recorder.events == []
 
 
+def test_real_trade_checks_execution_lease_before_order():
+    exchange = _ExchangeStub()
+    recorder = _Recorder(fill=(0.5, 100.0, 50.0))
+    hooks = replace(
+        recorder.real_hooks(),
+        assert_execution_owner=lambda: (_ for _ in ()).throw(
+            RuntimeError("cluster lease lost")),
+    )
+
+    with pytest.raises(RuntimeError, match="cluster lease lost"):
+        execute_real_trade(
+            exchange, _Config(), _portfolio(), _performance(), hooks,
+            "BTC", "buy", 100.0, 50.0,
+        )
+
+    assert exchange.calls == [("market", "BTC/EUR"), ("open_orders", "BTC/EUR")]
+    assert recorder.events == []
+
+
 def test_trade_below_the_exchange_minimum_is_not_sent():
     recorder = _Recorder(fill=(0.5, 100.0, 50.0))
     exchange = _ExchangeStub(min_amount=1.0)
@@ -432,13 +470,15 @@ def test_trade_below_the_exchange_minimum_is_not_sent():
         ccxt.BaseError("exchange problem"),
     ],
 )
-def test_exchange_errors_are_reported_as_a_failed_trade(error, caplog):
+def test_exchange_errors_are_reported_as_a_failed_trade(error, caplog, tmp_path):
     exchange = _ExchangeStub(order_error=error)
     recorder = _Recorder(fill=(0.5, 100.0, 50.0))
+    config = _Config()
+    config.kill_switch_file = str(tmp_path / "STOP")
 
     with caplog.at_level(logging.ERROR, logger="src.execution_service"):
         executed = execute_real_trade(
-            exchange, _Config(), _portfolio(), _performance(),
+            exchange, config, _portfolio(), _performance(),
             recorder.real_hooks(), "BTC", "buy", 100.0, 50.0,
         )
 
@@ -653,6 +693,36 @@ def test_news_veto_blocks_candidate_before_order():
 
     assert recorder.executed == []
     assert recorder.blocked[0]["reason"] == "news_veto:exchange announcement risk"
+
+
+def test_excessive_spread_blocks_before_news_and_order():
+    recorder = _EntryRecorder()
+    news_calls = []
+    base_hooks = recorder.hooks()
+    hooks = EntryHooks(
+        get_atr=base_hooks.get_atr,
+        compute_position_size=base_hooks.compute_position_size,
+        passes_momentum_filter=base_hooks.passes_momentum_filter,
+        resolve_cooldown_seconds=base_hooks.resolve_cooldown_seconds,
+        in_reentry_cooldown=base_hooks.in_reentry_cooldown,
+        execute_trade=base_hooks.execute_trade,
+        log_blocked_attempts=base_hooks.log_blocked_attempts,
+        news_veto=lambda coin, candidate: news_calls.append(coin) or (False, "clear"),
+    )
+    config = _Config(max_entry_spread_bps=75.0)
+
+    open_new_positions(
+        config, _portfolio(), hooks,
+        {"BTC": {"price": 100.0}},
+        {"BTC": {"score": 80, "recommendation": "BUY", "spread_bps": 100.0}},
+        ["BTC"], 1000.0,
+        effective_trade_amount=100.0, effective_max_open_trades=3,
+        can_open_positions=True, block_reason="",
+    )
+
+    assert news_calls == []
+    assert recorder.executed == []
+    assert recorder.blocked[0]["reason"] == "spread_unavailable_or_above_limit"
 
 
 def test_position_below_the_minimum_trade_amount_is_skipped():

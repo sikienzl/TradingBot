@@ -129,7 +129,7 @@ class _TickerExchange:
     def fetch_tickers(self, symbols):
         self.batches.append(list(symbols))
         return {
-            symbol: {"last": 10.0, "quoteVolume": 1000.0}
+            symbol: {"last": 10.0, "bid": 9.99, "ask": 10.01, "quoteVolume": 1000.0}
             for symbol in symbols
         }
 
@@ -149,8 +149,10 @@ def test_fetch_market_data_keys_by_base_coin() -> None:
     data = fetch_market_data(
         exchange, ["BTC/EUR", "ETH/EUR"], batch_size=10)
     assert data == {
-        "BTC": {"price": 10.0, "volume": 1000.0},
-        "ETH": {"price": 10.0, "volume": 1000.0},
+        "BTC": {"price": 10.0, "volume": 1000.0, "bid": 9.99, "ask": 10.01,
+            "spread_bps": pytest.approx(20.0)},
+        "ETH": {"price": 10.0, "volume": 1000.0, "bid": 9.99, "ask": 10.01,
+            "spread_bps": pytest.approx(20.0)},
     }
     assert exchange.batches == [["BTC/EUR", "ETH/EUR"]]
 
@@ -188,12 +190,17 @@ def test_fetch_market_data_retries_failed_batch(
             self.calls += 1
             if self.calls == 1:
                 raise ccxt.ExchangeError("rate limited")
-            return {"BTC/EUR": {"last": 1.0, "quoteVolume": 2.0}}
+            return {"BTC/EUR": {
+                "last": 1.0, "bid": 0.99, "ask": 1.01, "quoteVolume": 2.0,
+            }}
 
     exchange = Flaky()
     data = fetch_market_data(
         exchange, ["BTC/EUR"], retries=2, delay_seconds=3.0)
-    assert data == {"BTC": {"price": 1.0, "volume": 2.0}}
+    assert data == {"BTC": {
+        "price": 1.0, "volume": 2.0, "bid": 0.99, "ask": 1.01,
+        "spread_bps": pytest.approx(200.0),
+    }}
     assert exchange.calls == 2
     assert _no_sleep.slept == [3.0]
 

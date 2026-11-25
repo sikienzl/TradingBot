@@ -1719,8 +1719,8 @@ def test_dynamic_lossmaker_exclusions_skip_new_entries_but_keep_open_positions(m
     monkeypatch.setattr(bot, "_analyze_coin", _fake_analyze_coin)
 
     market_data = {
-        "SUI": {"price": 1.0, "volume": 1000.0},
-        "ETH": {"price": 2.0, "volume": 1200.0},
+        "SUI": {"price": 1.0, "volume": 1000.0, "spread_bps": 0.0},
+        "ETH": {"price": 2.0, "volume": 1200.0, "spread_bps": 0.0},
     }
 
     analysis = bot._analyze_markets(market_data)

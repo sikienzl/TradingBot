@@ -222,6 +222,7 @@ def train_and_export(
 
     metadata = {
         "model_id": model_id,
+        "feature_contract": "hailo",
         "features": list(HAILO_FEATURES),
         "means": means.tolist(),
         "scales": scales.tolist(),
@@ -235,6 +236,7 @@ def train_and_export(
         "margin_threshold": 0.03,
         "data_provenance": {
             "training_data_sha256": file_sha256(data_path),
+            "label_map": HAILO_LABEL_MAP,
             "label_horizon": LABEL_HORIZON,
             "train_fraction": TRAIN_FRACTION,
             "train_rows": len(y_train),

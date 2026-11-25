@@ -50,7 +50,7 @@ flowchart LR
 
 | Component | Responsibility | Important boundary |
 |---|---|---|
-| `.74` bot/paper host | Runs isolated paper/shadow workloads and operational services. The observed `trading-hailo-shadow-dryrun` container uses `DRY_RUN=true` and simulated data according to the runbook. | Exchange credentials and order execution stay on the bot side; the inference host does not need Kraken trading credentials. One execution owner must be enforced before any multi-bot/live mode is enabled. |
+| `.74` bot/paper host | Runs isolated paper/shadow workloads and operational services. The observed `trading-hailo-shadow-dryrun` container uses `DRY_RUN=true` and simulated data according to the runbook. | Exchange credentials and order execution stay on the bot side; the inference host does not need Kraken trading credentials. Enable the shared PostgreSQL execution lease before allowing another node to own the same account. |
 | `.75` Hailo host | Serves local Hailo-8 inference using `trading-hailo-dryrun.service`, bound to `127.0.0.1:18001`. | Hailo is an optional accelerator backend. The running service and shadow workload are not evidence of live-trading readiness. |
 | Future x86 worker | Produces candidate models, runs chronological/Walk-Forward evaluation and AutoResearch, and compiles Hailo-compatible ONNX to `.hef` with DFC. | No x86 worker or automated promotion path was observed. It must not place orders or become a runtime dependency for a Pi. |
 
@@ -88,21 +88,40 @@ HA, or a trading-bot deployment. Docker and K3s containerd are separate runtimes
 ## Model artifacts and synchronization
 
 - `.75` needs a compatible compiled `.hef` and its matching `metadata.json`.
-  The current runbook stores these under
-  `~/trading-hailo-dryrun/model/`; the service reads paths from a private
-  `service.env`.
-- The `.74` CPU path needs a CatBoost `.cbm` and matching metadata, or a
-  supported ONNX model, when CPU inference is selected. Rules-only operation
-  must remain possible without either artifact.
-- The repository's Hailo trainer exports ONNX and metadata; DFC compilation to
-  `.hef` is a separate step. CatBoost training produces a `.cbm` separately.
-  There is no automated paired `.hef`/`.cbm` promotion, synchronization, or
-  rollback workflow today.
-- Until that workflow exists, transfer artifacts over a trusted channel,
-  verify checksums and model/feature contract metadata, keep each model and its
-  metadata paired, and retain the previous known-good files for manual rollback.
-  Do not overwrite a running model in place without an explicit maintenance
-  and recovery procedure.
+  The current shadow runbook stores these under
+  `~/trading-hailo-dryrun/model/`; paired releases can instead use
+  `/opt/trading-models/active/hailo/`.
+- The `.74` CPU path uses CatBoost and its matching metadata under
+  `/opt/trading-models/active/cpu/` when following a paired release. Rules-only
+  operation must remain possible without either artifact.
+- The Hailo trainer exports ONNX and metadata; compatible x86-64 DFC compilation
+  to `.hef` remains a separate operator step. Train CatBoost with
+  `--feature-contract hailo` from the exact same input data to produce the CPU
+  fallback.
+- `scripts.manage_model_release` verifies paired feature/label contracts and
+  training-data hashes, publishes immutable versioned directories with
+  checksums, and atomically switches the `active` symlink. Rollback validates
+  the old checksums before activation. Copy or synchronize the completed
+  immutable release to each node over a trusted channel; the promoter itself
+  does not transfer files across the network.
+- Keep the previous known-good release directory. Target-device HEF loading,
+  simulation/shadow evaluation, and explicit operator approval are still
+  required before live use.
+
+## Cluster execution ownership
+
+The bot always holds a process-local non-blocking lock. That lock does not
+coordinate the two CM5 hosts. Before enabling more than one candidate execution
+node for a Kraken account, configure all candidates with
+`TRADING_CLUSTER_EXECUTION_LEASE_ENABLED=true`, the same
+`TRADING_CLUSTER_EXECUTION_LEASE_DATABASE_URL`, and a stable
+`TRADING_EXECUTION_ACCOUNT_ID`. They then contend for a PostgreSQL session
+advisory lock scoped to that account; the holder verifies the session lock
+before each live order. The lease is optional and is not needed by the
+single-Pi release. If PostgreSQL is unavailable or ownership cannot be
+verified, cluster live execution must stop rather than fall back to local-only
+locks. Validate this behavior against the actual shared database before
+enabling a second execution process.
 
 ## Single-Pi boundary
 

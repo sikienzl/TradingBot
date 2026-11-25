@@ -15,7 +15,7 @@ import math
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import ccxt
 
@@ -178,6 +178,7 @@ class RealTradeHooks:
     register_sell_timestamp: Callable[[str], None]
     update_portfolio_balance: Callable[[], None]
     confirm_fill_with_order: Callable[..., tuple[float, float, float, dict[str, Any]]] | None = None
+    assert_execution_owner: Callable[[], None] | None = None
 
 
 def _confirm_fill(
@@ -226,6 +227,42 @@ def _fee_amount_in_quote(
         else:
             return None, json.dumps(fees, sort_keys=True, default=str)
     return total, json.dumps(fees, sort_keys=True, default=str)
+
+
+def _activate_kill_switch(config: Any, reason: str, logger: logging.Logger) -> None:
+    path = os.fspath(getattr(config, 'kill_switch_file', '.trading_kill_switch'))
+    try:
+        descriptor = os.open(
+            path,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, 'O_NOFOLLOW', 0),
+            0o600,
+        )
+    except FileExistsError:
+        return
+    except OSError as exc:
+        logger.critical(
+            "Cannot persist kill switch after uncertain order outcome at %s: %s",
+            path,
+            exc,
+        )
+        raise RuntimeError(
+            "Cannot persist live execution uncertainty; stopping the bot"
+        ) from exc
+    try:
+        os.write(descriptor, f"uncertain_order_outcome: {reason}\n".encode())
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    directory_descriptor = os.open(
+        os.path.dirname(os.path.abspath(path)) or ".", os.O_RDONLY)
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
+    logger.critical(
+        "Persistent kill switch activated after uncertain order outcome at %s",
+        path,
+    )
 
 
 def execute_real_trade(
@@ -285,6 +322,8 @@ def execute_real_trade(
                 symbol,
             )
             return False
+        if hooks.assert_execution_owner is not None:
+            hooks.assert_execution_owner()
 
         if action == "buy":
             bought = _execute_real_buy(
@@ -349,13 +388,18 @@ def _execute_real_buy(
     Returns ``False`` when the fill cannot be confirmed, which makes the caller
     stop before touching the balance.
     """
-    order = exchange.create_market_buy_order(
-        symbol, amount_in_base_currency / price)
+    try:
+        order = exchange.create_market_buy_order(
+            symbol, amount_in_base_currency / price)
+    except ccxt.NetworkError as exc:
+        _activate_kill_switch(config, f"BUY {coin}: {exc}", logger)
+        raise
     try:
         filled, average, cost, confirmed_order = _confirm_fill(
             hooks, order, symbol, amount_in_base_currency / price, price
         )
-    except (TypeError, ValueError) as exc:
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        _activate_kill_switch(config, f"BUY {coin}: {exc}", logger)
         logger.error("Unable to confirm BUY fill for %s: %s", coin, exc)
         return False
     logger.info(
@@ -420,13 +464,18 @@ def _execute_real_sell(
         logger.warning(
             f"Insufficient {coin} ({portfolio.holdings.get(coin, 0):.4f}) in portfolio to sell {amount_in_base_currency / price:.4f} {coin}.")
         return False
-    order = exchange.create_market_sell_order(
-        symbol, amount_in_base_currency / price)
+    try:
+        order = exchange.create_market_sell_order(
+            symbol, amount_in_base_currency / price)
+    except ccxt.NetworkError as exc:
+        _activate_kill_switch(config, f"SELL {coin}: {exc}", logger)
+        raise
     try:
         sold_amount_coin, average, cost, confirmed_order = _confirm_fill(
             hooks, order, symbol, amount_in_base_currency / price, price
         )
-    except (TypeError, ValueError) as exc:
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        _activate_kill_switch(config, f"SELL {coin}: {exc}", logger)
         logger.error("Unable to confirm SELL fill for %s: %s", coin, exc)
         return False
     logger.info(
@@ -682,6 +731,14 @@ def _attempt_candidate_buy(
             'reason': 'reentry_cooldown_active',
             'cooldown_text': cooldown_text,
         }
+    max_spread_bps = float(getattr(config, 'max_entry_spread_bps', 0.0))
+    if max_spread_bps > 0:
+        try:
+            spread_bps = float(cast(Any, coin_data.get('spread_bps')))
+        except (TypeError, ValueError):
+            spread_bps = float('nan')
+        if not math.isfinite(spread_bps) or spread_bps > max_spread_bps:
+            return {**attempt_meta, 'reason': 'spread_unavailable_or_above_limit'}
     if hooks.news_veto is not None:
         vetoed, veto_reason = hooks.news_veto(coin, coin_data)
         if vetoed:

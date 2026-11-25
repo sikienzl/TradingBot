@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import warnings
@@ -7,6 +8,7 @@ import pandas as pd
 from catboost import CatBoostClassifier
 from sklearn.metrics import accuracy_score, classification_report, f1_score
 
+from src.hailo_contract import HAILO_FEATURES, HAILO_LABEL_MAP
 from src.research_signal import (
     RESEARCH_FEATURE_COLUMNS,
 )
@@ -282,10 +284,19 @@ def run_walk_forward_evaluation(
     return pd.DataFrame(rows)
 
 
-def prepare_xy(df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray, list[str]]:
+def prepare_xy(
+    df: pd.DataFrame,
+    feature_columns: list[str] | None = None,
+) -> tuple[pd.DataFrame, np.ndarray, list[str]]:
     all_features = BASE_FEATURE_COLUMNS + [
         "ret_1", "ret_3", "ret_6", "vol_6"] + RESEARCH_FEATURE_COLUMNS
-    available_features = [c for c in all_features if c in df.columns]
+    available_features = (
+        list(feature_columns) if feature_columns is not None
+        else [c for c in all_features if c in df.columns]
+    )
+    for column in available_features:
+        if column not in df.columns:
+            df[column] = 0.0
     x = df[available_features].copy()
     y = df["label"].map(LABEL_MAP).values
     x = x.replace([np.inf, -np.inf], np.nan).fillna(0.0)
@@ -297,7 +308,15 @@ def train_model(
     output_dir: str = "./model/catboost_trading_model",
     walk_forward_splits: int = 3,
     research_signal_path: str = "",
+    feature_contract: str = "general",
 ) -> None:
+    if feature_contract not in {"general", "hailo"}:
+        raise ValueError("feature_contract must be 'general' or 'hailo'")
+    digest = hashlib.sha256()
+    with open(data_path, "rb") as training_file:
+        for block in iter(lambda: training_file.read(1 << 20), b""):
+            digest.update(block)
+    training_data_sha256 = digest.hexdigest()
     df = load_data(data_path)
     df = add_features(df)
     present_research_features = set(RESEARCH_FEATURE_COLUMNS).intersection(
@@ -336,8 +355,9 @@ def train_model(
     train_df, val_df = train_val_split_time(
         df, train_ratio=0.8, horizon=LABEL_HORIZON
     )
-    x_train, y_train, features = prepare_xy(train_df)
-    x_val, y_val, _ = prepare_xy(val_df)
+    feature_columns = list(HAILO_FEATURES) if feature_contract == "hailo" else None
+    x_train, y_train, features = prepare_xy(train_df, feature_columns)
+    x_val, y_val, _ = prepare_xy(val_df, feature_columns)
     class_weights = compute_class_weights(y_train)
 
     model = CatBoostClassifier(
@@ -369,9 +389,24 @@ def train_model(
         threshold_step=0.01,
     )
 
+    y_pred = model.predict(x_val).reshape(-1).astype(int)
+    validation_metrics = {
+        "rows": len(y_val),
+        "accuracy": float(accuracy_score(y_val, y_pred)),
+        "macro_f1": float(f1_score(y_val, y_pred, average="macro", zero_division=0)),
+        "threshold_macro_f1": float(threshold_stats["macro_f1"]),
+        "threshold_coverage": float(threshold_stats["coverage"]),
+    }
+
     metadata = {
         "features": features,
-        "label_map": LABEL_MAP,
+        "label_map": HAILO_LABEL_MAP if feature_contract == "hailo" else LABEL_MAP,
+        "feature_contract": feature_contract,
+        "training_data_sha256": training_data_sha256,
+        "label_horizon": LABEL_HORIZON,
+        "train_rows": len(y_train),
+        "validation_rows": len(y_val),
+        "validation": validation_metrics,
         "class_weights": class_weights,
         "recommended_confidence_threshold": recommended_conf_threshold,
         "recommended_confidence_threshold_stats": threshold_stats,
@@ -380,7 +415,6 @@ def train_model(
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, ensure_ascii=True, indent=2)
 
-    y_pred = model.predict(x_val).reshape(-1).astype(int)
     y_pred_labels = [INV_LABEL_MAP[v] for v in y_pred]
     y_true_labels = [INV_LABEL_MAP[v] for v in y_val]
 
@@ -427,6 +461,10 @@ def main() -> None:
     parser.add_argument("--data-path", default="training_data.csv")
     parser.add_argument(
         "--output-dir", default="./model/catboost_trading_model")
+    parser.add_argument(
+        "--feature-contract", choices=("general", "hailo"), default="general",
+        help="Use the fixed Hailo feature/label contract for a paired CPU/Hailo release.",
+    )
     parser.add_argument("--walk-forward-splits", type=int, default=3)
     parser.add_argument(
         "--research-signal-path",
@@ -443,6 +481,7 @@ def main() -> None:
         output_dir=args.output_dir,
         walk_forward_splits=args.walk_forward_splits,
         research_signal_path=args.research_signal_path,
+        feature_contract=args.feature_contract,
     )
 
 

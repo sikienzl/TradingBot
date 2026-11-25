@@ -527,3 +527,32 @@ def test_analyze_coin_catboost_failure_keeps_rule_signal(caplog) -> None:
     assert (result["recommendation"], result["score"]) == ("BUY", 80)
     assert result["signal_source"] == "rules"
     assert "CatBoost prediction for BTC failed: catboost gone" in caplog.text
+
+
+def test_atr_gate_skips_optional_models_before_inference(monkeypatch, caplog):
+    calls = []
+
+    class Predictor:
+        def predict(self, *_args, **_kwargs):
+            calls.append("tabular")
+            return {"decision": "kaufen", "confidence": 1.0, "proba": {}}
+
+    monkeypatch.setattr("src.coin_analysis.calculate_atr", lambda *_args, **_kwargs: 0.1)
+    config = _Config()
+    config.min_entry_atr_pct = 0.01
+    with caplog.at_level("INFO", logger="src.coin_analysis"):
+        result = analyze_coin(
+            config,
+            _fetcher(_ohlcv(60)),
+            object(),
+            Predictor(),
+            "BTC",
+            100.0,
+            rule_recommender=_rules("BUY", 80),
+        )
+
+    assert result is not None
+    assert result["recommendation"] == "BUY"
+    assert result["signal_source"] == "rules"
+    assert calls == []
+    assert "ATR gate not met" in caplog.text

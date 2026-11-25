@@ -18,7 +18,7 @@ fi
 
 _info "Installing monitoring dependencies..."
 apt-get update -q
-apt-get install -y -q prometheus prometheus-node-exporter apt-transport-https software-properties-common wget gpg
+apt-get install -y -q prometheus prometheus-alertmanager prometheus-node-exporter apt-transport-https software-properties-common wget gpg
 
 # Add Grafana APT repo if not already present
 if [[ ! -f /etc/apt/sources.list.d/grafana.list ]]; then
@@ -38,7 +38,7 @@ _ok "Packages installed."
 mkdir -p /opt/trading_2/results/scorecards/textfile
 chown -R trading:trading /opt/trading_2/results
 
-for unit in pnl-exporter.service scorecard-status.service scorecard-status.timer node-exporter-textfile.service; do
+for unit in pnl-exporter.service scorecard-status.service scorecard-status.timer node-exporter-textfile.service trading-operational-health.service trading-operational-health.timer trading-alert-relay.service; do
   src="${INSTALL_DIR}/deploy/${unit}"
   dst="${SYSTEMD_DIR}/${unit}"
   [[ -f "$src" ]] || _die "Missing unit file: $src"
@@ -46,15 +46,31 @@ for unit in pnl-exporter.service scorecard-status.service scorecard-status.timer
   _ok "Installed ${unit}"
 done
 
+[[ -f /etc/trading-alert-relay.env ]] || _die \
+  "Create /etc/trading-alert-relay.env from deploy/trading-alert-relay.env.example with a private HTTPS webhook URL (root:trading, mode 0640) before enabling alert delivery."
+relay_owner="$(stat -c '%U:%G' /etc/trading-alert-relay.env)"
+relay_mode="$(stat -c '%a' /etc/trading-alert-relay.env)"
+[[ "$relay_owner" == "root:trading" ]] || _die \
+  "/etc/trading-alert-relay.env must be owned by root:trading."
+[[ "$relay_mode" == "640" ]] || _die \
+  "/etc/trading-alert-relay.env must have mode 0640."
+grep -Eq '^ALERT_WEBHOOK_URL=https://' /etc/trading-alert-relay.env || _die \
+  "ALERT_WEBHOOK_URL must use HTTPS."
+
 mkdir -p "$PROMETHEUS_DIR" "$PROMETHEUS_RULES_DIR"
 cp "${INSTALL_DIR}/deploy/prometheus.yml" "${PROMETHEUS_DIR}/prometheus.yml"
 cp "${INSTALL_DIR}/deploy/trading-alerts.yml" "${PROMETHEUS_RULES_DIR}/trading-alerts.yml"
+install -d -o prometheus -g prometheus /etc/alertmanager
+install -o root -g prometheus -m 0640 "${INSTALL_DIR}/deploy/alertmanager.yml" /etc/alertmanager/alertmanager.yml
 _ok "Prometheus config installed."
 
 systemctl daemon-reload
 systemctl enable --now pnl-exporter.service
 systemctl enable --now node-exporter-textfile.service
 systemctl enable --now scorecard-status.timer
+systemctl enable --now trading-operational-health.timer
+systemctl start trading-operational-health.service
+systemctl enable --now trading-alert-relay.service prometheus-alertmanager.service
 systemctl restart prometheus
 
 # ── Grafana provisioning ───────────────────────────────────────────────────────
