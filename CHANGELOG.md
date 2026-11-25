@@ -339,6 +339,14 @@ a version heading is assigned when a release is prepared.
 
 ### Fixed
 
+- `tests/test_public_paper_dashboard.py` failed whenever the suite ran within two
+  hours of UTC midnight. Its fixture stamped the two journal rows at
+  `now - 2h` / `now - 1h`, but `load_dashboard_data()` buckets rows with
+  `stamp.date() == datetime.now(UTC).date()`, so shortly after midnight the
+  "two hours ago" row belongs to the previous UTC day and `today_buys` came back
+  as 0. The fixture now derives both timestamps from the elapsed part of the
+  current UTC day, so they stay ordered, in the past and inside today's bucket at
+  any hour.
 - `read_ai_shadow_suggestions()` crashed on every real co-pilot log line. The bot
   writes `asctime` timestamps in local time with no offset, and the reader
   subtracted them from `datetime.now(UTC)`, so the `TypeError` escaped the narrow
