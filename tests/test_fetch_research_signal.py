@@ -1,10 +1,12 @@
 """Tests for scripts/fetch_research_signal.py"""
 
 # Allow importing the script as a module without running main()
+import email.utils
 import importlib.util
 import json
 import os
 import unittest
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 SCRIPT_PATH = os.path.join(os.path.dirname(
@@ -114,6 +116,37 @@ class TestFetchFng(unittest.TestCase):
         with patch("urllib.request.urlopen", return_value=mock_response):
             result = self.mod._fetch_fng()
         self.assertEqual(result["value"], "72")
+
+
+class TestFetchNews(unittest.TestCase):
+    def setUp(self):
+        self.mod = _load_module()
+
+    def test_news_items_are_deduplicated_and_keep_publication_and_fetch_times(self):
+        published = email.utils.format_datetime(datetime.now(UTC) - timedelta(minutes=3))
+        xml = (
+            "<rss><channel>"
+            f"<item><title>ETF approved</title><link>https://news.test/a</link><pubDate>{published}</pubDate></item>"
+            "<item><title>Undated bullish headline</title><link>https://news.test/undated</link></item>"
+            "</channel></rss>"
+        ).encode()
+
+        def response_for(_request, timeout):
+            response = MagicMock()
+            response.read.return_value = xml
+            response.__enter__ = lambda _self: response
+            response.__exit__ = MagicMock(return_value=False)
+            return response
+
+        with patch("urllib.request.urlopen", side_effect=response_for):
+            result = self.mod._fetch_news_signal(["https://feed.test/one", "https://feed.test/two"], 24, 10)
+
+        self.assertEqual(len(result["news_items"]), 1)
+        item = result["news_items"][0]
+        self.assertEqual(item["link"], "https://news.test/a")
+        self.assertIn("published_at", item)
+        self.assertIn("fetched_at", item)
+        self.assertIn("content_sha256", item)
 
 
 if __name__ == "__main__":

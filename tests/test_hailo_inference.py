@@ -219,7 +219,7 @@ def test_training_preparation_returns_fixed_feature_dimensions(tmp_path):
     assert len(class_weights) == len(HAILO_LABEL_MAP)
 
 
-def test_hailo_failure_suppresses_bot_entries(monkeypatch):
+def test_hailo_failure_preserves_rules_only_entries(monkeypatch):
     monkeypatch.setenv("SIMULATE_DATA", "true")
     monkeypatch.setenv("DRY_RUN", "true")
     monkeypatch.setenv("USE_TABULAR_MODEL", "false")
@@ -249,9 +249,9 @@ def test_hailo_failure_suppresses_bot_entries(monkeypatch):
     result = bot._analyze_coin("BTC", float(close[-1]))
 
     assert result is not None
-    assert result["recommendation"] == "HOLD"
-    assert result["score"] == 0
-    assert result["signal_source"] == "hailo_unavailable"
+    assert result["recommendation"] == "HOLD (Up-Trend)"
+    assert result["score"] > 0
+    assert result["signal_source"] == "rules"
 
 
 @pytest.mark.parametrize(

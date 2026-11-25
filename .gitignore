@@ -47,6 +47,7 @@ results/
 
 # Bot state (runtime-generated)
 auto_tune_state*.json
+news_veto_state.json
 .portfolio_state.json
 .live_portfolio_state.json
 .trading_execution.lock

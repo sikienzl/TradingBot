@@ -502,6 +502,7 @@ class EntryHooks:
     in_reentry_cooldown: Callable[..., tuple[bool, int]]
     execute_trade: Callable[..., bool]
     log_blocked_attempts: Callable[[list[dict[str, Any]]], None]
+    news_veto: Callable[[str, dict[str, Any]], tuple[bool, str]] | None = None
 
 
 def open_new_positions(
@@ -681,6 +682,11 @@ def _attempt_candidate_buy(
             'reason': 'reentry_cooldown_active',
             'cooldown_text': cooldown_text,
         }
+    if hooks.news_veto is not None:
+        vetoed, veto_reason = hooks.news_veto(coin, coin_data)
+        if vetoed:
+            logger.warning("News veto blocked BUY for %s: %s", coin, veto_reason)
+            return {**attempt_meta, 'reason': f'news_veto:{veto_reason}'}
     if hooks.execute_trade(
         coin,
         "buy",

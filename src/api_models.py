@@ -52,6 +52,15 @@ class ResearchSignalPayload(BaseModel):
     integration: dict[str, Any] = Field(default_factory=dict)
 
 
+class NewsVetoPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sentiment_score: float = Field(ge=-1.0, le=1.0)
+    event_risk: float = Field(ge=0.0, le=1.0)
+    veto_buy: bool
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class ScorecardResult(BaseModel):
     verdict: ScorecardVerdict
     reasons: list[str] = Field(default_factory=list)

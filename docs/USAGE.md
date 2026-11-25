@@ -235,6 +235,20 @@ Hailo for this filter, set `TABULAR_MODEL_BACKEND` to `hailo` and configure
 the Hailo service settings; otherwise the configured CatBoost backend remains
 in use.
 
+Tabular inference uses Hailo first when selected, falls back to local CatBoost
+on Hailo errors or invalid output, and preserves the rules signal if CPU
+inference is unavailable. CPU loading is lazy on the Hailo path; Hailo-only
+packages are not required on a standalone Pi.
+
+The optional paid structured news veto is disabled by default. To enable it,
+configure `NEWS_VETO_ENABLED=true`, `NEWS_VETO_API_URL`, `NEWS_VETO_API_KEY`,
+`NEWS_VETO_MODEL`, and optionally `NEWS_VETO_MAX_CALLS_PER_DAY` (default 10).
+The API key belongs only in the private environment file. The veto runs after
+momentum and re-entry cooldown checks, requires fresh timestamped RSS items,
+and can only block a candidate. Missing news, provider errors, invalid output,
+or an exhausted budget block the candidate. Confirm that the provider supports
+the requested JSON response mode and review its pricing before enabling it.
+
 This protocol assumes filesystem support for durable file and directory
 `fsync` and atomic replacement. It cannot repair inconsistencies predating the
 protocol, and it does not transactionally persist analytics-database writes or
