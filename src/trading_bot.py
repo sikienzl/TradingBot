@@ -141,7 +141,7 @@ from src.entry_selection import (
 from src.entry_selection import (
     select_entry_candidate_shortlist as _entry_selection_select_shortlist,
 )
-from src.execution_owner import ExecutionOwnerLock
+from src.execution_owner import ExecutionOwnerLock, PostgresAdvisoryExecutionLease
 from src.execution_service import (
     EntryHooks as _EntryHooks,
 )
@@ -325,8 +325,18 @@ class CryptoTradingBot:
     def __init__(self, config: BotConfig):
         self.config = config
         _bootstrap_validate_startup_config(config)
+        remote_lease = (
+            PostgresAdvisoryExecutionLease(
+                config.cluster_execution_lease_database_url,
+                config.execution_account_id,
+            )
+            if getattr(config, 'cluster_execution_lease_enabled', False)
+            else None
+        )
         self._execution_owner_lock = ExecutionOwnerLock(
-            getattr(config, 'execution_lock_file', '.trading_execution.lock'))
+            getattr(config, 'execution_lock_file', '.trading_execution.lock'),
+            remote_lease,
+        )
         self.run_id = os.getenv('TRADING_RUN_ID', '').strip() or uuid.uuid4().hex
         self.config_hash = _config_fingerprint(config)
         self._journal_fields = list(_TRADE_JOURNAL_FIELDS)
@@ -1140,6 +1150,9 @@ class CryptoTradingBot:
                 market_data[coin] = {
                     'price': float(sim_df['close'].iloc[-1]),
                     'volume': float(sim_df['volume'].tail(24).mean()),
+                    'bid': float(sim_df['close'].iloc[-1]),
+                    'ask': float(sim_df['close'].iloc[-1]),
+                    'spread_bps': 0.0,
                 }
             return market_data
 
@@ -1717,6 +1730,7 @@ class CryptoTradingBot:
             _RealTradeHooks(
                 confirm_fill=self._confirm_order_fill,
                 confirm_fill_with_order=self._confirm_order_fill_record,
+                assert_execution_owner=self._execution_owner_lock.assert_owned,
                 record_close_performance=self._record_close_performance,
                 trade_excursion_metrics=self._trade_excursion_metrics,
                 append_trade_journal=self._append_trade_journal,

@@ -36,3 +36,48 @@ groups:
         annotations:
           summary: "Trading portfolio snapshot is stale"
           description: "The PnL exporter has not parsed a fresh portfolio snapshot from bot.log for over 120 seconds."
+
+      - alert: TradingKillSwitchActive
+        expr: trading_kill_switch_active == 1
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Trading kill switch is active"
+          description: "Live buys and sells are blocked by the persistent stop marker."
+
+      - alert: TradingHailoServiceUnavailable
+        expr: trading_hailo_health_check_enabled == 1 and trading_hailo_service_up == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Configured Hailo inference service is unavailable"
+          description: "The bot should be using its CPU/rules fallback; investigate service and tunnel health."
+
+      - alert: TradingResearchSignalMissing
+        expr: trading_research_signal_present == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Timestamped research signal is unavailable"
+          description: "The optional research/news input is missing or has no parseable timestamp."
+
+      - alert: TradingResearchSignalStale
+        expr: trading_research_signal_age_seconds > 7200
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Research signal is stale"
+          description: "The latest timestamped research signal is over two hours old."
+
+      - alert: TradingOperationalHealthMetricsMissing
+        expr: absent(trading_kill_switch_active)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Trading operational health metrics are missing"
+          description: "The periodic operational-health textfile exporter may have stopped."

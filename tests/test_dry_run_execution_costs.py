@@ -289,6 +289,7 @@ def test_live_buy_accounts_only_confirmed_partial_fill(monkeypatch, tmp_path):
 
 
 def test_live_buy_network_failure_does_not_mutate_portfolio(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRADING_KILL_SWITCH_FILE", str(tmp_path / "STOP"))
     bot = make_bot(monkeypatch, tmp_path, dry_run=False)
 
     class Exchange:
@@ -314,11 +315,13 @@ def test_live_buy_network_failure_does_not_mutate_portfolio(monkeypatch, tmp_pat
     assert bot.portfolio.open_trades == {}
     assert bot.performance["buys"] == 0
     assert rows(tmp_path) == []
+    assert "uncertain_order_outcome" in (tmp_path / "STOP").read_text()
 
 
 def test_live_buy_fetch_order_outage_does_not_account_unconfirmed_fill(
     monkeypatch, tmp_path
 ):
+    monkeypatch.setenv("TRADING_KILL_SWITCH_FILE", str(tmp_path / "STOP"))
     bot = make_bot(monkeypatch, tmp_path, dry_run=False)
     calls = []
 
@@ -354,6 +357,7 @@ def test_live_buy_fetch_order_outage_does_not_account_unconfirmed_fill(
     assert bot.portfolio.open_trades == {}
     assert bot.performance["buys"] == 0
     assert rows(tmp_path) == []
+    assert "uncertain_order_outcome" in (tmp_path / "STOP").read_text()
 
 
 def test_legacy_journal_migration_preserves_rows(monkeypatch, tmp_path):

@@ -12,10 +12,11 @@ pipeline in :mod:`src.coin_analysis`.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
@@ -99,10 +100,22 @@ def select_analysis_coins(
 ) -> list[str]:
     """Volume gate plus Top-N selection, with ``extra_coins`` always included."""
     filtered_coins_by_volume = []
+    max_spread_bps = float(getattr(config, 'max_entry_spread_bps', 0.0))
     for coin, data in market_data.items():
         if coin in config.excluded_coins or coin in dynamic_excluded_coins:
             continue
         if data['volume'] >= config.min_volume_base:
+            if max_spread_bps > 0:
+                try:
+                    spread_bps = float(cast(Any, data.get('spread_bps')))
+                except (TypeError, ValueError):
+                    logger.info("Skipping %s before inference: spread is unavailable", coin)
+                    continue
+                if not math.isfinite(spread_bps) or spread_bps > max_spread_bps:
+                    logger.info(
+                        "Skipping %s before inference: spread %.2f bps exceeds %.2f bps",
+                        coin, spread_bps, max_spread_bps)
+                    continue
             filtered_coins_by_volume.append(coin)
 
     logger.info(
@@ -167,6 +180,11 @@ def analyze_markets(
                 'coin': coin,
                 'price': current_price,
                 'volume': market_data[coin]['volume'],
+                **{
+                    key: market_data[coin][key]
+                    for key in ('bid', 'ask', 'spread_bps')
+                    if key in market_data[coin]
+                },
                 **coin_analysis
             }
 

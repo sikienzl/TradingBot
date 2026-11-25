@@ -2,12 +2,14 @@
 Description=Trading Bot - Link textfile metrics into Node Exporter collector directory
 After=prometheus-node-exporter.service
 Requires=scorecard-status.service
+Requires=trading-operational-health.service
 
 [Service]
 Type=oneshot
 User=root
 # Symlink our prom file into the system Node Exporter textfile directory
 ExecStart=/bin/ln -sfn /opt/trading_2/results/scorecards/textfile/trading_scorecard.prom /var/lib/prometheus/node-exporter/trading_scorecard.prom
+ExecStart=/bin/ln -sfn /opt/trading_2/results/scorecards/textfile/trading_health.prom /var/lib/prometheus/node-exporter/trading_health.prom
 RemainAfterExit=yes
 
 [Install]

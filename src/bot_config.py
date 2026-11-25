@@ -164,6 +164,17 @@ class BotConfig:
             'TRADING_KILL_SWITCH_FILE', '.trading_kill_switch')
         self.execution_lock_file = _env_str(
             'TRADING_EXECUTION_LOCK_FILE', '.trading_execution.lock')
+        self.cluster_execution_lease_enabled = _env_bool(
+            'TRADING_CLUSTER_EXECUTION_LEASE_ENABLED', False)
+        self.cluster_execution_lease_database_url = _env_str(
+            'TRADING_CLUSTER_EXECUTION_LEASE_DATABASE_URL', '')
+        self.execution_account_id = _env_str('TRADING_EXECUTION_ACCOUNT_ID', '')
+        if self.cluster_execution_lease_enabled and (
+            not self.cluster_execution_lease_database_url or not self.execution_account_id
+        ):
+            raise ValueError(
+                "Cluster execution lease requires a database URL and account ID"
+            )
         self.live_portfolio_state_file = _env_str(
             'LIVE_PORTFOLIO_STATE_FILE', '.live_portfolio_state.json')
         self.trade_amount = float(os.getenv('TRADE_AMOUNT', str(20)))
@@ -210,6 +221,10 @@ class BotConfig:
         )
         # Minimum 24h volume in base currency
         self.min_volume_base = float(os.getenv('MIN_VOLUME_BASE', str(100000)))
+        self.max_entry_spread_bps = float(
+            os.getenv('MAX_ENTRY_SPREAD_BPS', '100'))
+        if not math.isfinite(self.max_entry_spread_bps) or self.max_entry_spread_bps < 0:
+            raise ValueError("MAX_ENTRY_SPREAD_BPS must be finite and non-negative")
         # Number of top coins for analysis
         self.top_n_for_analysis = int(os.getenv('TOP_N_FOR_ANALYSIS', str(10)))
         self.exchange_timeout_ms = int(os.getenv('EXCHANGE_TIMEOUT_MS', str(15000)))

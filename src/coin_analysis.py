@@ -290,21 +290,32 @@ def analyze_coin(
         if math.isfinite(atr_14) and math.isfinite(current_price) and current_price > 0
         else None
     )
+    minimum_atr_pct = float(getattr(config, 'min_entry_atr_pct', 0.0))
+    allow_optional_models = (
+        minimum_atr_pct <= 0
+        or (atr_pct is not None and atr_pct >= minimum_atr_pct)
+    )
+    if not allow_optional_models:
+        logger.info(
+            "Skipping optional inference for %s before model calls: ATR gate not met",
+            coin,
+        )
 
     rule_recommendation = recommendation
     rule_score = score
 
     # ML model analysis (optional, only if loaded and data is valid)
-    recommendation, score, signal_source, signal_confidence = (
-        apply_ml_signal(
-            config, ml_predictor,
-            coin, ohlcv_df, current_price, rsi, recommendation, score,
-            signal_source, signal_confidence,
+    if allow_optional_models:
+        recommendation, score, signal_source, signal_confidence = (
+            apply_ml_signal(
+                config, ml_predictor,
+                coin, ohlcv_df, current_price, rsi, recommendation, score,
+                signal_source, signal_confidence,
+            )
         )
-    )
 
     # Fast tabular model analysis (optional)
-    if tabular_predictor is not None:
+    if tabular_predictor is not None and allow_optional_models:
         try:
             row_data, macd_hist = build_tabular_features(
                 ohlcv_df, close, current_price, rsi, sma_short, sma_long,

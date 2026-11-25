@@ -164,3 +164,32 @@ The helper runs the scorecard only once before starting Node Exporter. It
 continues even if that run fails, so check the output and metric file.
 Schedule separate scorecard runs with the same `STATUS_PROM_FILE` to refresh
 metrics, and monitor their timestamp for staleness.
+
+## Runtime health and alert delivery
+
+The Pi monitoring installer now installs a 30-second operational-health timer.
+It publishes `trading_kill_switch_active`, optional Hailo health, and research
+signal presence/age to the Node Exporter textfile collector. The health unit
+uses `/etc/trading-health.env`, not the bot's credential-bearing `.env`; copy
+`deploy/trading-health.env.example` there only when a Hailo health endpoint is
+configured. The endpoint must be loopback or a trusted private address.
+
+Prometheus alerts cover scorecard GO/HOLD/NO-GO and staleness, portfolio
+snapshot staleness, kill-switch activation, configured Hailo health failures,
+missing/stale research inputs, and missing operational metrics. The installer
+also configures local Alertmanager and a loopback-only relay. Before installing
+monitoring, create `/etc/trading-alert-relay.env` from
+`deploy/trading-alert-relay.env.example` with the organization's private HTTPS
+webhook URL, owned by `root:trading` with mode `0640`. Never commit the URL or
+provider credentials. The relay binds only to `127.0.0.1:9095`; Alertmanager
+posts to that local endpoint, and the relay forwards only to HTTPS. Test
+delivery with a staging receiver before relying on alerts operationally.
+
+Useful checks after installation:
+
+```sh
+systemctl status trading-operational-health.timer trading-alert-relay.service prometheus-alertmanager.service
+cat /opt/trading_2/results/scorecards/textfile/trading_health.prom
+promtool check rules /etc/prometheus/rules/trading-alerts.yml
+amtool check-config /etc/alertmanager/alertmanager.yml
+```

@@ -31,6 +31,7 @@ class _Config:
     base_currency: str = "EUR"
     excluded_coins: set[str] = field(default_factory=set)
     min_volume_base: float = 0.0
+    max_entry_spread_bps: float = 0.0
     top_n_for_analysis: int = 10
     slow_analysis_warning_seconds: float = 8.0
     dynamic_lossmaker_exclusion_enabled: bool = False
@@ -242,6 +243,23 @@ def test_select_coins_applies_the_volume_gate(monkeypatch: pytest.MonkeyPatch):
         logging.INFO,
         "Coins filtered by volume (100 EUR minimum): 1",
     ) in records
+
+
+@pytest.mark.parametrize("spread", [None, 125.0])
+def test_spread_gate_blocks_missing_or_excessive_spread_before_inference(
+    spread, monkeypatch: pytest.MonkeyPatch
+):
+    config = _Config(max_entry_spread_bps=100.0)
+    records = _capture(monkeypatch)
+    data = {"BTC": {"price": 10.0, "volume": 1000.0, "spread_bps": spread}}
+    analyzed = []
+
+    result = analyze_markets(
+        config, lambda: set(), lambda coin, price: analyzed.append(coin) or {"score": 1}, data)
+
+    assert result == {}
+    assert analyzed == []
+    assert any("before inference" in message for _, message in records)
 
 
 def test_select_coins_skips_static_and_dynamic_exclusions():

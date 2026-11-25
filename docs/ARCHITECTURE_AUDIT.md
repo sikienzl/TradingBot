@@ -8,14 +8,14 @@ The live cluster workload inspected is paper/shadow only.
 
 | # | Core area | Single Raspberry Pi | CM5 cluster |
 |---|---|---|---|
-| 1 | Data basis and model lifecycle | **[⚠️ Partial]** Chronological CatBoost split, purging and Walk-Forward exist; no paired versioned HEF/CPU export or rollback. | **[⚠️ Partial]** Hailo ONNX export and live HEF inference exist; compiler/promotion is separate and CPU/Hailo artifacts are not paired automatically. |
-| 2 | Decision pyramid and hardware fallback | **[⚠️ Partial]** Hailo→CPU→rules fallback is implemented and tested; ATR exists, but a universal pre-inference spread/min-volume gate is still missing. | **[⚠️ Partial]** Remote Hailo falls back to CPU then rules; no distributed inference health/availability test on the deployed cluster. |
+| 1 | Data basis and model lifecycle | **[⚠️ Partial]** Paired contract/checksum manifest and atomic activation/rollback are implemented; candidate training and DFC compilation remain separate operator steps. | **[⚠️ Partial]** Same paired release tooling; DFC and target-device validation remain external, and no x86 worker is deployed. |
+| 2 | Decision pyramid and hardware fallback | **[⚠️ Partial]** Volume, spread, and ATR gates now precede optional inference; Hailo→CPU→rules fallback is tested. | **[⚠️ Partial]** Same cascade and gates; target-cluster service/device availability is not continuously exercised by CI. |
 | 3 | News integration | **[⚠️ Partial]** RSS items now retain `published_at`/`fetched_at`, are deduplicated, and can drive an opt-in structured final veto with a daily call limit; persistent historical item storage is not implemented. | **[⚠️ Partial]** Same code is available, but the inspected cluster has no configured paid provider/credentials; Hailo features do not consume news. |
 | 4 | Hard risk and kill switch | **[⚠️ Partial]** A persistent file kill switch now blocks live orders; daily anchor/loss-streak state remains process-local. | **[⚠️ Partial]** The file switch is host-local; no cluster-wide shared switch or distributed ownership is implemented. |
-| 5 | Execution and costs | **[⚠️ Partial]** Reported quote/traded-asset fees are journaled and net PnL stays blank when fees cannot be valued; spread gating is absent. | **[⚠️ Partial]** Same fee handling, but live exchange use is unvalidated and spread gating is absent. |
-| 6 | Single-Pi vs cluster operations | **[⚠️ Partial]** Local process lock, persisted live snapshot, startup balance comparison and open-order refusal are implemented; unknown holdings need manual reconciliation. | **[⚠️ Partial]** Same host-local safeguards, but no distributed lease or cross-node duplicate-order prevention. |
+| 5 | Execution and costs | **[⚠️ Partial]** Fees and spread ceiling are accounted for; ambiguous order outcomes latch the stop marker instead of retrying. Maker/taker estimates and exchange-native idempotency remain absent. | **[⚠️ Partial]** Same controls, but live exchange use remains unvalidated on the cluster. |
+| 6 | Single-Pi vs cluster operations | **[⚠️ Partial]** Local process lock, persisted live snapshot, startup balance comparison, open-order refusal, and uncertain-order latch exist; fill reconstruction needs operator review. | **[⚠️ Partial]** Optional account-scoped PostgreSQL advisory lease supplements local locks; shared PostgreSQL config and cluster deployment are operator prerequisites, and fill reconstruction remains manual. |
 | 7 | Evaluation and scorecard | **[✅ Implemented]** GO/HOLD/NO-GO and HOLD for insufficient data are implemented, with Pi systemd automation. | **[⚠️ Partial]** Scorecard code and monitoring rules exist, but the inspected cluster deployment does not show scorecard automation as part of its active bot topology. |
-| 8 | Monitoring and alerting | **[⚠️ Partial]** Read-only dashboard and Prometheus scorecard alerts are available but optional; no critical-error/kill-switch notification channel is configured here. | **[⚠️ Partial]** Read-only dashboard and shadow service are running on `.74`; alert coverage/receivers and Hailo-failure escalation remain incomplete. |
+| 8 | Monitoring and alerting | **[⚠️ Partial]** Pi installer configures Alertmanager, a private HTTPS webhook relay, and kill-switch/Hailo/research health alerts; operator webhook configuration and staging delivery validation remain required. | **[⚠️ Partial]** Alert rules and relay are available in the repository, but cluster-specific installation/configuration and live receiver validation remain outstanding. |
 
 ## Findings and evidence
 
@@ -24,25 +24,28 @@ The live cluster workload inspected is paper/shadow only.
 `src.train_catboost_model.train_val_split_time`,
 `_purge_training_boundary`, `generate_walk_forward_splits`, and
 `run_walk_forward_evaluation` provide chronological validation and a forward
-label purge. `train_model` saves a CatBoost model and metadata. The separate
+label purge. `train_model` saves a CatBoost model and metadata, including a
+training-data hash and optional fixed Hailo feature contract. The separate
 `src.train_hailo_model.prepare_hailo_data` repeats a chronological purged split;
 `train_and_export` emits ONNX plus metadata for a later DFC compilation step.
-The two training/export paths are not one paired, immutable release with
-checksums and rollback. `scripts/update_autoresearch_signal.py` and the tuning
-cycle support research/parameter updates, but do not establish a separate x86
-training worker or artifact promotion workflow.
+`src.model_release.promote_release` verifies paired CPU/Hailo feature and label
+contracts plus the training-data hash, copies immutable artifacts, records
+checksums, and atomically activates the release. `rollback_release` verifies
+checksums before switching back. `scripts/update_autoresearch_signal.py` and
+the tuning cycle support research/parameter updates, but do not establish a
+separate x86 training worker or automatic DFC/promotion workflow.
 
-**Next:** Add one release manifest tying `.cbm`/CPU ONNX and `.hef` to the same
-data hash, feature/label contract, validation report, and model ID. Publish
-immutable versions and a tested atomic promote/rollback command. Add an
-end-to-end test from training outputs through runtime contract validation.
+**Next:** Automate candidate training, DFC compilation, target-Hailo validation,
+and explicit promotion on the planned x86 worker. Include full validation
+reports in the release manifest and exercise the release CLI in deployment CI.
 
 ### 2. Decision pyramid and hardware agnosticism
 
 `src.coin_analysis.analyze_coin` calculates rules, optional general ML, and an
-optional tabular prediction. `src.entry_filters.entry_volatility_guard`
-enforces ATR availability/minimum volatility. A universal spread ceiling and
-minimum-volume gate before model work remain absent. The Mammouth integration
+optional tabular prediction. `src.market_analysis.select_analysis_coins`
+applies minimum volume and configured spread gates before OHLCV/model work;
+`analyze_coin` suppresses optional inference when ATR is unavailable or below
+the configured threshold. The Mammouth integration
 in `src.ai_copilot_service.py` remains a bounded parameter copilot, separate
 from the opt-in structured news veto.
 
@@ -96,8 +99,11 @@ retries transient market-data errors, and `src.execution_service` catches
 Kraken/CCXT exchange errors. Live fill confirmation preserves the final order
 record and includes quote/traded-asset fees in entry basis and net sell proceeds
 when they can be converted. Unknown fee assets are preserved and leave journal
-net-PnL fields blank. No mandatory spread ceiling or separate maker/taker
-schedule is enforced before a live order.
+net-PnL fields blank. The configured spread ceiling is checked before detailed
+analysis and again before entry. Ambiguous order submission/fill outcomes
+persistently activate the kill switch instead of being blindly retried.
+Separate maker/taker schedules and exchange-native idempotency keys remain
+absent.
 
 **Next:** Account using exchange fill/fee records, preserve partial fills, and
 include spread and fee estimates in pre-trade approval. Add timeout/idempotency
@@ -115,15 +121,17 @@ separate file lock.
 
 The inspected cluster separates `.74` bot/paper workloads from `.75` Hailo
 inference through a restricted localhost SSH tunnel. The current shadow run is
-isolated and simulated, but there is no distributed lease or leader guard
-preventing two bot instances from submitting orders. `cluster-starter/` is
+isolated and simulated. An optional PostgreSQL session advisory lease is now
+available for candidate execution nodes and must be explicitly pointed at a
+shared database before cluster use. The single-Pi profile does not require
+PostgreSQL. `cluster-starter/` is
 generic infrastructure and its sample inventory does not map the production
 addresses.
 
-**Next:** Require one execution owner per Kraken account. The Pi-local lock is
-implemented; add a distributed lease/fencing token before enabling more than
-one cluster bot. Startup balance/open-order checks are implemented, but exact
-fill-to-position reconstruction remains an operator reconciliation step.
+**Next:** Configure and exercise the shared PostgreSQL lease on the actual
+cluster before enabling multiple execution candidates. Startup balance/open-
+order checks are implemented, but exact fill-to-position reconstruction
+remains an operator reconciliation step.
 
 ### 7. Evaluation and scorecard
 
@@ -144,15 +152,18 @@ dashboard and test stale/missing metrics as HOLD.
 `src.public_paper_dashboard` exposes a read-only dashboard and has access
 control/read-only tests. The dashboard container was active on `.74` during
 inspection. Prometheus rules alert on scorecard NO-GO/HOLD/missing and stale
-portfolio snapshots. The checked-in alert rules define conditions, but no
-receiver/webhook/Telegram/ntfy configuration was found; they do not cover the
-kill switch, Hailo failure rate, daily report failure, or market-data
-staleness.
+portfolio snapshots. The Pi monitoring installer now deploys a 30-second
+operational-health textfile exporter, Alertmanager, and a loopback-only relay
+to a private HTTPS webhook. Rules cover kill-switch activation, configured
+Hailo health, missing/stale research, and missing health metrics in addition to
+scorecard/snapshot status. No organization-specific webhook credential or
+staging delivery evidence is included in Git; daily report and market-data
+failure metrics remain uninstrumented.
 
-**Next:** Configure a secured notification receiver and alerts for kill-switch
-activation, bot/service health, stale data, Hailo errors, report failures, and
-disk/database health. Keep the dashboard read-only and deployable without
-cluster services on a single Pi.
+**Next:** Configure the private receiver on each deployment, validate delivery
+in staging, and add daily-report, market-data, disk/database alerts. Keep the
+dashboard read-only and the Pi monitoring path independent from cluster
+services.
 
 ## Prioritized implementation order
 

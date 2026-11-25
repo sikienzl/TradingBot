@@ -1,0 +1,19 @@
+[Unit]
+Description=Loopback Alertmanager webhook relay
+After=network.target
+
+[Service]
+Type=simple
+User=trading
+Group=trading
+EnvironmentFile=/etc/trading-alert-relay.env
+ExecStart=/opt/trading_2/.venv/bin/python -m scripts.alert_webhook_relay
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
