@@ -1,0 +1,138 @@
+v1.0.28 - Fail-closed execution, ordered decision pyramid, paired model releases
+
+Date: 2026-11-25
+
+Changes
+
+Live execution safety
+- A live start now reconciles the persisted portfolio against Kraken before
+  any order is allowed. Unknown holdings, a balance mismatch, an unreadable or
+  non-list open-orders result, a malformed balance payload or a
+  non-finite/negative balance stop the start instead of continuing, and a
+  corrupt persisted state is a hard stop rather than a silent reseed.
+- An ambiguous order submit or fill outcome latches a persistent kill switch
+  (TRADING_KILL_SWITCH_FILE, default .trading_kill_switch). The bot stays
+  stopped until an operator removes the marker, and TradingKillSwitchActive
+  alerts while it is present. Open orders are re-checked immediately before
+  every live order, and blind retries after an unclear market-order outcome are
+  gone.
+- One execution owner per account: a local process-lifetime lock
+  (TRADING_EXECUTION_LOCK_FILE, an exclusive non-blocking flock) blocks a
+  second bot process on the same host, and an optional account-scoped
+  PostgreSQL advisory lease (TRADING_CLUSTER_EXECUTION_LEASE_ENABLED plus a
+  shared database URL and TRADING_EXECUTION_ACCOUNT_ID) lets two CM5 nodes
+  share one owner. The lease is opt-in; single-Pi mode never requires
+  PostgreSQL.
+- Exchange fees are journalled when they convert to the quote currency, and net
+  PnL is left blank when a fee cannot be valued instead of reporting a clean
+  number.
+
+Decision ordering and inference
+- Validated Hailo -> CPU CatBoost -> rules-only fallback
+  (src/inference_fallback.py). No Hailo package is imported on the general bot
+  path; a missing device, absent hailo_platform, invalid model or out-of-range
+  prediction falls through to the next backend, the selected backend and every
+  fallback are logged, and the rules signal survives when both models are
+  unavailable. No valid decision means HOLD.
+- The pyramid is ordered and bounded: a spread ceiling (MAX_ENTRY_SPREAD_BPS,
+  default 100) rejects a candidate before any model runs, alongside the
+  existing MIN_VOLUME_BASE volume gate and Top-N analysis cap, optional models
+  are skipped before the ATR threshold, and the paid news check runs last. A
+  missing or wider quote skips the candidate.
+- News is backtest-safe: every RSS item keeps its source published_at and local
+  fetched_at, undated and future-dated stories are rejected, and items are
+  deduplicated by link or content/time identity.
+- An opt-in structured news veto (NEWS_VETO_ENABLED plus provider, key, model
+  and NEWS_VETO_MAX_CALLS_PER_DAY) validates the provider response against a
+  strict schema, keeps a durable daily call budget and can only veto a BUY - it
+  can never create one. Provider errors, malformed responses or an exhausted
+  budget fail closed for the candidate. Off by default, so a Pi release without
+  a configured provider behaves exactly as before.
+
+Model lifecycle
+- Immutable paired CPU/Hailo releases (src/model_release.py plus
+  scripts/manage_model_release.py): one manifest carries the .cbm/.onnx and
+  .hef artifacts built from a single model contract, with feature/label
+  contract, training hash, artifact checksums and validation metrics.
+  Promotion is atomic, validation re-checks contract and checksums, rollback
+  restores the prior known-good pair, and only whole pairs are ever swapped.
+  CatBoost training now records provenance and a fixed Hailo-compatible feature
+  contract. DFC compilation and HEF validation on target Hailo hardware remain
+  operator steps.
+
+Operational visibility
+- scripts/export_operational_health.py writes a Prometheus textfile fragment
+  every 30 seconds (deploy/trading-operational-health.service/.timer) covering
+  kill-switch state, Hailo health and enablement, research-feed
+  presence/age and - since src/data_staleness.py - bounded staleness probes for
+  the bot's own inputs: trade journal, bot log and, where configured, the
+  market recorder directory. The kill-switch gauge doubles as the exporter
+  heartbeat, so absent() on it raises
+  TradingOperationalHealthMetricsMissing. Each probe reads only a 1 MiB tail
+  and fails closed to "absent", so "not collected" stays distinguishable from
+  "stale".
+- Ten new Prometheus rules in deploy/trading-alerts.yml, which now carries
+  fourteen. New since v1.0.27: kill-switch activation, Hailo health,
+  research-feed missing/stale, exporter heartbeat missing,
+  TradingBotLogMissing/Stale, TradingJournalStale and
+  TradingMarketDataMissing/Stale. The scorecard GO/HOLD/missing and
+  portfolio-snapshot staleness rules were already there and are unchanged. The
+  staleness rules are the alertable signal for the 2026-11-16 outage where the
+  public-paper collector died for seven days while the daily report kept
+  exiting 0.
+- scripts/alert_webhook_relay.py and deploy/trading-alert-relay.service
+  forward Alertmanager to a private HTTPS webhook over loopback only. The
+  endpoint and credential live in /etc/trading-alert-relay.env and are not
+  part of any package.
+
+Structure and quality
+- src/trading_bot.py shrank from 4764 to 2055 lines. The God class is now a
+  composition root and src/ holds 61 modules instead of the 32 it had at
+  v1.0.27, each with its own unit tests: entry selection, entry filters, exit
+  policy, execution, dry-run execution, coin analysis, market analysis, market
+  observations, trade journal, open-trade management, portfolio bootstrap,
+  bot bootstrap, AI co-pilot, PnL metrics/rendering, indicator maths,
+  inference fallback, news veto, model releases, execution ownership and
+  staleness probes. Every extracted cluster was checked against the previous
+  implementation with deterministic old-vs-new scenarios that produced
+  byte-identical results, state, journal rows and log messages.
+- tests/test_architecture.py locks the layout: layer assignment, no upward
+  imports, no import cycles, trading_bot.py stays a leaf, and the oversized
+  modules may not grow past their current line counts.
+- Test cases grew from 310 to 1100. The full suite is 1336 passed; the CI
+  slim-dependency run (no TA-Lib, no torch) is 1310 passed and 2 skipped.
+  ruff is clean, the complexity gate is 25 with no noqa left, and mypy reports
+  0 errors across 61 source files.
+- Fixed: the co-pilot log reader crashed on every real log line because it
+  subtracted a naive local asctime from datetime.now(UTC) - that defect shipped
+  in v1.0.25-v1.0.27; the dashboard test that failed near UTC midnight; an
+  unnecessary back-off sleep after the final OHLCV retry; an unhandled KeyError
+  in calculate_indicators(); and an IndexError in process_symbol() for a symbol
+  without a quote currency.
+
+Privacy and safety
+- No personal data, host addresses, webhook endpoints or credentials are part of
+  either package. Alert delivery requires the operator to create
+  /etc/trading-alert-relay.env; the news veto requires an operator-supplied
+  provider and key. The cluster lease ships as placeholders only.
+
+Notes
+- Both release profiles are covered. The single-node Raspberry Pi release stays
+  autonomous: it needs no Hailo-8, no second node, no K3s, no PostgreSQL and no
+  tunnel, and rules-only operation remains available when models or external
+  APIs are missing. The CM5 cluster profile may distribute bot, inference,
+  monitoring and data services across two CM5 modules, and the optional
+  execution lease is the only new cluster prerequisite.
+- Operational changes for an existing install: install the refreshed systemd
+  units and run systemctl daemon-reload. The monitoring installer now also
+  copies the operational-health timer, the alert rules and the relay unit.
+  Create /etc/trading-alert-relay.env before expecting alert delivery.
+- Migration and rollback: a live account needs one trusted snapshot after manual
+  position/fill reconciliation, because a mismatch now blocks new orders. If an
+  ambiguous fill latched the kill switch, reconcile the fills and remove
+  .trading_kill_switch to resume. Model artifacts roll back as a whole
+  CPU/Hailo pair with scripts/manage_model_release.py; the previous known-good
+  pair is kept.
+- Still open, deliberately not in this release: daily-report exit status and
+  disk/database capacity alerts, a durable historical news-item store, and the
+  x86 training/compilation worker.

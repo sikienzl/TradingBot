@@ -5,6 +5,8 @@ a version heading is assigned when a release is prepared.
 
 ## Unreleased
 
+## v1.0.28 - 2026-11-25
+
 ### Added
 
 - `src/close_performance.py`, a layer-1 collaborator for entry cost-basis
