@@ -1,6 +1,9 @@
 # Server Deployment Guide
 
 This guide is for running the trading bot on a separate server (not on the workstation).
+For the inspected two-CM5 topology, node roles, ports, and the standalone Pi
+boundary, see the [cluster architecture](docs/CLUSTER_ARCHITECTURE.md) and
+[eight-area architecture audit](docs/ARCHITECTURE_AUDIT.md).
 
 ## 1. Package Contents
 The server package contains only runtime-relevant files:
