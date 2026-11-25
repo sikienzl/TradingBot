@@ -4,7 +4,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from urllib.error import URLError
 
-from scripts.export_operational_health import render_metrics, write_metrics
+from scripts.export_operational_health import main, render_metrics, write_metrics
 
 
 class _Response:
@@ -108,3 +108,61 @@ def test_write_metrics_replaces_output_atomically(tmp_path):
     write_metrics(target, "trading_kill_switch_active 0\n")
     assert target.read_text(encoding="utf-8") == "trading_kill_switch_active 0\n"
     assert list(target.parent.iterdir()) == [target]
+
+
+def test_main_uses_configured_staleness_paths(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    journal = data_dir / "trade_journal.csv"
+    journal.parent.mkdir(parents=True)
+    journal.write_text(
+        "timestamp,iteration,coin,action,price\n"
+        "2026-11-25T11:50:00+00:00,7,BTC/EUR,buy,10\n", encoding="utf-8")
+    bot_log = tmp_path / "logs" / "bot.log"
+    bot_log.parent.mkdir()
+    bot_log.write_text("2026-11-25 11:59:00 - INFO - hello\n", encoding="utf-8")
+    market = tmp_path / "market"
+    market.mkdir()
+    (market / "tickers.csv").write_text(
+        "timestamp_utc,symbol,price\n2026-11-25T11:59:30+00:00,BTC/EUR,10\n",
+        encoding="utf-8")
+    output = tmp_path / "textfile" / "trading_health.prom"
+
+    monkeypatch.setenv("TRADING_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("TRADING_JOURNAL_FILE", str(journal))
+    monkeypatch.setenv("TRADING_BOT_LOG_FILE", str(bot_log))
+    monkeypatch.setenv("TRADING_MARKET_DATA_DIR", str(market))
+    monkeypatch.setenv("TRADING_LOG_TIMEZONE", "UTC")
+    monkeypatch.setenv("TRADING_KILL_SWITCH_FILE", str(tmp_path / "STOP"))
+    monkeypatch.setenv("RESEARCH_SIGNAL_PATH", str(tmp_path / "missing.json"))
+    monkeypatch.setenv("HAILO_HEALTH_URL", "")
+    monkeypatch.setenv("TRADING_HEALTH_METRICS_FILE", str(output))
+
+    assert main() == 0
+
+    body = output.read_text(encoding="utf-8")
+    assert "trading_journal_present 1" in body
+    assert "trading_bot_log_present 1" in body
+    assert "trading_market_data_present 1" in body
+    assert "trading_market_data_age_seconds" in body
+
+
+def test_main_omits_market_metrics_when_unset(tmp_path, monkeypatch):
+    output = tmp_path / "textfile" / "trading_health.prom"
+    monkeypatch.setenv("TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TRADING_KILL_SWITCH_FILE", str(tmp_path / "STOP"))
+    monkeypatch.setenv("RESEARCH_SIGNAL_PATH", str(tmp_path / "missing.json"))
+    monkeypatch.setenv("HAILO_HEALTH_URL", "")
+    monkeypatch.delenv("TRADING_MARKET_DATA_DIR", raising=False)
+    monkeypatch.delenv("TRADING_JOURNAL_FILE", raising=False)
+    monkeypatch.delenv("TRADING_BOT_LOG_FILE", raising=False)
+    monkeypatch.delenv("TRADING_LOG_TIMEZONE", raising=False)
+    monkeypatch.setenv("TRADING_HEALTH_METRICS_FILE", str(output))
+
+    assert main() == 0
+
+    body = output.read_text(encoding="utf-8")
+    # Defaults resolve under TRADING_DATA_DIR, and an unconfigured recorder
+    # publishes no market metric at all rather than a false absence.
+    assert "trading_journal_present 0" in body
+    assert "trading_bot_log_present 0" in body
+    assert "trading_market_data" not in body

@@ -248,8 +248,9 @@ a version heading is assigned when a release is prepared.
   `timestamp_utc` across `tickers.csv` / `candles_1m.csv` of the market
   recorder. Every probe reads only a 1 MiB tail, never the whole file, and
   fails closed to "absent" on a missing, unreadable or unparseable source so a
-  probe error cannot crash the health timer. Covered by 22 new tests in
-  `tests/test_data_staleness.py`.
+  probe error cannot crash the health timer. Covered by 28 new tests in
+  `tests/test_data_staleness.py`, which keep the module at full statement and
+  branch coverage.
 - Five Prometheus rules in `deploy/trading-alerts.yml`:
   `TradingBotLogMissing` and `TradingBotLogStale` (critical, 15 minutes without
   a log line, which means the loop is stopped or wedged), `TradingJournalStale`
@@ -273,7 +274,9 @@ a version heading is assigned when a release is prepared.
   unreadable reports `*_present 0` with no age, which keeps "not collected"
   distinguishable from "stale" in the alert rules. `deploy/trading-operational-health.service`
   carries the journal and bot-log paths and `deploy/trading-health.env.example`
-  documents the optional recorder directory.
+  documents the optional recorder directory. Two additional exporter tests drive
+  `main()` itself, so the environment wiring for these paths is covered and the
+  module reaches 92% coverage.
 - `src/trading_bot.py` shrank from 2084 to 2055 lines by moving
   `_entry_cost_basis()` and `_record_close_performance()` into
   `src/close_performance.py`; its architecture ceiling was lowered from 2120 to

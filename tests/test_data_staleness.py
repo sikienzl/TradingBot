@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 from src.data_staleness import (
     STALENESS_READ_LIMIT,
+    _read_tail_lines,
     latest_journal_timestamp,
     latest_log_timestamp,
     latest_market_timestamp,
@@ -105,6 +106,38 @@ def test_journal_unreadable_file_is_none(tmp_path):
         os.chmod(journal, 0o644)
 
 
+def test_journal_blank_line_is_ignored(tmp_path):
+    journal = tmp_path / "trade_journal.csv"
+    _write(journal, _journal([
+        "2026-11-25T11:00:00+00:00,1,BTC/EUR,buy,10", "",
+    ]))
+
+    assert latest_journal_timestamp(journal) == datetime(
+        2026, 11, 25, 11, 0, tzinfo=UTC)
+
+
+def test_tail_window_without_newline_returns_nothing(tmp_path):
+    # A window that starts inside the only line has no complete line to parse.
+    path = tmp_path / "single_line.csv"
+    _write(path, "x" * 200)
+
+    assert _read_tail_lines(path, 64) == []
+
+
+def test_tail_window_drops_truncated_last_line(tmp_path):
+    path = tmp_path / "partial.csv"
+    _write(path, "first\nsecond\nthird")
+
+    assert _read_tail_lines(path, 64) == ["first", "second"]
+
+
+def test_tail_window_keeps_everything_below_the_limit(tmp_path):
+    path = tmp_path / "small.csv"
+    _write(path, "first\nsecond\n")
+
+    assert _read_tail_lines(path, STALENESS_READ_LIMIT) == ["first", "second"]
+
+
 # ---------------------------------------------------------------------------
 # market recorder
 # ---------------------------------------------------------------------------
@@ -157,6 +190,24 @@ def test_log_without_timestamps_is_none(tmp_path):
 
 def test_log_missing_file_is_none(tmp_path):
     assert latest_log_timestamp(tmp_path / "absent.log") is None
+
+
+def test_log_unreadable_file_is_none(tmp_path):
+    log = tmp_path / "bot.log"
+    _write(log, "2026-11-25 11:00:00 - INFO - hello\n")
+    os.chmod(log, 0o000)
+    try:
+        assert latest_log_timestamp(log) is None
+    finally:
+        os.chmod(log, 0o644)
+
+
+def test_log_rejects_impossible_calendar_values(tmp_path):
+    # The asctime pattern matches, but the calendar value cannot exist.
+    log = tmp_path / "bot.log"
+    _write(log, "2026-13-45 99:99:99 - INFO - impossible\n")
+
+    assert latest_log_timestamp(log) is None
 
 
 def test_log_ignores_timestamps_inside_messages(tmp_path):
