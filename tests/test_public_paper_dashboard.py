@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from src import market_observations
 from src import public_paper_dashboard as dashboard
 
 
@@ -220,8 +221,8 @@ def test_market_csv_tail_is_bounded_and_validates_original_header(
                     "last": 1,
                 }
             )
-    monkeypatch.setattr(dashboard, "MARKET_DATA_READ_LIMIT", 150)
-    row_iterator, truncated = dashboard._read_csv_tail(path, fields)
+    monkeypatch.setattr(market_observations, "MARKET_DATA_READ_LIMIT", 150)
+    row_iterator, truncated = market_observations._read_csv_tail(path, fields)
     rows = list(row_iterator)
     assert truncated
     assert rows[-1]["observed_at_utc"] == "2026-01-01T00:00:09+00:00"
@@ -229,7 +230,7 @@ def test_market_csv_tail_is_bounded_and_validates_original_header(
     original = path.read_text(encoding="utf-8")
     path.write_text("invalid,header\n" + original.split("\n", 1)[1], encoding="utf-8")
     with pytest.raises(ValueError, match="unexpected CSV header"):
-        dashboard._read_csv_tail(path, fields)
+        market_observations._read_csv_tail(path, fields)
 
 
 def test_market_observations_api_summarizes_public_ticker_and_candles(client):

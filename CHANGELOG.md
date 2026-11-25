@@ -213,6 +213,24 @@ a version heading is assigned when a release is prepared.
   `tests/test_open_trade_manager.py`.
 ### Changed
 
+- `src/public_paper_dashboard.py` shrank from 1075 to 695 lines now that the
+  market panel lives in `src/market_observations.py`. The `/api/market-observations`
+  route is a thin delegator that calls `load_market_observations()`, and the
+  helpers the snapshot code still uses (`_parse_utc`, `_number`) plus the two
+  field tuples are re-imported, so the dashboard keeps its public shape and the
+  existing dashboard tests still apply — only the test that patches the bounded
+  read window had to target the module that now owns the limit. The architecture
+  ceiling was ratcheted from 1100 to 695 lines and `market_observations` was
+  registered as a layer-1 module; `docker/public-paper-dashboard.Dockerfile`
+  copies the new file because the image is assembled file by file. The old and
+  new code were compared over 32 scenarios (missing directory, missing files,
+  malformed/oversized metadata, bad exchange and symbol lists, duplicate
+  symbols, unexpected CSV headers, partial last lines, a read window with no
+  complete row, invalid ticker and candle rows, window-boundary rows, unsorted
+  rows, all-rows-outside-the-window fallback, zero spread/volume, fresh and stale
+  data, every 404 symbol and the full multi-symbol payload) and produced
+  byte-identical JSON payloads and log lines. The twelve moved statements and the
+  fifteen statements that stayed are also AST-identical to the original.
 - `src/trading_bot.py` shrank from 2589 to 2375 lines now that the open-position
   sweep lives in `src/open_trade_manager.py`. `_manage_open_trades()` is a thin
   delegator with the previous signature, so the trade loop, the ATR cache, the
@@ -237,6 +255,16 @@ a version heading is assigned when a release is prepared.
   `save_state()` counts and resulting trade state. The moved body is also
   AST-identical to the original after the documented `self.config` → `config`,
   `self.portfolio` → `portfolio` and hook rewrites.
+- `src/market_observations.py`, the market panel of the read-only dashboard that
+  used to sit inline in `src/public_paper_dashboard.py`: the recorder file
+  readers (`_parse_utc`, `_number`, `_read_csv_tail` with its bounded 16 MiB
+  read window), the metadata/CSV validation and availability fallbacks, the
+  per-symbol quality summary (`_valid_rows`, `_build_market_summary`) and the
+  chart downsampling (`_downsample`). The module is a layer-1 peer of the
+  dashboard, so it reads `DASHBOARD_MARKET_DATA_DIR` itself and raises
+  `HTTPException(404)` for a symbol that is not part of the recording; the route
+  keeps authentication, caching and response shape. Covered by 62 new tests in
+  `tests/test_market_observations.py`.
 - The README header now follows the GitHub colour scheme: `assets/logo-dark.png`
   (the same emblem in light strokes, 896x1200) is served to dark mode and the
   dark-stroke transparent emblem to light mode through a `<picture>` element, so

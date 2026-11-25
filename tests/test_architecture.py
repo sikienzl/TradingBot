@@ -59,6 +59,7 @@ LAYERS: dict[int, tuple[str, ...]] = {
         "journal_guards",
         "market_analysis",
         "market_data",
+        "market_observations",
         "open_trade_manager",
         "portfolio",
         "pnl_exporter",
@@ -100,7 +101,7 @@ TRADING_BOT_IMPORTERS: frozenset[str] = frozenset({"init_kraken_paper"})
 # when a file shrinks; never raise them without an explicit decision.
 LINE_CEILINGS: dict[str, int] = {
     "trading_bot.py": 2375,
-    "public_paper_dashboard.py": 1100,
+    "public_paper_dashboard.py": 695,
     "export_pnl_metrics.py": 366,
 }
 
