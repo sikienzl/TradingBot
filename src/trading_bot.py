@@ -192,6 +192,13 @@ from src.open_trade_manager import (
     manage_open_trades as _open_trade_manage_open_trades,
 )
 from src.portfolio import Portfolio
+from src.portfolio_bootstrap import (
+    PortfolioBootstrapContext,
+    PortfolioBootstrapHooks,
+)
+from src.portfolio_bootstrap import (
+    update_portfolio_balance as _portfolio_bootstrap_update_balance,
+)
 from src.simulation import SimulationEngine
 from src.state_store import (
     cooldown_remaining_minutes as _state_cooldown_remaining_minutes,
@@ -305,30 +312,6 @@ def _mask_secret(value: str) -> str:
     return f"{value[:4]}...{value[-4:]}"
 
 
-def _currency_aliases(currency: str) -> list[str]:
-    base = currency.upper().strip()
-    aliases = [base, f"Z{base}", f"X{base}"]
-    if base == 'BTC':
-        aliases.extend(['XBT', 'XXBT'])
-    return list(dict.fromkeys(aliases))
-
-def _extract_cash_and_holdings(free_balances: dict[str, float], base_currency: str) -> tuple[float, dict[str, float]]:
-    cash = 0.0
-    aliases = _currency_aliases(base_currency)
-    for key in aliases:
-        value = free_balances.get(key)
-        if value is not None:
-            cash = float(value)
-            break
-
-    holdings: dict[str, float] = {}
-    for currency, amount in free_balances.items():
-        if amount <= 0:
-            continue
-        if currency in aliases:
-            continue
-        holdings[currency] = float(amount)
-    return cash, holdings
 
 
 class CryptoTradingBot:
@@ -1113,127 +1096,27 @@ class CryptoTradingBot:
                     f'{coin}/{self.config.base_currency}' for coin in self.all_coins]
 
     def _update_portfolio_balance(self):
-        """Updates the portfolio with current balances from the exchange."""
-        if self.config.simulation_initial_balance_from_kraken:
-            self._initialize_simulation_portfolio_from_kraken()
-            return
+        """Delegates to :func:`src.portfolio_bootstrap.update_portfolio_balance`."""
+        _portfolio_bootstrap_update_balance(
+            self._portfolio_bootstrap_context(),
+            self._portfolio_bootstrap_hooks(),
+        )
 
-        if self.config.simulate_data or self.exchange is None:
-            self._initialize_simulated_portfolio()
-            return
+    def _portfolio_bootstrap_context(self) -> PortfolioBootstrapContext:
+        """Portfolio startup state handed to :mod:`src.portfolio_bootstrap`."""
+        return PortfolioBootstrapContext(
+            config=self.config,
+            portfolio=self.portfolio,
+            exchange=self.exchange,
+        )
 
-        # In dry-run mode:
-        # 1. Load initial balance from exchange exactly once
-        # 2. Then restore from persistent state file (portfolio changes from previous runs)
-        # 3. Never overwrite simulated portfolio changes
-        if self.config.dry_run:
-            self._initialize_dry_run_portfolio()
-            return
-
-        self._refresh_live_portfolio_balance()
-
-    def _initialize_simulation_portfolio_from_kraken(self) -> None:
-        """Bootstrap the simulation portfolio once from the Kraken EUR balance."""
-        if self.config.simulation_initial_balance_from_kraken:
-            if self.portfolio.last_update is not None:
-                return
-            if self._public_paper_mode():
-                self._recover_paper_trade()
-            if os.path.lexists(self.portfolio.state_file):
-                if not self.portfolio.load_state():
-                    raise RuntimeError("Cannot restore existing simulation portfolio")
-                self.iteration = self.portfolio.simulation_iteration + 1
-                logger.warning(
-                    "Simulation restarted: restored the last saved portfolio; "
-                    "Kraken balance was not fetched again."
-                )
-            else:
-                if not self.config.simulate_data:
-                    raise RuntimeError(
-                        "Initialize the paper portfolio separately before using public market data"
-                    )
-                if not self.config.api_key or not self.config.api_secret:
-                    raise RuntimeError("Kraken read-only API credentials are required for initial balance")
-                exchange = ccxt.kraken({
-                    'apiKey': self.config.api_key,
-                    'secret': self.config.api_secret,
-                    'enableRateLimit': True,
-                    'timeout': self.config.exchange_timeout_ms,
-                })
-                try:
-                    balance = exchange.fetch_balance()
-                    free = balance['free']
-                    value = next((free[key] for key in ('EUR', 'ZEUR', 'XEUR')
-                                  if key in free and free[key] is not None), None)
-                    cash = float(cast(Any, value))
-                except (ccxt.BaseError, KeyError, TypeError, ValueError):
-                    raise RuntimeError("Could not obtain free EUR balance from Kraken") from None
-                if not math.isfinite(cash) or cash < 0:
-                    raise ValueError("Kraken returned an invalid free EUR balance")
-                self.portfolio.cash = cash
-                self.portfolio.initial_portfolio_value = cash
-                self.portfolio.save_state()
-                logger.info("Simulation initialized once from Kraken free EUR balance: %.2f EUR", cash)
-            self.portfolio.last_update = datetime.now()
-
-    def _initialize_simulated_portfolio(self) -> None:
-        """Restore or seed the portfolio for simulated / offline data mode."""
-        if self.config.simulate_data or self.exchange is None:
-            needs_initialization = (
-                self.portfolio.last_update is None
-                and self.portfolio.initial_portfolio_value is None
-                and math.isclose(self.portfolio.cash, 0.0, abs_tol=1e-12)
-                and not self.portfolio.holdings
-            )
-            if needs_initialization and not self.portfolio.load_state():
-                self.portfolio.cash = 1000.0
-                self.portfolio.initial_portfolio_value = self.portfolio.cash
-                logger.info(
-                    f"Simulated starting capital: {self.portfolio.cash:.2f} {self.config.base_currency}")
-            self.portfolio.last_update = datetime.now()
-            return
-
-    def _initialize_dry_run_portfolio(self) -> None:
-        """Restore the dry-run portfolio from state, else seed it from the exchange."""
-        if self.config.dry_run:
-            if self.portfolio.last_update is not None:
-                return
-            # First time: try to load persistent state
-            if self.portfolio.load_state():
-                # Restore from file and mark as initialized
-                self.portfolio.last_update = datetime.now()
-                return
-            # No persistent state, load initial balance from exchange
-            try:
-                balance = self.exchange.fetch_balance()
-                free_balances = balance.get('free', {})
-                self.portfolio.cash, self.portfolio.holdings = _extract_cash_and_holdings(
-                    free_balances, self.config.base_currency)
-                if not self.portfolio.holdings:
-                    self.portfolio.initial_portfolio_value = self.portfolio.cash
-                self.portfolio.last_update = datetime.now()
-                logger.info(
-                    f"Portfolio initialized from exchange (dry-run mode). Cash: {self.portfolio.cash:.2f} {self.config.base_currency}, Holdings: {self.portfolio.holdings}")
-            except ccxt.BaseError as e:
-                logger.warning(
-                    f"Failed to load initial balance from exchange in dry-run mode: {e}")
-
-    def _refresh_live_portfolio_balance(self) -> None:
-        """Fetch the current balance from the exchange (live trading mode)."""
-        # Live trading mode: always fetch current balance
-        try:
-            balance = self.exchange.fetch_balance()
-            free_balances = balance.get('free', {})
-            self.portfolio.cash, self.portfolio.holdings = _extract_cash_and_holdings(
-                free_balances, self.config.base_currency)
-            self.portfolio.last_update = datetime.now()
-            logger.info(
-                f"Portfolio balance updated. Cash: {self.portfolio.cash:.2f} {self.config.base_currency}, Holdings: {self.portfolio.holdings}")
-        except (ccxt.NetworkError, ccxt.ExchangeError) as e:
-            logger.error(
-                f"Error fetching/updating account balance: {e}")
-        except ccxt.BaseError as e:
-            logger.error(f"Error fetching/updating account balance: {e}")
+    def _portfolio_bootstrap_hooks(self) -> PortfolioBootstrapHooks:
+        """Callbacks for :mod:`src.portfolio_bootstrap`."""
+        return PortfolioBootstrapHooks(
+            public_paper_mode=self._public_paper_mode,
+            recover_paper_trade=self._recover_paper_trade,
+            set_iteration=lambda value: setattr(self, 'iteration', value),
+        )
 
 
     def _get_market_data(self) -> dict[str, dict]:

@@ -222,8 +222,48 @@ a version heading is assigned when a release is prepared.
   two frozen dataclasses, `EntryCandidateContext` (config, portfolio) and
   `EntryCandidateHooks` (the twelve bot methods the sweep calls), so the whole
   sweep is unit-testable without an exchange or a live bot.
+- `src/portfolio_bootstrap.py`, the portfolio startup path that used to be five
+  `CryptoTradingBot` methods plus two module helpers: `update_portfolio_balance()`
+  (the mode dispatcher), `initialize_simulation_portfolio_from_kraken()` (the
+  one-time Kraken free-EUR bootstrap, the restart restore with its iteration bump
+  and the fail-closed guards for corrupt or invalid persisted state),
+  `initialize_simulated_portfolio()` (restore or seed the simulated/offline
+  capital), `initialize_dry_run_portfolio()` (restore from state, else seed once
+  from the exchange) and `refresh_live_portfolio_balance()`, together with the
+  `currency_aliases()` / `extract_cash_and_holdings()` balance helpers. The config,
+  portfolio and exchange arrive through a frozen `PortfolioBootstrapContext`, and
+  the three things the bootstrap reads or writes on the bot — the public-paper-mode
+  probe, the paper-trade recovery and the iteration counter — arrive through
+  `PortfolioBootstrapHooks`, so the whole startup path is unit-testable without a
+  live bot. Covered by 40 new tests in `tests/test_portfolio_bootstrap.py`.
 ### Changed
 
+- `src/trading_bot.py` shrank from 2237 to 2120 lines now that the portfolio
+  startup path lives in `src/portfolio_bootstrap.py`. `_update_portfolio_balance()`
+  stays a thin delegator with its previous name — it is called from the run loop,
+  from `src/init_kraken_paper.py` and as the `update_portfolio_balance` hook of the
+  public-paper dashboard — and builds a `PortfolioBootstrapContext` from
+  `self.config` / `self.portfolio` / `self.exchange` plus a `PortfolioBootstrapHooks`
+  from `_public_paper_mode()`, `_recover_paper_trade()` and the `iteration`
+  attribute, so tests that patch those bot attributes still take effect. The four
+  sibling initializers and the two balance helpers lost their delegators: nothing
+  outside the startup path called them, and `_currency_aliases` /
+  `_extract_cash_and_holdings` had no users outside the two methods. `_initialize_exchange()`
+  and `_load_market_info()` deliberately stayed in the class because tests patch
+  them at class level. The architecture ceiling was ratcheted from 2237 to 2120
+  lines. The old and new code were compared over 21 scenarios (the first Kraken
+  bootstrap, a restart that restores state and bumps the iteration, a zero balance,
+  a negative / `NaN` / missing Kraken balance, an unreachable exchange, a corrupt
+  and an invalid persisted state file, public-market paper data without a portfolio,
+  missing read-only credentials, an already initialized portfolio, the simulated
+  seed with existing cash / holdings / a preinitialized value, a dry-run restore,
+  dry-run seeding from the exchange, a failing dry-run exchange call, the live
+  refresh with `ZEUR`/`XBT` aliases, a live network error and a BTC base currency)
+  and produced byte-identical portfolio state, exchange calls, files written,
+  raised exceptions and log lines. All seven moved functions are also
+  AST-identical to the original after the documented `self.config` → `config`,
+  `self.exchange` → `context.exchange`, `self.iteration = …` → `hooks.set_iteration(…)`
+  and `logger` → `log` rewrites.
 - The `mypy` type check is clean: all 11 remaining `arg-type` errors across seven
   modules are gone and `mypy src/` now exits 0 (it previously reported 11 errors in
   7 files). Ten of them were `float()` calls on values from untyped `dict.get()` /
