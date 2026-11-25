@@ -40,6 +40,14 @@ Reason(s):
 This is the output of the quickstart below; `HOLD` exits with code 2.
 Scorecards based on real journals may return `GO`, `HOLD`, or `NO-GO`.
 
+## Monitoring Dashboard
+
+A lightweight, read-only web dashboard tracks paper-trading balances, daily net PnL, filter vetoes, and live Kraken market spreads without exposing order controls:
+
+<p align="center">
+  <img src="assets/dashboard-preview.png" alt="Paper Trading Monitoring Dashboard" width="100%">
+</p>
+
 ## Architecture
 
 ```mermaid

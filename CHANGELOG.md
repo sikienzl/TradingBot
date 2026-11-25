@@ -200,6 +200,12 @@ a version heading is assigned when a release is prepared.
   `tests/test_trade_journal.py`.
 ### Changed
 
+- The project logo is now a single balanced-scale emblem (Kraken/BTC on one pan,
+  the risk shield with a confirmed uptrend in the middle, the model graph on the
+  other) at 1376x768 with a transparent background; the previous 353x220 artwork
+  is kept as `assets/old-logo-transparent.png` for reference. `README.md` also
+  gained a **Monitoring Dashboard** section with a screenshot of the read-only
+  paper-trading dashboard (`assets/dashboard-preview.png`).
 - `read_ai_copilot_usage()` now exists once, in `src/export_pnl_metrics.py`. The
   HTTP exporter's near-identical 50-line copy is gone and
   `pnl_exporter.MetricsHandler` delegates to the shared implementation, which
