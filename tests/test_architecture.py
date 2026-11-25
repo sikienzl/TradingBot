@@ -48,6 +48,8 @@ LAYERS: dict[int, tuple[str, ...]] = {
         "entry_filters",
         "env_file",
         "execution_service",
+        "execution_owner",
+        "bot_runtime",
         "exit_policy",
         "export_pnl_metrics",
         "exporter_paths",

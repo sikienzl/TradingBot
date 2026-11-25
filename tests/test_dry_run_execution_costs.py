@@ -237,6 +237,9 @@ def test_live_trade_does_not_apply_costs(monkeypatch, tmp_path):
         def market(self, symbol):
             return {"limits": {"amount": {"min": 0}}}
 
+        def fetch_open_orders(self, symbol):
+            return []
+
         def create_market_buy_order(self, symbol, amount):
             assert symbol == "BTC/EUR"
             assert amount == 1
@@ -247,7 +250,7 @@ def test_live_trade_does_not_apply_costs(monkeypatch, tmp_path):
     assert bot._execute_trade("BTC", "buy", 100, 100)
     assert bot.portfolio.open_trades["BTC"]["amount_coin"] == 1
     assert bot.portfolio.open_trades["BTC"]["amount_base"] == 100
-    assert rows(tmp_path)[0]["execution_cost_mode"] == "live_exchange"
+    assert rows(tmp_path)[0]["execution_cost_mode"] == "live_fee_unknown"
 
 
 def test_live_buy_accounts_only_confirmed_partial_fill(monkeypatch, tmp_path):
@@ -256,6 +259,9 @@ def test_live_buy_accounts_only_confirmed_partial_fill(monkeypatch, tmp_path):
     class Exchange:
         def market(self, symbol):
             return {"limits": {"amount": {"min": 0}}}
+
+        def fetch_open_orders(self, symbol):
+            return []
 
         def create_market_buy_order(self, symbol, amount):
             assert symbol == "BTC/EUR"
@@ -289,6 +295,9 @@ def test_live_buy_network_failure_does_not_mutate_portfolio(monkeypatch, tmp_pat
         def market(self, symbol):
             return {"limits": {"amount": {"min": 0}}}
 
+        def fetch_open_orders(self, symbol):
+            return []
+
         def create_market_buy_order(self, symbol, amount):
             raise ccxt.NetworkError("exchange unavailable")
 
@@ -316,6 +325,9 @@ def test_live_buy_fetch_order_outage_does_not_account_unconfirmed_fill(
     class Exchange:
         def market(self, symbol):
             return {"limits": {"amount": {"min": 0}}}
+
+        def fetch_open_orders(self, symbol):
+            return []
 
         def create_market_buy_order(self, symbol, amount):
             return {"id": "unknown-buy", "status": "open", "amount": amount}

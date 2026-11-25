@@ -43,17 +43,23 @@ class _ExchangeStub:
         min_amount: float | None = None,
         buy_order: dict[str, Any] | None = None,
         sell_order: dict[str, Any] | None = None,
+        open_orders: list[dict[str, Any]] | None = None,
         order_error: Exception | None = None,
     ) -> None:
         self.min_amount = min_amount
         self.buy_order = {"id": "buy-1", "status": "closed"} if buy_order is None else buy_order
         self.sell_order = {"id": "sell-1", "status": "closed"} if sell_order is None else sell_order
+        self.open_orders = open_orders or []
         self.order_error = order_error
         self.calls: list[tuple[Any, ...]] = []
 
     def market(self, symbol: str) -> dict[str, Any]:
         self.calls.append(("market", symbol))
         return {"limits": {"amount": {"min": self.min_amount}}}
+
+    def fetch_open_orders(self, symbol: str) -> list[dict[str, Any]]:
+        self.calls.append(("open_orders", symbol))
+        return self.open_orders
 
     def create_market_buy_order(self, symbol: str, amount: float) -> dict[str, Any]:
         self.calls.append(("buy", symbol, amount))
@@ -76,6 +82,7 @@ class _Recorder:
         self.fill = fill
         self.fill_error = fill_error
         self.events: list[Any] = []
+        self.journal_rows: list[dict[str, Any]] = []
 
     def confirm_fill(self, order, symbol, requested_amount, fallback_price):
         self.events.append(("confirm_fill", order.get("id")))
@@ -84,8 +91,8 @@ class _Recorder:
         assert self.fill is not None
         return self.fill
 
-    def record_close_performance(self, entry_trade, average, sold_amount):
-        self.events.append(("close_performance", average, sold_amount))
+    def record_close_performance(self, entry_trade, average, sold_amount, **kwargs):
+        self.events.append(("close_performance", average, sold_amount, kwargs))
         return 5.0, 10.0, 60.0
 
     def trade_excursion_metrics(self, entry_trade):
@@ -93,6 +100,7 @@ class _Recorder:
         return 1.5, -0.5
 
     def append_trade_journal(self, row):
+        self.journal_rows.append(row)
         self.events.append(("journal", row["action"], row["price"]))
         return row
 
@@ -218,7 +226,10 @@ def test_real_buy_accounts_the_confirmed_fill():
     )
 
     assert executed is True
-    assert exchange.calls == [("market", "BTC/EUR"), ("buy", "BTC/EUR", 0.5)]
+    assert exchange.calls == [
+        ("market", "BTC/EUR"), ("open_orders", "BTC/EUR"),
+        ("buy", "BTC/EUR", 0.5),
+    ]
     trade = portfolio.open_trades["BTC"]
     assert trade["amount_coin"] == 0.5
     assert trade["amount_base"] == 50.0
@@ -231,6 +242,28 @@ def test_real_buy_accounts_the_confirmed_fill():
         ("journal", "buy", 100.0),
         ("balance",),
     ]
+
+
+def test_real_buy_includes_reported_quote_fee_in_entry_basis():
+    config = _Config()
+    portfolio = _portfolio()
+    recorder = _Recorder(fill=(0.5, 100.0, 50.0))
+    exchange = _ExchangeStub(buy_order={
+        "id": "buy-fee", "status": "closed",
+        "fees": [{"cost": 0.2, "currency": "EUR"}],
+    })
+
+    executed = execute_real_trade(
+        exchange, config, portfolio, _performance(), recorder.real_hooks(),
+        "BTC", "buy", 100.0, 50.0,
+    )
+
+    assert executed is True
+    assert portfolio.open_trades["BTC"]["amount_base"] == pytest.approx(50.2)
+    assert portfolio.open_trades["BTC"]["entry_fee_known"] is True
+    assert recorder.journal_rows[0]["fee_base"] == pytest.approx(0.2)
+    assert recorder.journal_rows[0]["amount_base"] == pytest.approx(50.2)
+    assert recorder.journal_rows[0]["execution_cost_mode"] == "live_exchange"
 
 
 def test_real_buy_without_confirmable_fill_leaves_the_portfolio_untouched():
@@ -296,6 +329,56 @@ def test_real_sell_closes_the_position_completely():
     assert "BTC" not in portfolio.open_trades
 
 
+def test_real_sell_uses_reported_quote_fee_for_net_proceeds():
+    portfolio = _portfolio()
+    portfolio.holdings["BTC"] = 1.0
+    portfolio.open_trades["BTC"] = {
+        "buy_price": 90.0, "amount_coin": 1.0, "amount_base": 90.2,
+        "entry_fee_known": True,
+    }
+    recorder = _Recorder(fill=(1.0, 110.0, 110.0))
+    exchange = _ExchangeStub(sell_order={
+        "id": "sell-fee", "status": "closed",
+        "fees": [{"cost": 0.22, "currency": "EUR"}],
+    })
+
+    executed = execute_real_trade(
+        exchange, _Config(), portfolio, _performance(), recorder.real_hooks(),
+        "BTC", "sell", 110.0, 110.0,
+    )
+
+    assert executed is True
+    close_call = next(event for event in recorder.events if event[0] == "close_performance")
+    assert close_call[3]["net_proceeds"] == pytest.approx(109.78)
+    assert recorder.journal_rows[0]["net_pnl_base"] == pytest.approx(5.0)
+    assert recorder.journal_rows[0]["fee_base"] == pytest.approx(0.22)
+
+
+def test_real_sell_does_not_label_unknown_fee_pnl_as_net():
+    portfolio = _portfolio()
+    portfolio.holdings["BTC"] = 1.0
+    portfolio.open_trades["BTC"] = {
+        "buy_price": 90.0, "amount_coin": 1.0, "amount_base": 90.0,
+    }
+    recorder = _Recorder(fill=(1.0, 110.0, 110.0))
+    exchange = _ExchangeStub(sell_order={
+        "id": "sell-fee-unknown", "status": "closed",
+        "fees": [{"cost": 0.01, "currency": "KCS"}],
+    })
+
+    executed = execute_real_trade(
+        exchange, _Config(), portfolio, _performance(), recorder.real_hooks(),
+        "BTC", "sell", 110.0, 110.0,
+    )
+
+    assert executed is True
+    row = recorder.journal_rows[0]
+    assert row["pnl_base"] == ""
+    assert row["net_pnl_base"] == ""
+    assert row["execution_cost_mode"] == "live_fee_unknown"
+    assert '"currency": "KCS"' in row["exchange_fees"]
+
+
 def test_real_sell_without_holdings_is_refused_before_the_order():
     recorder = _Recorder(fill=(1.0, 110.0, 110.0))
     exchange = _ExchangeStub()
@@ -306,7 +389,22 @@ def test_real_sell_without_holdings_is_refused_before_the_order():
     )
 
     assert executed is False
-    assert exchange.calls == [("market", "BTC/EUR")]
+    assert exchange.calls == [
+        ("market", "BTC/EUR"), ("open_orders", "BTC/EUR")]
+    assert recorder.events == []
+
+
+def test_real_trade_refuses_to_order_when_exchange_has_open_orders():
+    exchange = _ExchangeStub(open_orders=[{"id": "pending"}])
+    recorder = _Recorder(fill=(0.5, 100.0, 50.0))
+
+    executed = execute_real_trade(
+        exchange, _Config(), _portfolio(), _performance(), recorder.real_hooks(),
+        "BTC", "buy", 100.0, 50.0,
+    )
+
+    assert executed is False
+    assert exchange.calls == [("market", "BTC/EUR"), ("open_orders", "BTC/EUR")]
     assert recorder.events == []
 
 
@@ -360,6 +458,27 @@ def test_real_trade_requires_an_exchange(caplog):
 
     assert executed is False
     assert "without an exchange" in caplog.text
+
+
+@pytest.mark.parametrize("action", ["buy", "sell"])
+def test_kill_switch_blocks_live_orders_before_exchange_call(tmp_path, action):
+    kill_switch = tmp_path / "STOP_TRADING"
+    kill_switch.touch()
+    config = _Config()
+    config.kill_switch_file = str(kill_switch)
+    portfolio = _portfolio()
+    portfolio.holdings["BTC"] = 1.0
+    exchange = _ExchangeStub()
+    recorder = _Recorder(fill=(0.5, 100.0, 50.0))
+
+    executed = execute_real_trade(
+        exchange, config, portfolio, _performance(), recorder.real_hooks(),
+        "BTC", action, 100.0, 50.0,
+    )
+
+    assert executed is False
+    assert exchange.calls == []
+    assert recorder.events == []
 
 
 # ---------------------------------------------------------------------------

@@ -160,6 +160,12 @@ class BotConfig:
         # Amount in base currency per trade
 
     def _load_risk_management_settings(self) -> None:
+        self.kill_switch_file = _env_str(
+            'TRADING_KILL_SWITCH_FILE', '.trading_kill_switch')
+        self.execution_lock_file = _env_str(
+            'TRADING_EXECUTION_LOCK_FILE', '.trading_execution.lock')
+        self.live_portfolio_state_file = _env_str(
+            'LIVE_PORTFOLIO_STATE_FILE', '.live_portfolio_state.json')
         self.trade_amount = float(os.getenv('TRADE_AMOUNT', str(20)))
         self.portfolio_trade_amount_multipliers = _env_threshold_float_pairs(
             'PORTFOLIO_TRADE_AMOUNT_MULTIPLIERS',

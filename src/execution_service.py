@@ -9,8 +9,10 @@ journal, the performance counters and the cooldown bookkeeping.
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -59,7 +61,7 @@ def order_fill_details(
     return filled, average, cost
 
 
-def confirm_order_fill(
+def confirm_order_fill_record(
     exchange: Any,
     order: dict[str, Any],
     symbol: str,
@@ -67,7 +69,7 @@ def confirm_order_fill(
     fallback_price: float,
     *,
     logger: logging.Logger = logger,
-) -> tuple[float, float, float]:
+) -> tuple[float, float, float, dict[str, Any]]:
     """Resolve an order response into a trustworthy ``(filled, average, cost)``.
 
     A non-terminal response is cancelled and re-read; only a terminal order is
@@ -80,7 +82,9 @@ def confirm_order_fill(
     terminal_statuses = TERMINAL_ORDER_STATUSES
     if status in terminal_statuses:
         try:
-            return order_fill_details(order, requested_amount, fallback_price)
+            filled, average, cost = order_fill_details(
+                order, requested_amount, fallback_price)
+            return filled, average, cost, order
         except (TypeError, ValueError) as exc:
             order_id = order.get("id")
             if not order_id:
@@ -123,11 +127,15 @@ def confirm_order_fill(
         raise error
 
     try:
-        return order_fill_details(refreshed_order, requested_amount, fallback_price)
+        filled, average, cost = order_fill_details(
+            refreshed_order, requested_amount, fallback_price)
+        return filled, average, cost, refreshed_order
     except (TypeError, ValueError) as exc:
         if status in terminal_statuses:
             try:
-                return order_fill_details(order, requested_amount, fallback_price)
+                filled, average, cost = order_fill_details(
+                    order, requested_amount, fallback_price)
+                return filled, average, cost, order
             except (TypeError, ValueError):
                 pass
         else:
@@ -137,6 +145,21 @@ def confirm_order_fill(
         raise ValueError(
             f"Order {order_id} has no usable confirmed fill details."
         ) from exc
+
+
+def confirm_order_fill(
+    exchange: Any,
+    order: dict[str, Any],
+    symbol: str,
+    requested_amount: float,
+    fallback_price: float,
+    *,
+    logger: logging.Logger = logger,
+) -> tuple[float, float, float]:
+    """Resolve a confirmed fill while preserving the original three-value API."""
+    filled, average, cost, _ = confirm_order_fill_record(
+        exchange, order, symbol, requested_amount, fallback_price, logger=logger)
+    return filled, average, cost
 
 
 @dataclass(frozen=True)
@@ -154,6 +177,55 @@ class RealTradeHooks:
     register_buy_timestamp: Callable[[], None]
     register_sell_timestamp: Callable[[str], None]
     update_portfolio_balance: Callable[[], None]
+    confirm_fill_with_order: Callable[..., tuple[float, float, float, dict[str, Any]]] | None = None
+
+
+def _confirm_fill(
+    hooks: RealTradeHooks,
+    order: dict[str, Any],
+    symbol: str,
+    requested_amount: float,
+    fallback_price: float,
+) -> tuple[float, float, float, dict[str, Any]]:
+    if hooks.confirm_fill_with_order is not None:
+        return hooks.confirm_fill_with_order(
+            order, symbol, requested_amount, fallback_price)
+    filled, average, cost = hooks.confirm_fill(
+        order, symbol, requested_amount, fallback_price)
+    return filled, average, cost, order
+
+
+def _fee_amount_in_quote(
+    order: dict[str, Any],
+    quote_currency: str,
+    traded_asset: str,
+    average_price: float,
+) -> tuple[float | None, str]:
+    fees = order.get('fees')
+    if fees is None:
+        fee = order.get('fee')
+        fees = [fee] if isinstance(fee, dict) else []
+    if not isinstance(fees, list) or not fees:
+        return None, ''
+
+    total = 0.0
+    for fee in fees:
+        if not isinstance(fee, dict):
+            return None, json.dumps(fees, sort_keys=True, default=str)
+        try:
+            amount = float(fee['cost'])
+        except (KeyError, TypeError, ValueError):
+            return None, json.dumps(fees, sort_keys=True, default=str)
+        currency = str(fee.get('currency') or '').upper()
+        if not math.isfinite(amount) or amount < 0 or not currency:
+            return None, json.dumps(fees, sort_keys=True, default=str)
+        if currency == quote_currency.upper():
+            total += amount
+        elif currency == traded_asset.upper():
+            total += amount * average_price
+        else:
+            return None, json.dumps(fees, sort_keys=True, default=str)
+    return total, json.dumps(fees, sort_keys=True, default=str)
 
 
 def execute_real_trade(
@@ -174,6 +246,15 @@ def execute_real_trade(
     logger: logging.Logger = logger,
 ) -> bool:
     """Live exchange trade execution (ccxt market orders)."""
+    kill_switch_file = getattr(config, 'kill_switch_file', '.trading_kill_switch')
+    if os.path.lexists(kill_switch_file):
+        logger.critical(
+            "Trading kill switch is active at %s; refusing %s order for %s.",
+            kill_switch_file,
+            action,
+            coin,
+        )
+        return False
     if exchange is None:
         logger.error(
             "Real trade cannot be executed in simulation mode or without an exchange.")
@@ -187,6 +268,22 @@ def execute_real_trade(
         if amount_in_base_currency < min_amount_base and min_amount_base > 0:
             logger.warning(
                 f"Trade amount {amount_in_base_currency:.2f} {config.base_currency} for {coin} is below the minimum of {min_amount_base:.2f} {config.base_currency}. Trade not executed.")
+            return False
+
+        try:
+            open_orders = exchange.fetch_open_orders(symbol)
+        except (AttributeError, ccxt.BaseError) as exc:
+            logger.error(
+                "Cannot verify open orders for %s; refusing execution: %s",
+                symbol,
+                exc,
+            )
+            return False
+        if not isinstance(open_orders, list) or open_orders:
+            logger.error(
+                "Open or unrecognized orders exist for %s; refusing another order.",
+                symbol,
+            )
             return False
 
         if action == "buy":
@@ -255,23 +352,27 @@ def _execute_real_buy(
     order = exchange.create_market_buy_order(
         symbol, amount_in_base_currency / price)
     try:
-        filled, average, cost = hooks.confirm_fill(
-            order, symbol, amount_in_base_currency / price, price
+        filled, average, cost, confirmed_order = _confirm_fill(
+            hooks, order, symbol, amount_in_base_currency / price, price
         )
     except (TypeError, ValueError) as exc:
         logger.error("Unable to confirm BUY fill for %s: %s", coin, exc)
         return False
     logger.info(
         f"✅ REAL TRADE (BUY): {filled:.4f} {coin} @ {average:.4f} {config.base_currency} (cost: {cost:.2f} {config.base_currency}, ID: {order.get('id', 'n/a')})")
+    fee_base, exchange_fees = _fee_amount_in_quote(
+        confirmed_order, config.base_currency, coin, average)
+    entry_cost = cost + fee_base if fee_base is not None else cost
     portfolio.add_trade(
         coin,
         average,
         filled,
-        cost,
+        entry_cost,
         signal_source=signal_source,
         signal_confidence=signal_confidence,
         recommendation=recommendation,
     )
+    portfolio.open_trades[coin]['entry_fee_known'] = fee_base is not None
     performance['buys'] += 1
     performance['by_source'][signal_source]['buys'] += 1
     hooks.register_buy_timestamp()
@@ -280,7 +381,11 @@ def _execute_real_buy(
         'action': 'buy',
         'price': average,
         'amount_coin': filled,
-        'amount_base': cost,
+        'amount_base': entry_cost,
+        'fee_base': fee_base if fee_base is not None else '',
+        'exchange_fees': exchange_fees,
+        'entry_cost_mode': 'live_exchange' if fee_base is not None else 'live_fee_unknown',
+        'execution_cost_mode': 'live_exchange' if fee_base is not None else 'live_fee_unknown',
         'signal_source': signal_source,
         'signal_confidence': signal_confidence,
         'recommendation': recommendation,
@@ -318,8 +423,8 @@ def _execute_real_sell(
     order = exchange.create_market_sell_order(
         symbol, amount_in_base_currency / price)
     try:
-        sold_amount_coin, average, cost = hooks.confirm_fill(
-            order, symbol, amount_in_base_currency / price, price
+        sold_amount_coin, average, cost, confirmed_order = _confirm_fill(
+            hooks, order, symbol, amount_in_base_currency / price, price
         )
     except (TypeError, ValueError) as exc:
         logger.error("Unable to confirm SELL fill for %s: %s", coin, exc)
@@ -328,6 +433,9 @@ def _execute_real_sell(
         f"✅ REAL TRADE (SELL): {sold_amount_coin:.4f} {coin} @ {average:.4f} {config.base_currency} (proceeds: {cost:.2f} {config.base_currency}, ID: {order.get('id', 'n/a')})")
 
     entry_trade = portfolio.open_trades.get(coin, {})
+    fee_base, exchange_fees = _fee_amount_in_quote(
+        confirmed_order, config.base_currency, coin, average)
+    entry_fee_known = entry_trade.get('entry_fee_known', False)
     original_amount_coin = float(
         entry_trade.get('amount_coin', amount_in_base_currency / price))
     remaining_open_amount = max(
@@ -336,8 +444,16 @@ def _execute_real_sell(
         remaining_open_amount / original_amount_coin
         if original_amount_coin > 0 else 0.0
     )
-    pnl_base, pnl_pct, hold_seconds = hooks.record_close_performance(
-        entry_trade, average, sold_amount_coin)
+    gross_pnl_base = (average - float(entry_trade.get('buy_price', 0.0))) * sold_amount_coin
+    net_accounting_known = fee_base is not None and entry_fee_known
+    if net_accounting_known:
+        pnl_base, pnl_pct, hold_seconds = hooks.record_close_performance(
+            entry_trade, average, sold_amount_coin,
+            net_proceeds=cost - (fee_base if fee_base is not None else 0.0),
+        )
+    else:
+        pnl_base, pnl_pct, hold_seconds = hooks.record_close_performance(
+            entry_trade, average, sold_amount_coin)
     mfe_pct, mae_pct = hooks.trade_excursion_metrics(entry_trade)
     hooks.append_trade_journal({
         'coin': coin,
@@ -345,8 +461,13 @@ def _execute_real_sell(
         'price': average,
         'amount_coin': sold_amount_coin,
         'amount_base': cost,
-        'pnl_base': pnl_base,
-        'pnl_pct': pnl_pct,
+        'pnl_base': pnl_base if net_accounting_known else '',
+        'pnl_pct': pnl_pct if net_accounting_known else '',
+        'gross_pnl_base': gross_pnl_base,
+        'net_pnl_base': pnl_base if net_accounting_known else '',
+        'fee_base': fee_base if fee_base is not None else '',
+        'exchange_fees': exchange_fees,
+        'execution_cost_mode': 'live_exchange' if net_accounting_known else 'live_fee_unknown',
         'hold_seconds': hold_seconds,
         'mfe_pct': mfe_pct,
         'mae_pct': mae_pct,

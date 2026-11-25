@@ -8,14 +8,14 @@ The live cluster workload inspected is paper/shadow only.
 
 | # | Core area | Single Raspberry Pi | CM5 cluster |
 |---|---|---|---|
-| 1 | Data basis and model lifecycle | **[⚠️ Teilweise]** Chronological CatBoost split, purging and Walk-Forward exist; no paired versioned HEF/CPU export or rollback. | **[⚠️ Teilweise]** Hailo ONNX export and live HEF inference exist; compiler/promotion is separate and CPU/Hailo artifacts are not paired automatically. |
-| 2 | Decision pyramid and hardware fallback | **[⚠️ Teilweise]** Rules and optional CPU model work without Hailo; ATR gate exists, but no spread/min-volume first-stage gate and no backend fallback chain. | **[⚠️ Teilweise]** Remote Hailo is available and errors fail closed per candidate; no automatic CPU fallback or final LLM/news veto stage. |
-| 3 | News integration | **[⚠️ Teilweise]** Optional RSS/FNG research collector exists; no per-item `fetched_at`, durable deduplicated item store, or structured veto schema. | **[⚠️ Teilweise]** Same collector/runtime limitations; Hailo feature contract does not include news. |
-| 4 | Hard risk and kill switch | **[⚠️ Teilweise]** Position/risk gates, daily-loss threshold and loss-streak pause exist; no independent persistent emergency kill switch. | **[⚠️ Teilweise]** Same bot-level controls, but no cluster-wide switch or single-owner coordination is evidenced. |
-| 5 | Execution and costs | **[⚠️ Teilweise]** Dry-run costs and market-data retries exist; live exchange fees and spread are not fully included in accounting/approval. | **[⚠️ Teilweise]** Current cluster is paper/shadow; the same live-execution accounting gaps remain if enabled. |
-| 6 | Single-Pi vs cluster operations | **[⚠️ Teilweise]** Standalone service/state are supported, but no bot interprocess lock or full Kraken startup reconciliation. | **[⚠️ Teilweise]** Roles and tunnel are deployed, but no distributed bot lock/leader or duplicate-order prevention. |
-| 7 | Evaluation and scorecard | **[✅ Implementiert]** GO/HOLD/NO-GO and HOLD for insufficient data are implemented, with Pi systemd automation. | **[⚠️ Teilweise]** Scorecard code and monitoring rules exist, but the inspected cluster deployment does not show scorecard automation as part of its active bot topology. |
-| 8 | Monitoring and alerting | **[⚠️ Teilweise]** Read-only dashboard and Prometheus scorecard alerts are available but optional; no critical-error/kill-switch notification channel is configured here. | **[⚠️ Teilweise]** Read-only dashboard and shadow service are running on `.74`; alert coverage/receivers and Hailo-failure escalation remain incomplete. |
+| 1 | Data basis and model lifecycle | **[⚠️ Partial]** Chronological CatBoost split, purging and Walk-Forward exist; no paired versioned HEF/CPU export or rollback. | **[⚠️ Partial]** Hailo ONNX export and live HEF inference exist; compiler/promotion is separate and CPU/Hailo artifacts are not paired automatically. |
+| 2 | Decision pyramid and hardware fallback | **[⚠️ Partial]** Rules and optional CPU model work without Hailo; ATR gate exists, but no spread/min-volume first-stage gate and no backend fallback chain. | **[⚠️ Partial]** Remote Hailo is available and errors fail closed per candidate; no automatic CPU fallback or final LLM/news veto stage. |
+| 3 | News integration | **[⚠️ Partial]** Optional RSS/FNG research collector exists; no per-item `fetched_at`, durable deduplicated item store, or structured veto schema. | **[⚠️ Partial]** Same collector/runtime limitations; Hailo feature contract does not include news. |
+| 4 | Hard risk and kill switch | **[⚠️ Partial]** A persistent file kill switch now blocks live orders; daily anchor/loss-streak state remains process-local. | **[⚠️ Partial]** The file switch is host-local; no cluster-wide shared switch or distributed ownership is implemented. |
+| 5 | Execution and costs | **[⚠️ Partial]** Reported quote/traded-asset fees are journaled and net PnL stays blank when fees cannot be valued; spread gating is absent. | **[⚠️ Partial]** Same fee handling, but live exchange use is unvalidated and spread gating is absent. |
+| 6 | Single-Pi vs cluster operations | **[⚠️ Partial]** Local process lock, persisted live snapshot, startup balance comparison and open-order refusal are implemented; unknown holdings need manual reconciliation. | **[⚠️ Partial]** Same host-local safeguards, but no distributed lease or cross-node duplicate-order prevention. |
+| 7 | Evaluation and scorecard | **[✅ Implemented]** GO/HOLD/NO-GO and HOLD for insufficient data are implemented, with Pi systemd automation. | **[⚠️ Partial]** Scorecard code and monitoring rules exist, but the inspected cluster deployment does not show scorecard automation as part of its active bot topology. |
+| 8 | Monitoring and alerting | **[⚠️ Partial]** Read-only dashboard and Prometheus scorecard alerts are available but optional; no critical-error/kill-switch notification channel is configured here. | **[⚠️ Partial]** Read-only dashboard and shadow service are running on `.74`; alert coverage/receivers and Hailo-failure escalation remain incomplete. |
 
 ## Findings and evidence
 
@@ -81,10 +81,11 @@ evaluation. Add a validated schema containing `sentiment_score`, `event_risk`,
 
 `src.trading_bot.CryptoTradingBot._can_open_new_positions`,
 `_refresh_daily_anchor`, and close-performance bookkeeping enforce configured
-entry limits, daily-loss checks, cooldowns, and loss-streak pauses. Important
-risk state such as the daily anchor and loss streak is process-local. No
-independent persistent emergency kill switch that overrides all signal paths
-was found.
+entry limits, daily-loss checks, cooldowns, and loss-streak pauses.
+`src.execution_service.execute_real_trade` checks the persistent marker
+configured by `TRADING_KILL_SWITCH_FILE` immediately before all live orders.
+The daily anchor and loss-streak state remain process-local; the kill switch
+blocks both buys and sells.
 
 **Next:** Persist risk state and an operator-controlled kill-switch latch;
 evaluate it immediately before every order, fail closed on unreadable state,
@@ -94,11 +95,11 @@ and test restart persistence and precedence over rules, CPU, Hailo, and LLM.
 
 `src.dry_run_execution` models configurable fees and slippage. `src.market_data`
 retries transient market-data errors, and `src.execution_service` catches
-Kraken/CCXT exchange errors. Live order fill confirmation records quantity,
-average price, and cost, but `_execute_real_buy`/`_execute_real_sell` do not
-carry exchange-reported fee data into the journal; live close performance is
-computed without net proceeds/fees. No mandatory spread ceiling or separate
-maker/taker schedule is enforced before a live order.
+Kraken/CCXT exchange errors. Live fill confirmation preserves the final order
+record and includes quote/traded-asset fees in entry basis and net sell proceeds
+when they can be converted. Unknown fee assets are preserved and leave journal
+net-PnL fields blank. No mandatory spread ceiling or separate maker/taker
+schedule is enforced before a live order.
 
 **Next:** Account using exchange fill/fee records, preserve partial fills, and
 include spread and fee estimates in pre-trade approval. Add timeout/idempotency
@@ -106,12 +107,13 @@ tests that prove a retry cannot create a duplicate order.
 
 ### 6. Runtime modes, locking, and reconciliation
 
-The Pi deployment packages the bot as a standalone service. Portfolio state
-uses atomic file replacement in `src.portfolio.Portfolio.save_state`, but
-`docs/USAGE.md` explicitly states there is no interprocess lock. Live balance
-refresh is not a complete reconciliation of local positions, open orders, and
-Kraken fills before new entries. The market recorder has its own file lock;
-that does not protect bot state.
+The Pi deployment packages the bot as a standalone service. Live mode holds a
+local `fcntl` process lock, persists a strict portfolio snapshot, compares it
+with Kraken free balances at startup, and refuses startup on open orders or
+untracked holdings. Every order checks for an existing open order. This does
+not reconstruct positions from Kraken fills; operators must reconcile
+mismatches and establish a trusted snapshot. The market recorder has a
+separate file lock.
 
 The inspected cluster separates `.74` bot/paper workloads from `.75` Hailo
 inference through a restricted localhost SSH tunnel. The current shadow run is
@@ -120,10 +122,10 @@ preventing two bot instances from submitting orders. `cluster-starter/` is
 generic infrastructure and its sample inventory does not map the production
 addresses.
 
-**Next:** Require one execution owner per Kraken account. Add a local lock for
-the Pi and a distributed lease/fencing token for multi-node execution. On
-startup, reconcile open orders and balances with Kraken before enabling buys;
-quarantine ambiguous state for operator review.
+**Next:** Require one execution owner per Kraken account. The Pi-local lock is
+implemented; add a distributed lease/fencing token before enabling more than
+one cluster bot. Startup balance/open-order checks are implemented, but exact
+fill-to-position reconstruction remains an operator reconciliation step.
 
 ### 7. Evaluation and scorecard
 

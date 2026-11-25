@@ -172,8 +172,10 @@ and use its matching state and journal paths. See the
 for initialization and isolation.
 
 Run **only one writer** for a portfolio and journal, including during recovery.
-There is no interprocess lock: another bot or process must not modify either
-file. Before a paper trade is committed, the bot durably writes an intent next
+The bot holds a non-blocking local process lock (`TRADING_EXECUTION_LOCK_FILE`,
+default `.trading_execution.lock`) for its full runtime; another local process
+will refuse to start. This is not distributed cluster coordination. Before a
+paper trade is committed, the bot durably writes an intent next
 to the portfolio as `.portfolio_state.json.trade-transaction.json`. The intent
 contains the resulting portfolio, the exact journal row, and a hash of the
 preceding journal. The bot then writes and syncs the journal, atomically saves
@@ -187,6 +189,36 @@ damaged intent, causes recovery to fail closed. Keep all files intact for
 investigation; do not delete the intent or edit the journal to force a restart.
 If recovery cannot complete, reconcile the portfolio and journal from trusted
 backups before resuming.
+
+#### Live execution safety
+
+Live mode uses a persistent portfolio snapshot at
+`LIVE_PORTFOLIO_STATE_FILE` (default `.live_portfolio_state.json`). On startup,
+the bot requires a successful Kraken open-order query and compares the saved
+cash and holdings against Kraken free balances before proceeding. It refuses to
+start if orders are open, the saved state is corrupt or mismatched, or crypto
+balances exist without a reconciled snapshot. For an existing account, review
+positions and fills manually and establish a trusted snapshot before enabling
+live orders; never copy a paper snapshot into this path. Snapshot write
+failures stop live execution.
+
+Before each live order, the bot queries open orders for that market again and
+refuses to submit while any order is open or the query fails. It does not
+blindly retry a market-order timeout because the first request may have been
+accepted; reconcile the order and account state before restarting.
+
+Create the file named by `TRADING_KILL_SWITCH_FILE` (default
+`.trading_kill_switch`) to block all live buys and sells. Remove it only after
+reviewing exchange orders, balances, and local state. The file is independent
+of model and signal decisions. Keep it and
+`TRADING_EXECUTION_LOCK_FILE` on persistent local storage with restrictive
+ownership; do not remove the lock file while the bot is running.
+
+Live trade rows include exchange-reported fees when CCXT reports them in the
+quote currency or traded asset. A fee in another asset is preserved in
+`exchange_fees`, while net-PnL fields remain blank rather than being presented
+as net. Resolve those fees before using the affected rows for performance
+decisions.
 
 New entries exclude `EURC` by default through `EXCLUDED_COINS`; overriding
 that list is configurable and does not liquidate existing holdings.

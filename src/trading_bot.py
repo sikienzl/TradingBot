@@ -5,7 +5,6 @@ import math
 import os
 import signal
 import sys
-import time
 import uuid
 from collections import defaultdict
 from collections.abc import Container
@@ -56,6 +55,7 @@ from src.bot_bootstrap import (
     validate_startup_config as _bootstrap_validate_startup_config,
 )
 from src.bot_config import BotConfig
+from src.bot_runtime import run_bot as _run_bot
 from src.coin_analysis import (
     analyze_coin as _coin_analysis_analyze_coin,
 )
@@ -141,6 +141,7 @@ from src.entry_selection import (
 from src.entry_selection import (
     select_entry_candidate_shortlist as _entry_selection_select_shortlist,
 )
+from src.execution_owner import ExecutionOwnerLock
 from src.execution_service import (
     EntryHooks as _EntryHooks,
 )
@@ -149,6 +150,9 @@ from src.execution_service import (
 )
 from src.execution_service import (
     confirm_order_fill as _service_confirm_order_fill,
+)
+from src.execution_service import (
+    confirm_order_fill_record as _service_confirm_order_fill_record,
 )
 from src.execution_service import (
     execute_real_trade as _service_execute_real_trade,
@@ -320,12 +324,17 @@ class CryptoTradingBot:
     def __init__(self, config: BotConfig):
         self.config = config
         _bootstrap_validate_startup_config(config)
+        self._execution_owner_lock = ExecutionOwnerLock(
+            getattr(config, 'execution_lock_file', '.trading_execution.lock'))
         self.run_id = os.getenv('TRADING_RUN_ID', '').strip() or uuid.uuid4().hex
         self.config_hash = _config_fingerprint(config)
         self._journal_fields = list(_TRADE_JOURNAL_FIELDS)
         self._paper_trade_failed = False
         self.portfolio = Portfolio(config.base_currency)
-        self.portfolio.strict_persistence = config.simulation_initial_balance_from_kraken
+        self.portfolio.strict_persistence = (
+            config.simulation_initial_balance_from_kraken or not config.dry_run)
+        if not config.dry_run:
+            self.portfolio.state_file = config.live_portfolio_state_file
         self.analytics_writer = PostgresAnalyticsWriter(config)
         self.iteration = 0
         self.performance: dict[str, Any] = {
@@ -1452,6 +1461,18 @@ class CryptoTradingBot:
             logger=logger,
         )
 
+    def _confirm_order_fill_record(
+        self,
+        order: dict[str, Any],
+        symbol: str,
+        requested_amount: float,
+        fallback_price: float,
+    ) -> tuple[float, float, float, dict[str, Any]]:
+        return _service_confirm_order_fill_record(
+            self.exchange, order, symbol, requested_amount, fallback_price,
+            logger=logger,
+        )
+
     def _execute_trade(
         self,
         coin: str,
@@ -1694,6 +1715,7 @@ class CryptoTradingBot:
             self.performance,
             _RealTradeHooks(
                 confirm_fill=self._confirm_order_fill,
+                confirm_fill_with_order=self._confirm_order_fill_record,
                 record_close_performance=self._record_close_performance,
                 trade_excursion_metrics=self._trade_excursion_metrics,
                 append_trade_journal=self._append_trade_journal,
@@ -1953,82 +1975,7 @@ class CryptoTradingBot:
 
     def run(self):
         """Main loop of the bot."""
-        self._log_startup_banner()
-        try:
-            while True:
-                self.iteration += 1
-                iteration_started = time.monotonic()
-                logger.info(
-                    f"\n🕒 Iteration {self.iteration} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-                # Step 1: Update balance and portfolio
-                self._update_portfolio_balance()
-                if self.config.simulation_initial_balance_from_kraken:
-                    self.portfolio.simulation_iteration = self.iteration
-
-                # Step 2: Fetch market data (prices, volumes)
-                current_market_data = self._get_market_data()
-
-                if not current_market_data:
-                    logger.error(
-                        "No market data available. Skipping this iteration.")
-                    time.sleep(60)  # Brief pause before retrying
-                    continue
-
-                portfolio_value_live = self.portfolio.get_value(
-                    {coin: data['price'] for coin, data in current_market_data.items()})
-                self._refresh_daily_anchor(portfolio_value_live)
-
-                # Step 3: Run market analysis and identify top recommendations
-                market_analysis = self._analyze_markets(
-                    current_market_data,
-                    extra_coins=list(self.portfolio.open_trades.keys())
-                )
-
-                top_buy_recommendations = self._select_entry_candidates(
-                    market_analysis)
-
-                # Step 4: Exit logic - close positions on SELL signals
-                self._execute_signal_exits(current_market_data, market_analysis)
-
-                # Step 5: Trade logic - open new positions
-                self._open_new_positions(
-                    current_market_data,
-                    market_analysis,
-                    top_buy_recommendations,
-                    portfolio_value_live,
-                )
-                # Step 6: Monitor open trades (stop-loss, take-profit, time, signals)
-                if self.portfolio.open_trades:
-                    logger.info(
-                        "💼 Monitoring %d open trades after %.1fs of iteration work...",
-                        len(self.portfolio.open_trades),
-                        time.monotonic() - iteration_started,
-                    )
-                    self._manage_open_trades(
-                        current_market_data, market_analysis)
-
-                # Step 7: Display portfolio status
-                self._log_portfolio_status(current_market_data, market_analysis)
-                if self.iteration % max(1, self.config.performance_report_every) == 0:
-                    self._log_performance_report()
-
-                # Step 8: Optional external AI co-pilot(s) (rate- and budget-limited)
-                if self.config.ai_copilot_enabled or self.config.ai_copilot_benchmark_enabled:
-                    ai_snapshot = self._ai_copilot_snapshot()
-                    self._maybe_run_ai_copilot(ai_snapshot)
-                    self._maybe_run_ai_copilot_benchmark(ai_snapshot)
-
-                # Step 9: Wait
-                logger.info(
-                    f"⏳ Next analysis in {self.config.check_interval} seconds...")
-                time.sleep(self.config.check_interval)
-
-        except KeyboardInterrupt:
-            logger.info("\n🛑 Bot stopping...")
-        finally:
-            self.analytics_writer.close()
-            logger.info("👋 Bot stopped")
+        _run_bot(self, logger)
 
 
 if __name__ == "__main__":

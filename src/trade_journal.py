@@ -36,7 +36,7 @@ TRADE_JOURNAL_FIELDS = [
     'signal_source', 'signal_confidence', 'recommendation', 'reason', 'dry_run',
     'run_id', 'config_hash', 'mfe_pct', 'mae_pct',
     'execution_cost_mode', 'entry_cost_mode', 'reference_price', 'fee_base',
-    'slippage_base', 'gross_pnl_base', 'net_pnl_base',
+    'slippage_base', 'gross_pnl_base', 'net_pnl_base', 'exchange_fees',
 ]
 
 

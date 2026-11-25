@@ -217,17 +217,77 @@ def refresh_live_portfolio_balance(
     """Fetch the current balance from the exchange (live trading mode)."""
     config = context.config
     portfolio = context.portfolio
+    initial_reconciliation = portfolio.last_update is None
+    state_exists = os.path.lexists(portfolio.state_file)
+    state_restored = portfolio.load_state() if initial_reconciliation and state_exists else False
+    if initial_reconciliation and state_exists and not state_restored:
+        raise RuntimeError("Cannot restore live portfolio state; refusing to continue")
+    expected = (
+        {'cash': portfolio.cash, **portfolio.holdings}
+        if state_restored else None
+    )
+
+    if initial_reconciliation:
+        fetch_open_orders = getattr(context.exchange, 'fetch_open_orders', None)
+        if not callable(fetch_open_orders):
+            raise RuntimeError("Cannot reconcile Kraken open orders; refusing to continue")
+        try:
+            open_orders = fetch_open_orders()
+        except ccxt.BaseError as e:
+            raise RuntimeError(
+                "Cannot reconcile Kraken open orders; refusing to continue"
+            ) from e
+        if not isinstance(open_orders, list) or open_orders:
+            raise RuntimeError(
+                "Kraken has open or unrecognized orders; refusing to continue"
+            )
+
     # Live trading mode: always fetch current balance
     try:
         balance = context.exchange.fetch_balance()
         free_balances = balance.get('free', {})
-        portfolio.cash, portfolio.holdings = extract_cash_and_holdings(
+        if not isinstance(free_balances, dict):
+            raise TypeError("Kraken returned an invalid free-balance payload")
+        actual_cash, actual_holdings = extract_cash_and_holdings(
             free_balances, config.base_currency)
+        balances = [actual_cash, *actual_holdings.values()]
+        if any(not math.isfinite(value) or value < 0 for value in balances):
+            raise ValueError("Kraken returned invalid live balances")
+        if initial_reconciliation:
+            if state_restored and expected is not None:
+                actual = {'cash': actual_cash, **actual_holdings}
+                if not _balances_match(expected, actual):
+                    raise RuntimeError(
+                        "Persisted portfolio does not match Kraken balances; refusing to continue"
+                    )
+            elif actual_holdings:
+                raise RuntimeError(
+                    "Kraken has crypto balances but no reconciled live portfolio state; "
+                    "refusing to continue"
+                )
+        portfolio.cash = actual_cash
+        portfolio.holdings = actual_holdings
         portfolio.last_update = datetime.now()
+        if portfolio.strict_persistence:
+            portfolio.save_state()
         log.info(
             f"Portfolio balance updated. Cash: {portfolio.cash:.2f} {config.base_currency}, Holdings: {portfolio.holdings}")
-    except (ccxt.NetworkError, ccxt.ExchangeError) as e:
-        log.error(
-            f"Error fetching/updating account balance: {e}")
+    except RuntimeError:
+        raise
     except ccxt.BaseError as e:
-        log.error(f"Error fetching/updating account balance: {e}")
+        raise RuntimeError(
+            "Cannot verify live Kraken balances; refusing to continue"
+        ) from e
+    except (AttributeError, TypeError, ValueError) as e:
+        raise RuntimeError(
+            "Kraken returned invalid live balances; refusing to continue"
+        ) from e
+
+
+def _balances_match(expected: dict[str, float], actual: dict[str, float]) -> bool:
+    if expected.keys() != actual.keys():
+        return False
+    return all(
+        math.isclose(expected[key], actual[key], rel_tol=1e-6, abs_tol=1e-8)
+        for key in expected
+    )

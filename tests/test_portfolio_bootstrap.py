@@ -40,6 +40,10 @@ class FakeExchange:
             raise self.error
         return self.payload
 
+    def fetch_open_orders(self):
+        self.calls.append("fetch_open_orders")
+        return []
+
 
 def _config(**overrides):
     base = {
@@ -458,6 +462,9 @@ def test_dry_run_exchange_error_only_warns(tmp_path, caplog):
 
 def test_live_refresh_updates_cash_and_holdings(tmp_path, caplog):
     portfolio = _portfolio(tmp_path)
+    portfolio.cash = 120.5
+    portfolio.holdings = {"XBT": 1.5, "ADA": 4.0}
+    assert portfolio.save_state()
     exchange = FakeExchange({"free": {"ZEUR": 120.5, "XBT": 1.5, "ADA": 4.0}})
     with caplog.at_level(logging.INFO):
         refresh_live_portfolio_balance(
@@ -468,18 +475,56 @@ def test_live_refresh_updates_cash_and_holdings(tmp_path, caplog):
     assert "Portfolio balance updated" in caplog.text
 
 
+def test_live_refresh_refuses_untracked_crypto_balances(tmp_path):
+    portfolio = _portfolio(tmp_path)
+    exchange = FakeExchange({"free": {"EUR": 120.5, "BTC": 0.1}})
+
+    with pytest.raises(RuntimeError, match="no reconciled live portfolio state"):
+        refresh_live_portfolio_balance(
+            _context(_config(simulate_data=False), portfolio, exchange))
+
+
+def test_live_refresh_refuses_persisted_balance_mismatch(tmp_path):
+    portfolio = _portfolio(tmp_path)
+    portfolio.cash = 100.0
+    assert portfolio.save_state()
+    exchange = FakeExchange({"free": {"EUR": 120.5}})
+
+    with pytest.raises(RuntimeError, match="does not match Kraken balances"):
+        refresh_live_portfolio_balance(
+            _context(_config(simulate_data=False), portfolio, exchange))
+
+
+def test_live_refresh_refuses_open_exchange_orders(tmp_path):
+    portfolio = _portfolio(tmp_path)
+    exchange = FakeExchange({"free": {"EUR": 120.5}})
+    exchange.fetch_open_orders = lambda: [{"id": "unknown-order"}]
+
+    with pytest.raises(RuntimeError, match="open or unrecognized orders"):
+        refresh_live_portfolio_balance(
+            _context(_config(simulate_data=False), portfolio, exchange))
+
+
 @pytest.mark.parametrize("error", [
     ccxt.NetworkError("down"), ccxt.ExchangeError("rejected"),
     ccxt.BaseError("other")])
-def test_live_refresh_logs_errors_without_touching_portfolio(tmp_path, caplog, error):
+def test_live_refresh_fails_closed_without_touching_portfolio(tmp_path, error):
     portfolio = _portfolio(tmp_path)
     portfolio.cash = 33.0
     exchange = FakeExchange(error=error)
-    with caplog.at_level(logging.ERROR):
+    with pytest.raises(RuntimeError, match="Cannot verify live Kraken balances"):
         refresh_live_portfolio_balance(
             _context(_config(simulate_data=False), portfolio, exchange))
     assert portfolio.cash == 33.0
     assert portfolio.last_update is None
-    assert len(caplog.records) == 1
-    assert caplog.records[0].levelname == "ERROR"
-    assert "Error fetching/updating account balance" in caplog.text
+
+
+@pytest.mark.parametrize("payload", [None, {"free": None}, {"free": {"EUR": float("nan")}}])
+def test_live_refresh_rejects_malformed_or_non_finite_balances(tmp_path, payload):
+    portfolio = _portfolio(tmp_path)
+    exchange = FakeExchange(payload=payload)
+
+    with pytest.raises(RuntimeError, match="invalid live balances"):
+        refresh_live_portfolio_balance(
+            _context(_config(simulate_data=False), portfolio, exchange))
+    assert portfolio.last_update is None
