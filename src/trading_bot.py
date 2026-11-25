@@ -1,14 +1,10 @@
-import csv
 import hashlib
-import io
 import json
 import logging
 import math
 import os
 import signal
-import stat
 import sys
-import tempfile
 import time
 import uuid
 from collections import Counter, defaultdict
@@ -203,6 +199,34 @@ from src.state_store import read_auto_tune_state as _state_read_auto_tune_state
 from src.state_store import write_ai_copilot_state as _state_write_ai_copilot_state
 from src.state_store import write_auto_tune_state as _state_write_auto_tune_state
 from src.strategy_rules import rule_recommendation as get_rule_recommendation
+from src.trade_journal import (
+    TRADE_JOURNAL_FIELDS as _TRADE_JOURNAL_FIELDS,
+)
+from src.trade_journal import (
+    JournalContext,
+    PaperTradeHooks,
+)
+from src.trade_journal import (
+    append_trade_journal as _trade_journal_append_trade_journal,
+)
+from src.trade_journal import (
+    commit_paper_trade as _trade_journal_commit_paper_trade,
+)
+from src.trade_journal import (
+    init_journal as _trade_journal_init_journal,
+)
+from src.trade_journal import (
+    journal_row as _trade_journal_journal_row,
+)
+from src.trade_journal import (
+    recommend_tabular_threshold as _trade_journal_recommend_tabular_threshold,
+)
+from src.trade_journal import (
+    recover_paper_trade as _trade_journal_recover_paper_trade,
+)
+from src.trade_journal import (
+    sync_directory as _trade_journal_sync_directory,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -214,15 +238,6 @@ def _handle_sigterm(_signum: int, _frame: Any) -> None:
 def _install_sigterm_handler() -> None:
     signal.signal(signal.SIGTERM, _handle_sigterm)
 
-
-_TRADE_JOURNAL_FIELDS = [
-    'timestamp', 'iteration', 'coin', 'action', 'price', 'amount_coin',
-    'amount_base', 'pnl_base', 'pnl_pct', 'hold_seconds',
-    'signal_source', 'signal_confidence', 'recommendation', 'reason', 'dry_run',
-    'run_id', 'config_hash', 'mfe_pct', 'mae_pct',
-    'execution_cost_mode', 'entry_cost_mode', 'reference_price', 'fee_base',
-    'slippage_base', 'gross_pnl_base', 'net_pnl_base',
-]
 
 
 def _config_fingerprint(config: Any) -> str:
@@ -378,47 +393,29 @@ class CryptoTradingBot:
         ):
             self._maybe_auto_tune_tabular_confidence()
 
+    def _journal_context(self) -> JournalContext:
+        """Journal bookkeeping handed to :mod:`src.trade_journal`."""
+        return JournalContext(
+            config=self.config,
+            analytics_writer=self.analytics_writer,
+            run_id=self.run_id,
+            config_hash=self.config_hash,
+            journal_fields=self._journal_fields,
+            journal_row=self._journal_row,
+        )
+
+    def _paper_trade_hooks(self) -> PaperTradeHooks:
+        """Transaction helpers for :func:`src.trade_journal.commit_paper_trade`."""
+        return PaperTradeHooks(
+            sync_directory=self._sync_directory,
+            recover_paper_trade=self._recover_paper_trade,
+            set_paper_trade_failed=lambda failed: setattr(
+                self, '_paper_trade_failed', failed),
+        )
+
     def _init_trade_journal(self):
-        """Creates or safely extends the CSV journal schema."""
-        path = self.config.performance_log_file
-        if not os.path.exists(path):
-            with open(path, 'w', newline='', encoding='utf-8') as journal:
-                csv.writer(journal).writerow(_TRADE_JOURNAL_FIELDS)
-            self._journal_fields = list(_TRADE_JOURNAL_FIELDS)
-            return
-
-        with open(path, newline='', encoding='utf-8-sig') as journal:
-            existing_fields = next(csv.reader(journal), [])
-        self._journal_fields = list(dict.fromkeys(
-            existing_fields + _TRADE_JOURNAL_FIELDS))
-        if existing_fields == self._journal_fields:
-            return
-
-        file_mode = stat.S_IMODE(os.stat(path).st_mode)
-        directory = os.path.dirname(os.path.abspath(path))
-        descriptor, temporary_path = tempfile.mkstemp(
-            prefix='.trade-journal-', suffix='.csv', dir=directory)
-        try:
-            with os.fdopen(
-                descriptor, 'w', newline='', encoding='utf-8'
-            ) as destination, open(path, newline='', encoding='utf-8-sig') as source:
-                reader = csv.DictReader(source)
-                writer = csv.DictWriter(
-                    destination, fieldnames=self._journal_fields,
-                    extrasaction='ignore')
-                writer.writeheader()
-                for row in reader:
-                    row.setdefault('run_id', 'legacy')
-                    row.setdefault('config_hash', 'legacy')
-                    row.setdefault('mfe_pct', '')
-                    row.setdefault('mae_pct', '')
-                    row.setdefault('execution_cost_mode', 'legacy_unknown')
-                    writer.writerow(row)
-            os.chmod(temporary_path, file_mode)
-            os.replace(temporary_path, path)
-        finally:
-            if os.path.exists(temporary_path):
-                os.unlink(temporary_path)
+        """Delegates to :func:`src.trade_journal.init_journal`."""
+        self._journal_fields = _trade_journal_init_journal(self.config)
 
     def _public_paper_mode(self) -> bool:
         return (self.config.dry_run
@@ -427,155 +424,31 @@ class CryptoTradingBot:
 
     @staticmethod
     def _sync_directory(path: str) -> None:
-        descriptor = os.open(os.path.dirname(os.path.abspath(path)), os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+        """Delegates to :func:`src.trade_journal.sync_directory`."""
+        _trade_journal_sync_directory(path)
 
     def _recover_paper_trade(self) -> None:
-        """Complete a durable intent before permitting another paper trade."""
-        intent_path = self.portfolio.state_file + '.trade-transaction.json'
-        if not os.path.lexists(intent_path):
-            return
-        try:
-            with open(intent_path, encoding='utf-8') as f:
-                envelope = json.load(f)
-            payload = envelope['payload']
-            encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'),
-                                 ensure_ascii=True).encode('utf-8')
-            if (envelope['sha256'] != hashlib.sha256(encoded).hexdigest()
-                    or payload['version'] != 1
-                    or payload['journal'] != os.path.abspath(self.config.performance_log_file)
-                    or payload['state_file'] != os.path.abspath(self.portfolio.state_file)
-                    or not isinstance(payload['offset'], int) or payload['offset'] < 0
-                    or not isinstance(payload['row'], str)
-                    or not isinstance(payload['state'], dict)
-                    or payload['state'].get('base_currency') != self.portfolio.base_currency):
-                raise ValueError("Invalid paper trade intent")
-            row = payload['row'].encode('utf-8')
-            if not row:
-                raise ValueError("Empty paper trade row")
-            with open(payload['journal'], 'r+b') as journal:
-                prefix = journal.read(payload['offset'])
-                if (len(prefix) != payload['offset']
-                        or hashlib.sha256(prefix).hexdigest() != payload['prefix_sha256']):
-                    raise ValueError("Paper trade journal prefix changed")
-                tail = journal.read()
-                if not row.startswith(tail):
-                    raise ValueError("Paper trade journal has an unexpected tail")
-                if tail != row:
-                    journal.seek(payload['offset'])
-                    journal.write(row)
-                    journal.truncate()
-                journal.flush()
-                os.fsync(journal.fileno())
-            self.portfolio.save_state(state=payload['state'])
-            os.unlink(intent_path)
-            self._sync_directory(intent_path)
-            logger.info("Completed public paper trade transaction")
-        except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError("Cannot recover paper trade transaction; stopping") from exc
+        """Delegates to :func:`src.trade_journal.recover_paper_trade`."""
+        _trade_journal_recover_paper_trade(
+            self._journal_context(), self.portfolio,
+            sync_directory=self._sync_directory,
+            logger=logger)
 
     def _commit_paper_trade(self, row: dict) -> None:
-        intent_path = self.portfolio.state_file + '.trade-transaction.json'
-        temporary_path = None
-        self._paper_trade_failed = True
-        if os.path.lexists(intent_path):
-            raise RuntimeError("Pending paper trade transaction; restart to recover")
-        row = self._journal_row(row)
-        buffer = io.StringIO(newline='')
-        csv.DictWriter(buffer, fieldnames=self._journal_fields,
-                       extrasaction='ignore').writerow(row)
-        try:
-            journal_path = os.path.abspath(self.config.performance_log_file)
-            with open(journal_path, 'rb') as journal:
-                prefix = journal.read()
-                os.fsync(journal.fileno())
-            if not prefix.endswith(b'\n'):
-                raise ValueError("Paper trade journal has an incomplete last row")
-            self._sync_directory(journal_path)
-            payload = {
-                'version': 1,
-                'journal': journal_path,
-                'state_file': os.path.abspath(self.portfolio.state_file),
-                'offset': len(prefix),
-                'prefix_sha256': hashlib.sha256(prefix).hexdigest(),
-                'row': buffer.getvalue(),
-                'state': self.portfolio._state(),
-            }
-            # Normalize datetimes exactly as the portfolio writer does.
-            payload = json.loads(json.dumps(payload, default=lambda o: o.isoformat()
-                                            if isinstance(o, datetime) else str(o)))
-            encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'),
-                                 ensure_ascii=True).encode('utf-8')
-            with tempfile.NamedTemporaryFile(
-                mode='w', encoding='utf-8',
-                dir=os.path.dirname(os.path.abspath(intent_path)),
-                prefix='.paper-trade-', delete=False,
-            ) as f:
-                temporary_path = f.name
-                json.dump({'payload': payload, 'sha256': hashlib.sha256(encoded).hexdigest()}, f)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(temporary_path, intent_path)
-            temporary_path = None
-            self._sync_directory(intent_path)
-            self._recover_paper_trade()
-            self._paper_trade_failed = False
-        except (OSError, TypeError, ValueError) as exc:
-            raise RuntimeError("Cannot commit paper trade transaction; stopping") from exc
-        finally:
-            if temporary_path is not None and os.path.exists(temporary_path):
-                os.unlink(temporary_path)
-        self.analytics_writer.write_trade(row, self.config.base_currency)
+        """Delegates to :func:`src.trade_journal.commit_paper_trade`."""
+        _trade_journal_commit_paper_trade(
+            self._journal_context(), self.portfolio, row,
+            hooks=self._paper_trade_hooks(),
+            logger=logger)
 
     def _journal_row(self, row: dict) -> dict:
-        row = {
-            **row,
-            'run_id': row.get('run_id', self.run_id),
-            'config_hash': row.get('config_hash', self.config_hash),
-            'execution_cost_mode': row.get(
-                'execution_cost_mode', 'gross_legacy' if row.get(
-                    'dry_run', self.config.dry_run) else 'live_exchange'),
-        }
-        return {
-            **row,
-            'timestamp': row.get('timestamp', datetime.now(UTC).isoformat()),
-            'iteration': row.get('iteration', self.iteration),
-            'coin': row.get('coin', ''),
-            'action': row.get('action', ''),
-            'price': row.get('price', 0.0),
-            'amount_coin': row.get('amount_coin', 0.0),
-            'amount_base': row.get('amount_base', 0.0),
-            'pnl_base': row.get('pnl_base', 0.0),
-            'pnl_pct': row.get('pnl_pct', 0.0),
-            'hold_seconds': row.get('hold_seconds', 0.0),
-            'signal_source': row.get('signal_source', ''),
-            'signal_confidence': row.get('signal_confidence', ''),
-            'recommendation': row.get('recommendation', ''),
-            'reason': row.get('reason', ''),
-            'dry_run': row.get('dry_run', self.config.dry_run),
-            'mfe_pct': row.get('mfe_pct', ''),
-            'mae_pct': row.get('mae_pct', ''),
-        }
+        """Delegates to :func:`src.trade_journal.journal_row`."""
+        return _trade_journal_journal_row(
+            self.config, self.run_id, self.config_hash, self.iteration, row)
 
     def _append_trade_journal(self, row: dict):
-        row = {
-            **row,
-            'run_id': row.get('run_id', self.run_id),
-            'config_hash': row.get('config_hash', self.config_hash),
-            'execution_cost_mode': row.get(
-                'execution_cost_mode', 'gross_legacy' if row.get(
-                    'dry_run', self.config.dry_run) else 'live_exchange'),
-        }
-        if self.config.performance_log_enabled:
-            with open(self.config.performance_log_file, 'a', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(
-                    f, fieldnames=self._journal_fields,
-                    extrasaction='ignore')
-                writer.writerow(self._journal_row(row))
-        self.analytics_writer.write_trade(row, self.config.base_currency)
+        """Delegates to :func:`src.trade_journal.append_trade_journal`."""
+        _trade_journal_append_trade_journal(self._journal_context(), row)
 
     def _write_analytics_snapshot(
         self,
@@ -602,68 +475,8 @@ class CryptoTradingBot:
         )
 
     def _recommend_tabular_threshold_from_journal(self) -> float | None:
-        """Recommends a confidence threshold based on historical sell trades."""
-        path = self.config.performance_log_file
-        if not os.path.exists(path):
-            return None
-
-        try:
-            df = pd.read_csv(path)
-        except (
-            OSError,
-            UnicodeError,
-            pd.errors.ParserError,
-            pd.errors.EmptyDataError,
-        ) as e:
-            logger.warning(
-                f"Journal could not be read for auto-tuning: {e}")
-            return None
-
-        if df.empty or 'action' not in df.columns or 'pnl_base' not in df.columns or 'signal_confidence' not in df.columns:
-            return None
-
-        sells = df[df['action'] == 'sell'].copy()
-        if sells.empty:
-            return None
-
-        # Prefer more recent trades
-        sells = sells.tail(
-            max(1, self.config.auto_tune_lookback_trades)).copy()
-        sells['pnl_base'] = pd.to_numeric(sells['pnl_base'], errors='coerce')
-        sells['signal_confidence'] = pd.to_numeric(
-            sells['signal_confidence'], errors='coerce')
-        sells = sells.dropna(subset=['pnl_base', 'signal_confidence'])
-        if sells.empty:
-            return None
-
-        step = max(self.config.auto_tune_threshold_step, 0.001)
-        thresholds = np.arange(
-            self.config.auto_tune_threshold_min,
-            self.config.auto_tune_threshold_max + (step * 0.5),
-            step,
-        )
-
-        candidates = []
-        for th in thresholds:
-            part = sells[sells['signal_confidence'] >= th]
-            n = len(part)
-            if n < self.config.auto_tune_min_trades:
-                continue
-            pnl = float(part['pnl_base'].sum())
-            avg = float(part['pnl_base'].mean())
-            win_rate = float((part['pnl_base'] > 0).mean() * 100.0)
-            candidates.append((th, n, pnl, avg, win_rate))
-
-        if not candidates:
-            return None
-
-        # Primarily highest total PnL, secondarily higher AvgPnL, then more trades
-        best = max(candidates, key=lambda x: (x[2], x[3], x[1]))
-        logger.info(
-            f"🔧 Auto-Tune Threshold Recommendation: {best[0]:.2f} "
-            f"(trades={best[1]}, pnl={best[2]:.6f} {self.config.base_currency}, "
-            f"avg={best[3]:.6f}, win_rate={best[4]:.2f}%)")
-        return float(best[0])
+        """Delegates to :func:`src.trade_journal.recommend_tabular_threshold`."""
+        return _trade_journal_recommend_tabular_threshold(self.config, logger=logger)
 
     def _dynamic_excluded_coins(self) -> set[str]:
         """Delegates to :func:`src.market_analysis.dynamic_excluded_coins`."""

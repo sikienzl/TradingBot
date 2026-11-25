@@ -179,6 +179,25 @@ a version heading is assigned when a release is prepared.
   arrive as explicit callables, so the volume gate, the Top-N selection and the
   scored map are unit-testable without an exchange or a model. Covered by 28 new
   tests in `tests/test_market_analysis.py`.
+- `src/trade_journal.py`, the trade-journal and paper-trade-transaction cluster
+  that used to live in `CryptoTradingBot`: `init_journal` (create the journal or
+  safely extend its CSV schema in place, keeping the existing file mode and
+  filling legacy rows with their defaults), `sync_directory` (fsync a directory
+  entry so a rename survives a power cut), `journal_row` (the two-stage default
+  filling a journal row gets before it is written), `append_trade_journal`,
+  `recover_paper_trade` and `commit_paper_trade` (the write-ahead intent file,
+  checksum and offset handshake that makes a public-paper trade either fully
+  committed or fully rolled back after a crash) and
+  `recommend_tabular_threshold` (the auto-tune threshold sweep over the journal).
+  The `BotConfig` is injected and everything else the cluster touches — the
+  analytics writer, the run id and config hash, the journal schema and row
+  formatter — arrives through a frozen `JournalContext` dataclass, while the
+  public-paper sync/recover/failure-flag hooks arrive through `PaperTradeHooks`,
+  so the schema migration, the crash recovery and the threshold sweep are
+  unit-testable without an exchange or a portfolio. The `Portfolio` stays with
+  the bot and is passed explicitly, because the tests that build a partial bot
+  have no portfolio of their own. Covered by 56 new tests in
+  `tests/test_trade_journal.py`.
 ### Changed
 
 - `read_ai_copilot_usage()` now exists once, in `src/export_pnl_metrics.py`. The
@@ -336,6 +355,25 @@ a version heading is assigned when a release is prepared.
   slow-analysis warning), covering 172 log lines, and produced identical return
   values, exclusion sets and log output; the moved bodies are also AST-identical
   apart from the injected collaborators.
+- `src/trading_bot.py` shrank from 2776 to 2589 lines now that the trade journal
+  and paper-trade transaction cluster lives in `src/trade_journal.py`.
+  `_init_trade_journal()`, `_sync_directory()`, `_recover_paper_trade()`,
+  `_commit_paper_trade()`, `_journal_row()`, `_append_trade_journal()` and
+  `_recommend_tabular_threshold_from_journal()` keep their names and signatures
+  as thin delegators, `_journal_context()` and `_paper_trade_hooks()` build the
+  injected dataclasses per call, and `_journal_fields` stays on the bot, so the
+  existing tests that patch or call a bot method, drive a public-paper trade or
+  inspect the journal file still apply. The architecture ceiling was ratcheted to
+  the new size and `trade_journal` was registered as a layer-1 module. The old
+  and new code were compared over 58 scenarios driven through the bot
+  (`init_journal` on a missing, header-only, legacy-schema, extra-column and
+  unreadable file, the full commit/recover handshake with a clean commit, a
+  restart recovery, a stale intent file and every tampered envelope field,
+  journal writes with the analytics writer enabled and disabled, the append and
+  commit failure paths, and the threshold sweep across empty, short, unreadable
+  and tied journals), covering 118 log lines, and produced identical return
+  values, raised exceptions, journal bytes, intent files and analytics rows; the
+  moved bodies are also AST-identical apart from the injected collaborators.
 
 ### Fixed
 
