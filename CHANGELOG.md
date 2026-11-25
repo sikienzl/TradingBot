@@ -5,6 +5,8 @@ a version heading is assigned when a release is prepared.
 
 ## Unreleased
 
+## v1.0.29 - 2026-11-25
+
 ### Added
 
 - `tests/test_architecture.py` now ratchets four more oversized modules at their

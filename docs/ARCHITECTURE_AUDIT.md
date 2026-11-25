@@ -168,7 +168,7 @@ organization-specific webhook credential or staging delivery evidence is
 included in Git; daily-report exit status and disk/database capacity remain
 uninstrumented.
 
-Observed packaging defect (v1.0.28, fixed on `main`): the Pi release archive did
+Observed packaging defect (v1.0.28, fixed in v1.0.29): the Pi release archive did
 not stage `deploy/trading-operational-health.service`/`.timer`,
 `deploy/trading-alert-relay.service`, the two `deploy/*.env.example` templates,
 `deploy/alertmanager.yml`, `deploy/grafana-low-power.conf`, or the two scripts

@@ -1,0 +1,97 @@
+v1.0.29 - Installable Pi monitoring, blocking type gate, packaging guard
+
+Date: 2026-11-25
+
+Summary
+
+This is a corrective release on top of v1.0.28. It changes no trading logic,
+no signal, no risk rule and no order path. It makes the single-node Raspberry Pi
+monitoring stack installable from the published package again, and it makes two
+quality gates fail the build instead of only reporting.
+
+Changes
+
+Pi release package (defect fix)
+- `trading-bot-pi-<version>.tar.gz` omitted files that
+  `scripts/install_monitoring_pi.sh` reads out of the extracted package:
+  `deploy/trading-operational-health.service`, its `.timer`,
+  `deploy/trading-alert-relay.service`, `deploy/trading-alert-relay.env.example`,
+  `deploy/trading-health.env.example`, `deploy/alertmanager.yml` and
+  `deploy/grafana-low-power.conf`, plus the two scripts those units exec,
+  `scripts/export_operational_health.py` and `scripts/alert_webhook_relay.py`.
+  On a fresh v1.0.28 install the monitoring installer aborted with
+  `Missing unit file:
+  /opt/trading_2/deploy/trading-operational-health.service`, so a Pi could not
+  enable its own alerting from the published artifact. The archive now stages
+  all of them.
+- `deploy/daily-dryrun-review.service`, its `.timer` and the two scripts they
+  exec (`scripts/daily_dryrun_review.py`,
+  `scripts/run_daily_dryrun_review.sh`) ship in the Pi package for the first
+  time. The review has existed since v1.0.22 and the cluster archive always
+  carried it, but no Pi release ever staged it, so the scheduled review was not
+  reachable from a Pi package. These two units are opt-in: no installer enables
+  them, and `systemctl enable --now daily-dryrun-review.timer` turns them on.
+- Deliberate profile boundary, documented in `SERVER_README.md`: the Hailo units
+  (`hailo-inference`, `trading-hailo-dryrun`, `trading-hailo-tunnel`,
+  `hailo-shadow.env.example`) and the public-paper units stay out of the Pi
+  archive. They belong to the CM5 cluster and public-paper profiles, and no Pi
+  installer references them. The cluster archive packages `deploy/` wholesale and
+  was never affected by this gap.
+
+Packaging guard
+- New `.github/scripts/tests/test_pi_package_manifest.py` (stdlib only, runs in
+  the CI "Release tooling tests" step) keeps the hand-written staging list in
+  `release.yml` from drifting again. It parses the staging step and asserts that
+  every `deploy/…` and `scripts/…` path both Pi installers reference is staged,
+  that the monitoring unit loop is satisfied, that every staged unit's
+  `ExecStart` target is staged, that every staged path exists in the repository,
+  and that `required_files` covers what it claims. Verified to fail against the
+  v1.0.28 workflow with exactly the six missing unit files.
+
+Quality gates
+- The CI `mypy` job is blocking. It was `continue-on-error` from the start
+  because the base had 81 findings; after the burn-down to 0 errors across 61
+  source files it now fails the run like the ruff gate, using the same
+  step-summary and exit-code pattern. A typing regression can no longer reach a
+  release unnoticed.
+- `tests/test_architecture.py` pins four more oversized modules at their current
+  line counts: `execution_service.py` (760), `historical_backtest.py` (637),
+  `bot_config.py` (598) and `ai_copilot_service.py` (584). Every `src/` module
+  above 500 lines is now covered, so new code has to go into a focused module
+  instead of an existing large one.
+
+Documentation
+- `SERVER_README.md` lists the units the Pi monitoring installer actually
+  installs, including the alert relay and its `/etc/trading-alert-relay.env`
+  prerequisite, and states the profile boundary above.
+- `docs/MONITORING.md` documents the daily dry-run review units as opt-in and
+  notes that a successful run over an empty window still exits 0, so the
+  staleness gauges remain the health signal.
+- `docs/ARCHITECTURE_AUDIT.md` records the packaging defect as an observed fact
+  alongside the fix and its guard.
+
+Notes
+- Release profiles: both are covered. The single-node Raspberry Pi release stays
+  autonomous - no Hailo-8, no second node, no K3s, no PostgreSQL, no tunnel -
+  and rules-only operation remains available when models or external APIs are
+  missing. The CM5 cluster profile is unchanged by this release.
+- Operational changes for an existing Pi install: extract this package and re-run
+  `scripts/install_monitoring_pi.sh`, then `systemctl daemon-reload`. The
+  installer now also copies the operational-health timer, the alert rules, the
+  Alertmanager config and the relay unit. Alert delivery still requires the
+  operator to create `/etc/trading-alert-relay.env`; that file is not part of
+  any package. To enable the scheduled review, opt in with
+  `systemctl enable --now daily-dryrun-review.timer`.
+- Migration and rollback: none. No state format, database schema, model
+  artifact, configuration key or trading behaviour changed. A v1.0.28 install
+  can be replaced in place; keeping the v1.0.28 package is only useful as a
+  known-broken reference.
+- Verification: `sha256sum -c trading-bot-pi-v1.0.29.tar.gz.sha256`, then confirm
+  `tar -tzf` lists `deploy/trading-operational-health.timer`,
+  `deploy/trading-alert-relay.service` and `scripts/alert_webhook_relay.py`.
+  After install, `systemctl status trading-operational-health.timer` and
+  `curl -s localhost:9101/metrics | grep trading_kill_switch_active` should both
+  answer.
+- Still open, deliberately not in this release: daily-report exit status and
+  disk/database capacity alerts, a durable historical news-item store, and the
+  x86 training/compilation worker.
