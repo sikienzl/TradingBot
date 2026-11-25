@@ -82,7 +82,9 @@ flowchart LR
 
 These are alternatives, not prerequisites for each other. External APIs require
 network access and their own credentials. Start with simulation or paper
-trading. See [deployment options and prerequisites](docs/DEPLOYMENT.md).
+trading. See [deployment options and prerequisites](docs/DEPLOYMENT.md) and the
+[CM5 cluster architecture](docs/CLUSTER_ARCHITECTURE.md) for the observed
+hardware roles, services, and boundaries.
 
 ## Quickstart
 
@@ -115,6 +117,7 @@ continues into the bot afterward; read the guide before running it.
 - [Configuration and risk guardrails](docs/CONFIGURATION.md)
 - [AutoResearch signal bridge](docs/AUTORESEARCH.md)
 - [Weekly scorecard and monitoring](docs/MONITORING.md)
+- [CM5 cluster architecture](docs/CLUSTER_ARCHITECTURE.md) and [architecture audit](docs/ARCHITECTURE_AUDIT.md)
 - [Server deployment](docs/DEPLOYMENT.md) and [full server runbook](SERVER_README.md)
 - [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 

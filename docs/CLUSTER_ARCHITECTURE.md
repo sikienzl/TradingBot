@@ -1,0 +1,120 @@
+# CM5 Cluster Architecture
+
+The cluster is an optional deployment profile, not a dependency of the bot.
+The bot remains usable on a single Raspberry Pi without Hailo hardware or any
+cluster services. The currently documented cluster trading workload is a
+simulation/shadow deployment; it is not approved or validated for live trading.
+
+## Hardware and observed topology
+
+The Sipeed NanoCluster carrier hosts two Raspberry Pi Compute Module 5 (CM5)
+modules. During a read-only inspection on 2026-11-25, the nodes reported the
+following hostnames and private-LAN addresses:
+
+| Node | Address | Observed role and hardware |
+|---|---|---|
+| `rasp-clu-01` | `192.168.62.74` | Bot/paper host. Runs the restricted Hailo SSH tunnel, paper dashboard, public-market recorder, PostgreSQL and paper/shadow containers. |
+| `rasp-clu-02` | `192.168.62.75` | Hailo inference host. Runs `trading-hailo-dryrun.service` on localhost. `hailortcli scan` detected Hailo device `0001:01:00.0`; PCI enumeration identified a Hailo-8 (`1e60:2864`). |
+| Future x86 worker | Not provisioned | Intended for CatBoost/ONNX training, AutoResearch, and the x86-64 Hailo Dataflow Compiler (DFC). It is not currently part of the deployed topology. |
+
+The IP addresses above describe the inspected private LAN, not portable
+defaults. Do not put credentials, SSH keys, bearer tokens, or production
+inventories in Git. The generic `cluster-starter/` Ansible project has example
+master/worker placeholders; it does not establish that the live nodes are
+configured as K3s master and worker.
+
+```mermaid
+flowchart LR
+    Kraken[Kraken public market API]
+    X86[Future x86 worker<br/>Training / AutoResearch / Hailo DFC]
+    subgraph NanoCluster[Sipeed NanoCluster carrier]
+        subgraph BotNode[CM5 rasp-clu-01 · 192.168.62.74]
+            Bot[Trading bot<br/>paper / shadow]
+            Tunnel[Restricted SSH tunnel<br/>localhost:18001]
+            Ops[Dashboard · recorder<br/>PostgreSQL / analytics]
+        end
+        subgraph HailoNode[CM5 rasp-clu-02 · 192.168.62.75]
+            API[Hailo inference service<br/>127.0.0.1:18001]
+            NPU[Hailo-8 over PCIe]
+            API --> NPU
+        end
+    end
+    Kraken -->|HTTPS 443| Bot
+    Bot -->|HTTP via localhost tunnel| Tunnel
+    Tunnel -->|SSH port forward| API
+    X86 -. validated HEF + metadata .-> HailoNode
+    X86 -. CBM / ONNX + metadata .-> BotNode
+```
+
+## Responsibilities
+
+| Component | Responsibility | Important boundary |
+|---|---|---|
+| `.74` bot/paper host | Runs isolated paper/shadow workloads and operational services. The observed `trading-hailo-shadow-dryrun` container uses `DRY_RUN=true` and simulated data according to the runbook. | Exchange credentials and order execution stay on the bot side; the inference host does not need Kraken trading credentials. One execution owner must be enforced before any multi-bot/live mode is enabled. |
+| `.75` Hailo host | Serves local Hailo-8 inference using `trading-hailo-dryrun.service`, bound to `127.0.0.1:18001`. | Hailo is an optional accelerator backend. The running service and shadow workload are not evidence of live-trading readiness. |
+| Future x86 worker | Produces candidate models, runs chronological/Walk-Forward evaluation and AutoResearch, and compiles Hailo-compatible ONNX to `.hef` with DFC. | No x86 worker or automated promotion path was observed. It must not place orders or become a runtime dependency for a Pi. |
+
+The intended inference fallback is Hailo, then local CPU CatBoost/ONNX, then
+rules-only. The current bot configuration selects either the remote Hailo
+backend or CatBoost; it does not automatically fall back between those
+backends. A failed Hailo prediction currently suppresses that candidate
+(fail-closed), rather than switching to CPU inference.
+
+## Network, services, and ports
+
+| Port / protocol | Use | Exposure |
+|---|---|---|
+| TCP 22 / SSH | Restricted tunnel from `.74` to `.75`. | Limit the tunnel key to port forwarding to `127.0.0.1:18001`; verify and pin the host key. |
+| TCP 18001 / HTTP | Hailo inference API. | The service binds to loopback on `.75`; the bot reaches its own loopback through the SSH forward. Do not expose it directly to the LAN or Internet. |
+| TCP 443 / HTTPS | Public Kraken market endpoints and any explicitly configured external API. | Outbound only as required; paid APIs are optional. |
+| TCP 6443 / K3s API | Optional generic cluster-starter K3s control plane. | Only if K3s is enabled; allow only controller/worker traffic. Required CNI traffic depends on the selected K3s/CNI configuration. |
+| TCP 9100 | Optional Prometheus node-exporter scrape target. | Restrict to the monitoring host. |
+| TCP 9090, 9200 | Prometheus and the PnL exporter in the repository's monitoring configuration. | Bind/firewall according to the chosen host deployment; not required by the bot. |
+| TCP 5432 | Optional PostgreSQL analytics. | The cluster starter defaults PostgreSQL to loopback. Remote access is opt-in and must use a narrow client CIDR and separately secured transport. |
+| TCP 8443 / HTTPS | Optional authenticated paper dashboard. | Restrict to approved private/VPN client networks as described by `ansible/README.md`. |
+
+Observed user services on `.74` included `trading-hailo-tunnel.service`,
+`public-market-recorder.service`, and `public-paper-dashboard.service`. Running
+containers included the paper dashboard, market recorder, PostgreSQL, a paper
+analytics bot, and `trading-hailo-shadow-dryrun`. On `.75`,
+`trading-hailo-dryrun.service` was active. These are inspection-time facts;
+service state can change. Service definitions are in `deploy/`, and the generic
+infrastructure starter is in `cluster-starter/`.
+
+K3s is not a requirement for the observed Hailo tunnel path. The starter
+explicitly does not provide a Hailo Kubernetes device plugin, device scheduling,
+HA, or a trading-bot deployment. Docker and K3s containerd are separate runtimes.
+
+## Model artifacts and synchronization
+
+- `.75` needs a compatible compiled `.hef` and its matching `metadata.json`.
+  The current runbook stores these under
+  `~/trading-hailo-dryrun/model/`; the service reads paths from a private
+  `service.env`.
+- The `.74` CPU path needs a CatBoost `.cbm` and matching metadata, or a
+  supported ONNX model, when CPU inference is selected. Rules-only operation
+  must remain possible without either artifact.
+- The repository's Hailo trainer exports ONNX and metadata; DFC compilation to
+  `.hef` is a separate step. CatBoost training produces a `.cbm` separately.
+  There is no automated paired `.hef`/`.cbm` promotion, synchronization, or
+  rollback workflow today.
+- Until that workflow exists, transfer artifacts over a trusted channel,
+  verify checksums and model/feature contract metadata, keep each model and its
+  metadata paired, and retain the previous known-good files for manual rollback.
+  Do not overwrite a running model in place without an explicit maintenance
+  and recovery procedure.
+
+## Single-Pi boundary
+
+The CM5 cluster is optional. The Raspberry Pi release can run the rules-based
+bot, local state, and scorecard as a standalone service without a Hailo-8,
+`hailo_platform`, SSH tunnel, K3s, PostgreSQL, or second worker. CatBoost is an
+optional local backend. Missing hardware or model dependencies must not prevent
+rules-only startup. See [Pi deployment](DEPLOYMENT.md#raspberry-pi-4-without-hailo)
+and the [architecture audit](ARCHITECTURE_AUDIT.md).
+
+## Related runbooks
+
+- [Server and current shadow deployment](../SERVER_README.md#current-cluster-shadow-deployment)
+- [Generic CM5/K3s infrastructure starter](../cluster-starter/README.md)
+- [Deployment profiles](DEPLOYMENT.md)
