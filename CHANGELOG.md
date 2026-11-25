@@ -7,6 +7,11 @@ a version heading is assigned when a release is prepared.
 
 ### Added
 
+- `src/close_performance.py`, a layer-1 collaborator for entry cost-basis
+  validation and close-performance accounting. The module receives the
+  performance map explicitly and uses injected callbacks for the bot-owned
+  loss-streak state and clock; `CryptoTradingBot` keeps the existing method
+  names as thin delegators for live and dry-run callers.
 - `tests/test_architecture.py` locks the package layout that the refactor
   established. Every module under `src/` is assigned a layer, upward imports
   (a foundational module importing a composition-root module) and import cycles
@@ -238,6 +243,14 @@ a version heading is assigned when a release is prepared.
   live bot. Covered by 40 new tests in `tests/test_portfolio_bootstrap.py`.
 ### Changed
 
+- `src/trading_bot.py` shrank from 2084 to 2055 lines by moving
+  `_entry_cost_basis()` and `_record_close_performance()` into
+  `src/close_performance.py`; its architecture ceiling was lowered from 2120 to
+  2055. The bot methods retain their original names and signatures. Eight
+  deterministic old-vs-new scenarios produced byte-identical results, state,
+  and log messages; focused close-accounting regression tests cover gross and
+  net partial sells, break-even attribution, invalid cost basis, and loss-streak
+  pause transitions.
 - `src/trading_bot.py` shrank from 2237 to 2120 lines now that the portfolio
   startup path lives in `src/portfolio_bootstrap.py`. `_update_portfolio_balance()`
   stays a thin delegator with its previous name — it is called from the run loop,
