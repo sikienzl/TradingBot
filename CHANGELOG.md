@@ -198,8 +198,45 @@ a version heading is assigned when a release is prepared.
   the bot and is passed explicitly, because the tests that build a partial bot
   have no portfolio of their own. Covered by 56 new tests in
   `tests/test_trade_journal.py`.
+- `src/open_trade_manager.py`, the open-position sweep that used to be
+  `CryptoTradingBot._manage_open_trades()` (cyclomatic complexity 17): the
+  per-position loop that maintains the peak/trough excursions, fetches the ATR,
+  derives the dynamic stop, take-profit and partial-take-profit levels, warns
+  when the hold limit is overdue, runs the ranked exit-reason chain and sells,
+  retries and removes the position. The `BotConfig` and the `Portfolio` arrive
+  through a frozen `OpenTradeContext`, and the three collaborators the sweep
+  calls but does not own — the ATR cache, the trade executor and the
+  public-paper-mode probe — arrive through `OpenTradeHooks`. The exit policy is a
+  layer-1 peer, so the chain is called directly instead of bouncing back through
+  the bot. The whole sweep is therefore unit-testable without an exchange, a
+  portfolio implementation or a bot. Covered by 23 new tests in
+  `tests/test_open_trade_manager.py`.
 ### Changed
 
+- `src/trading_bot.py` shrank from 2589 to 2375 lines now that the open-position
+  sweep lives in `src/open_trade_manager.py`. `_manage_open_trades()` is a thin
+  delegator with the previous signature, so the trade loop, the ATR cache, the
+  executor and the portfolio stay with the bot and the existing tests that patch
+  `bot._get_atr_for_coin()` / `bot._execute_trade()` and call
+  `bot._manage_open_trades()` still apply. The five exit-policy delegators that
+  only this loop used (`_maybe_partial_take_profit()`,
+  `_partial_tp_remainder_exit_reason()`, `_downtrend_reversal_exit_reason()`,
+  `_uptrend_rules_exit_reason()`, `_core_exit_reason()`) and their now-unused
+  import aliases were removed; `_effective_stop_loss_level()`,
+  `_is_rules_uptrend_trade()`, `_is_downtrend_reversal_trade()` and
+  `_public_paper_mode()` stay, because other bot code and tests still call them.
+  The architecture ceiling was ratcheted to the new size and `open_trade_manager`
+  was registered as a layer-1 module. The old and new code were compared over 44
+  scenarios (missing market data, new peak / lowered trough / unchanged
+  excursions, dry-run and live persistence, NaN and zero ATR, the global and
+  per-coin hold limits, every partial-take-profit gate including the
+  public-paper bookkeeping and a failed partial sell, stop-loss, take-profit,
+  trailing and break-even exits, a failed sell, a partial fill below and at the
+  original amount, every exit-reason precedence winner and the multi-position
+  sweep) and produced identical log lines, hook call order, removals,
+  `save_state()` counts and resulting trade state. The moved body is also
+  AST-identical to the original after the documented `self.config` → `config`,
+  `self.portfolio` → `portfolio` and hook rewrites.
 - The README header now follows the GitHub colour scheme: `assets/logo-dark.png`
   (the same emblem in light strokes, 896x1200) is served to dark mode and the
   dark-stroke transparent emblem to light mode through a `<picture>` element, so
