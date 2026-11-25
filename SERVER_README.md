@@ -968,14 +968,23 @@ sudo systemctl list-timers              # see weekly scorecard schedule
 After the bot is installed, enable monitoring stack on the Pi:
 These monitoring defaults are intended for the tested Raspberry Pi 3B+ baseline and can be relaxed on newer Pi models with more RAM.
 
+Before running it, create `/etc/trading-alert-relay.env` from
+`deploy/trading-alert-relay.env.example` (root:trading, mode 0640, HTTPS
+webhook URL); the installer stops without it rather than installing alerting
+that cannot deliver. See [scorecard and monitoring](docs/MONITORING.md#runtime-health-and-alert-delivery).
+
 ```bash
 sudo bash /opt/trading_2/scripts/install_monitoring_pi.sh
 ```
 
-This enables:
+This installs and enables:
 - `scorecard-status.timer` (exports status metrics every 5 minutes)
 - `node-exporter-textfile.service` (exposes metrics at port 9100)
-- Prometheus scraping on port 9090
+- `trading-operational-health.timer` (30-second kill-switch, research-feed and
+  data-staleness gauges)
+- `trading-alert-relay.service` (loopback-only webhook relay)
+- local Prometheus scraping on port 9090, Alertmanager on 9093 and the
+  `deploy/trading-alerts.yml` rule file
 - Grafana dashboard at port 3000 (Login: admin / admin)
 
 Low-RAM Pi defaults applied by the installer:
@@ -1012,10 +1021,15 @@ two-node CM5 cluster are deployed differently:
 
 - `trading-bot-pi-<version>.tar.gz` - single Raspberry Pi: runtime scripts,
   the `docs/` guides, `requirements-pi.txt`, systemd units (including the
-  weekly scorecard, research-signal and auto-tuning timers), the analytics
-  PostgreSQL backup wrappers and their service/timer units
+  weekly scorecard, research-signal, auto-tuning, daily dry-run review,
+  operational-health and alert-relay units), the Prometheus/Alertmanager and
+  Grafana config files the monitoring installer copies (including
+  `deploy/alertmanager.yml` and the `deploy/*.env.example` templates), the
+  analytics PostgreSQL backup wrappers and their service/timer units
   (`scripts/postgresql-analytics-*`, `deploy/postgresql-analytics-*`) and the
-  one-shot `scripts/install_pi.sh`.
+  one-shot `scripts/install_pi.sh` and `scripts/install_monitoring_pi.sh`.
+  Hailo and public-paper-dashboard units belong to the cluster/public-paper
+  profiles and stay out of the Pi archive by design.
 - `trading-cluster-<version>.tar.gz` - CM5 cluster: `src/`, the `docker/`
   Dockerfiles, cluster units and env templates, `requirements-hailo-server.txt`,
   `requirements-hailo-shadow.txt` and `requirements-dashboard.txt`, the generic
@@ -1027,8 +1041,12 @@ two-node CM5 cluster are deployed differently:
   reproducible. The LLM adapter, Hailo SDK packages and HEF files are excluded
   by design; images are built on the nodes.
 
-Both archives ship with a `.sha256` file. The packaging allowlist and the
-required-file check are covered by `.github/scripts/tests/test_cluster_release.py`.
+Both archives ship with a `.sha256` file. The cluster packaging allowlist and
+the required-file check are covered by
+`.github/scripts/tests/test_cluster_release.py`; the Pi staging list is checked
+against what `scripts/install_pi.sh` and `scripts/install_monitoring_pi.sh`
+actually read from the extracted package by
+`.github/scripts/tests/test_pi_package_manifest.py`.
 
 ### Download a Specific Release Manually
 

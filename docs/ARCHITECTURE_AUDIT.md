@@ -168,6 +168,17 @@ organization-specific webhook credential or staging delivery evidence is
 included in Git; daily-report exit status and disk/database capacity remain
 uninstrumented.
 
+Observed packaging defect (v1.0.28, fixed on `main`): the Pi release archive did
+not stage `deploy/trading-operational-health.service`/`.timer`,
+`deploy/trading-alert-relay.service`, the two `deploy/*.env.example` templates,
+`deploy/alertmanager.yml`, `deploy/grafana-low-power.conf`, or the two scripts
+those units exec, so `scripts/install_monitoring_pi.sh` aborted on a fresh
+v1.0.28 install and the standalone Pi monitoring path was not installable from
+the published package. The staging list now carries them, and
+`.github/scripts/tests/test_pi_package_manifest.py` compares the release.yml
+staging list against the paths both Pi installers read, so the two profiles stay
+independently installable.
+
 **Next:** Configure the private receiver on each deployment, validate delivery
 in staging, and add daily-report exit-status and disk/database capacity alerts.
 Keep the dashboard read-only and the Pi monitoring path independent from cluster
