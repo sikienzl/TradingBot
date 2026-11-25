@@ -66,10 +66,10 @@ PYTHONPATH="$PWD:$PWD/src" .venv/bin/python .github/skills/extract-module-refact
 ```
 
 `ci_env_sim.py` hides `talib`/`torch`/`transformers`/`onnx` so the local run
-matches the slim CI test job. Baseline on `main` (2026-11-24, `898caa0`):
-pytest **747 passed**, CI-sim **721 passed / 2 skipped**, unittest **15** and
-**5**, ruff clean, deploy check exit 0, mypy **11 errors in 5 files / 43
-files** (informational job — the count must not grow).
+matches the slim CI test job. Baseline on `main` (2026-11-25, `3dfefc6`):
+pytest **1336 passed**, CI-sim **1310 passed / 2 skipped**, unittest **15** and
+**5**, ruff clean, deploy check exit 0, mypy **0 errors / 61 files**. The mypy
+job is blocking now, so a non-zero mypy exit fails CI like ruff does.
 
 ## Git flow
 

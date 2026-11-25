@@ -104,11 +104,10 @@ jobs:
           fi
 
   typecheck:
-    name: Type check (mypy, informational)
+    name: Type check (mypy)
     runs-on: ubuntu-latest
-    # Informational only: this job never gates the build. It surfaces typing
-    # regressions in the PR/commit summary without failing CI.
-    continue-on-error: true
+    # Blocking since the base reached 0 errors across every src module: a typing
+    # regression fails the run instead of only showing up in the summary.
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -139,12 +138,13 @@ jobs:
         shell: bash
         run: |
           {
-            echo "## Mypy Type Check (informational)"
+            echo "## Mypy Type Check"
             echo
             if [[ "${{ steps.mypy.outputs.mypy_exit_code }}" == "0" ]]; then
               echo "- Status: passed"
             else
-              echo "- Status: findings reported (non-blocking)"
+              echo "- Status: failed"
+              echo "- Exit code: ${{ steps.mypy.outputs.mypy_exit_code }}"
               echo
               echo "Sample findings:"
               echo '```text'
@@ -152,6 +152,14 @@ jobs:
               echo '```'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce type check gate
+        shell: bash
+        run: |
+          if [[ "${{ steps.mypy.outputs.mypy_exit_code }}" != "0" ]]; then
+            echo "Mypy type check failed. See annotations and step summary."
+            exit 1
+          fi
 
   tests:
     name: Unit tests (py${{ matrix.python-version }})

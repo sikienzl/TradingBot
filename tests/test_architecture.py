@@ -106,11 +106,16 @@ LAYER_OF: dict[str, int] = {
 TRADING_BOT_IMPORTERS: frozenset[str] = frozenset({"init_kraken_paper"})
 
 # Line-count ceilings for files that are known to be too large. Lower these
-# when a file shrinks; never raise them without an explicit decision.
+# when a file shrinks; never raise them without an explicit decision. The
+# ceiling is the current line count, so a module can only ever move down.
 LINE_CEILINGS: dict[str, int] = {
     "trading_bot.py": 2055,
+    "execution_service.py": 760,
     "entry_selection.py": 750,
     "public_paper_dashboard.py": 695,
+    "historical_backtest.py": 637,
+    "bot_config.py": 598,
+    "ai_copilot_service.py": 584,
     "export_pnl_metrics.py": 366,
 }
 

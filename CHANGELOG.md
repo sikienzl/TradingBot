@@ -5,6 +5,22 @@ a version heading is assigned when a release is prepared.
 
 ## Unreleased
 
+### Added
+
+- `tests/test_architecture.py` now ratchets four more oversized modules at their
+  current line counts: `execution_service.py` (760), `historical_backtest.py`
+  (637), `bot_config.py` (598) and `ai_copilot_service.py` (584), next to the
+  four already pinned. Every `src/` module above 500 lines is now covered, so
+  new code has to go into a focused module instead of an existing large one.
+
+### Changed
+
+- The CI `mypy` job is blocking. It was informational (`continue-on-error`) from
+  the start because the base had 81 findings; after the burn-down to 0 errors
+  across 61 source files it now fails the run like the ruff gate, with the same
+  step-summary and exit-code pattern. A typing regression can no longer land on
+  `main` unnoticed.
+
 ## v1.0.28 - 2026-11-25
 
 ### Added
@@ -18,8 +34,8 @@ a version heading is assigned when a release is prepared.
   established. Every module under `src/` is assigned a layer, upward imports
   (a foundational module importing a composition-root module) and import cycles
   fail the test suite, `src/trading_bot.py` must stay a leaf apart from the
-  `init_kraken_paper` bootstrap, and the three oversized modules may not grow
-  past their current line counts. This is the guard that keeps the God-class
+  `init_kraken_paper` bootstrap, and the oversized modules may not grow past
+  their current line counts. This is the guard that keeps the God-class
   extraction from sliding back.
 - Unit tests for three modules that previously had no coverage at all:
   `src/get_data.py` (86%), `src/predict.py` (91%) and
