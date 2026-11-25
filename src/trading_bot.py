@@ -10,7 +10,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Container
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import ccxt
 import numpy as np
@@ -858,7 +858,7 @@ class CryptoTradingBot:
             logger.warning("Legacy DRY-RUN position has no cost basis; reconstructing from entry price")
             raw_basis = buy_price * buy_amount_coin
         try:
-            basis = float(raw_basis)
+            basis = float(cast(Any, raw_basis))
         except (TypeError, ValueError) as exc:
             raise ValueError("Invalid entry cost basis") from exc
         if not math.isfinite(basis) or basis <= 0:
@@ -1165,7 +1165,7 @@ class CryptoTradingBot:
                     free = balance['free']
                     value = next((free[key] for key in ('EUR', 'ZEUR', 'XEUR')
                                   if key in free and free[key] is not None), None)
-                    cash = float(value)
+                    cash = float(cast(Any, value))
                 except (ccxt.BaseError, KeyError, TypeError, ValueError):
                     raise RuntimeError("Could not obtain free EUR balance from Kraken") from None
                 if not math.isfinite(cash) or cash < 0:

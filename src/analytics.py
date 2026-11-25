@@ -11,7 +11,7 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from src.bot_config import BotConfig
 
@@ -206,9 +206,9 @@ class PostgresAnalyticsWriter:
                         row.get('run_id', 'legacy'),
                         row.get('config_hash', 'legacy'),
                         None if row.get('mfe_pct', '') in ('', None)
-                        else float(row.get('mfe_pct')),
+                        else float(cast(Any, row.get('mfe_pct'))),
                         None if row.get('mae_pct', '') in ('', None)
-                        else float(row.get('mae_pct')),
+                        else float(cast(Any, row.get('mae_pct'))),
                     ),
                 )
         except self._psycopg.Error as exc:

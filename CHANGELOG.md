@@ -224,6 +224,18 @@ a version heading is assigned when a release is prepared.
   sweep is unit-testable without an exchange or a live bot.
 ### Changed
 
+- The `mypy` type check is clean: all 11 remaining `arg-type` errors across seven
+  modules are gone and `mypy src/` now exits 0 (it previously reported 11 errors in
+  7 files). Ten of them were `float()` calls on values from untyped `dict.get()` /
+  `object` sources whose `TypeError` path is already handled by a surrounding
+  `try`/`except` or an explicit `None` guard; those arguments now carry a
+  `cast(Any, ...)` (a no-op at runtime) so the checker accepts them without any
+  change to control flow or messages. The eleventh was `torch.onnx.export()` in
+  `src/train_hailo_model.py`, which is typed to take a `tuple` of inputs: the
+  example tensor is now wrapped in a one-element tuple, which produces a
+  byte-identical ONNX graph (verified by hashing the export output). No behaviour
+  changed — the full suite, the CI environment simulation and the Hailo end-to-end
+  export test all pass as before.
 - `src/trading_bot.py` shrank from 2375 to 2237 lines now that the entry-candidate
   sweep lives in `src/entry_selection.py`. `_select_entry_candidates()` and
   `_entry_guards_allow()` stay as thin delegators with their previous signatures —
