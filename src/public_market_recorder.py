@@ -59,7 +59,7 @@ def _utc_iso(timestamp_ms: float | None) -> str:
 
 def _finite_number(value: object, *, positive: bool = False) -> float | None:
     try:
-        result = float(value)
+        result = float(cast(Any, value))
     except (TypeError, ValueError):
         return None
     if not math.isfinite(result) or (positive and result <= 0):

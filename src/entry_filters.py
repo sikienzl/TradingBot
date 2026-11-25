@@ -11,7 +11,7 @@ diagnostics logs in :mod:`src.entry_selection`.
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -130,7 +130,7 @@ def entry_volatility_guard(config: Any, coin_data: dict) -> tuple[bool, str]:
         return True, 'disabled'
 
     try:
-        atr_pct = float(coin_data.get('atr_pct'))
+        atr_pct = float(cast(Any, coin_data.get('atr_pct')))
     except (TypeError, ValueError):
         atr_pct = float('nan')
     if not math.isfinite(atr_pct):

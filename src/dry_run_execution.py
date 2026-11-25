@@ -16,7 +16,7 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -315,8 +315,8 @@ def resolve_dry_run_sell_entry(
     entry_basis = None
     if costs_enabled or net_tracked:
         try:
-            entry_quantity = float(entry_trade.get('amount_coin'))
-            entry_price = float(entry_trade.get('buy_price'))
+            entry_quantity = float(cast(Any, entry_trade.get('amount_coin')))
+            entry_price = float(cast(Any, entry_trade.get('buy_price')))
             if (not math.isfinite(entry_quantity) or entry_quantity <= 0
                     or not math.isfinite(entry_price) or entry_price <= 0
                     or not math.isfinite(held) or held <= 0):
@@ -383,7 +383,7 @@ def dry_run_sell_gross_net_pnl(
     net_pnl_base: str | float = ''
     if entry_cost_mode == 'net_costs':
         try:
-            entry_reference = float(entry_trade.get('entry_reference_price'))
+            entry_reference = float(cast(Any, entry_trade.get('entry_reference_price')))
         except (TypeError, ValueError):
             entry_reference = 0.0
         if (math.isfinite(entry_reference) and entry_reference > 0

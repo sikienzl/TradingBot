@@ -212,7 +212,7 @@ def train_and_export(
     onnx_path = output_path / "trading_mlp.onnx"
     torch.onnx.export(
         model,
-        torch.zeros((1, len(HAILO_FEATURES)), dtype=torch.float32),
+        (torch.zeros((1, len(HAILO_FEATURES)), dtype=torch.float32),),
         onnx_path,
         input_names=[HAILO_INPUT_NAME],
         output_names=[HAILO_OUTPUT_NAME],
