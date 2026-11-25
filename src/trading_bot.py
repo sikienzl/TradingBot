@@ -183,6 +183,12 @@ from src.journal_guards import (
     _compute_dynamic_lossmaker_entry_pairs,
     _compute_recent_pnl_guard_state,
 )
+from src.market_analysis import (
+    analyze_markets as _market_analysis_analyze_markets,
+)
+from src.market_analysis import (
+    dynamic_excluded_coins as _market_analysis_dynamic_excluded_coins,
+)
 from src.market_data import fetch_market_data, fetch_ohlcv
 from src.portfolio import Portfolio
 from src.simulation import SimulationEngine
@@ -660,70 +666,8 @@ class CryptoTradingBot:
         return float(best[0])
 
     def _dynamic_excluded_coins(self) -> set[str]:
-        """Builds a temporary exclusion set from recent sell-side underperformance."""
-        if not self.config.dynamic_lossmaker_exclusion_enabled:
-            return set()
-
-        path = self.config.performance_log_file
-        if not self.config.performance_log_enabled or not os.path.exists(path):
-            return set()
-
-        try:
-            df = pd.read_csv(path)
-        except (
-            OSError,
-            UnicodeError,
-            pd.errors.ParserError,
-            pd.errors.EmptyDataError,
-        ) as e:
-            logger.warning(
-                f"Journal could not be read for dynamic exclusions: {e}")
-            return set()
-
-        required_columns = {'action', 'coin', 'pnl_base', 'reason'}
-        if df.empty or not required_columns.issubset(df.columns):
-            return set()
-
-        sells = df.loc[
-            df['action'].fillna(
-                '').astype(str).str.lower() == 'sell'
-        ].copy()
-        recent_window = sells.tail(self.config.dynamic_lossmaker_window).copy()
-        if recent_window.empty:
-            return set()
-
-        sells = recent_window.loc[
-            recent_window['action'].fillna(
-                '').astype(str).str.lower() == 'sell'
-        ].copy()
-        if sells.empty:
-            return set()
-
-        dynamic_exclusions: set[str] = set()
-        for coin, group in sells.groupby('coin', dropna=True):
-            if len(group) < self.config.dynamic_lossmaker_min_sells:
-                continue
-
-            pnl = pd.to_numeric(group['pnl_base'], errors='coerce').fillna(0.0)
-            pnl_sum = float(pnl.sum())
-            if pnl_sum > -self.config.dynamic_lossmaker_min_pnl_loss:
-                continue
-
-            win_rate_pct = float((pnl > 0).mean() * 100.0)
-            if win_rate_pct > self.config.dynamic_lossmaker_max_win_rate_pct:
-                continue
-
-            reasons = group['reason'].fillna('').astype(str)
-            max_hold_exit_ratio = float(
-                reasons.str.contains(
-                    'MAX-HOLD-TIME', case=False, na=False).mean()
-            )
-            if max_hold_exit_ratio < self.config.dynamic_lossmaker_min_max_hold_exit_ratio:
-                continue
-
-            dynamic_exclusions.add(str(coin).upper())
-
-        return dynamic_exclusions
+        """Delegates to :func:`src.market_analysis.dynamic_excluded_coins`."""
+        return _market_analysis_dynamic_excluded_coins(self.config, logger=logger)
 
     def _dynamic_excluded_entry_pairs(self) -> set[tuple[str, str]]:
         """Builds a temporary exclusion set for recent coin/source entry pairs."""
@@ -1780,67 +1724,15 @@ class CryptoTradingBot:
 
 
     def _analyze_markets(self, market_data: dict[str, dict], extra_coins: list[str] | None = None) -> dict[str, dict]:
-        """Performs a comprehensive market analysis and returns recommendations."""
-        dynamic_excluded_coins = self._dynamic_excluded_coins()
-        if dynamic_excluded_coins:
-            logger.info(
-                "Dynamically excluded lossmaker coins: %s",
-                ', '.join(sorted(dynamic_excluded_coins)),
-            )
-        filtered_coins_by_volume = []
-        for coin, data in market_data.items():
-            if coin in self.config.excluded_coins or coin in dynamic_excluded_coins:
-                continue
-            if data['volume'] >= self.config.min_volume_base:
-                filtered_coins_by_volume.append(coin)
-
-        logger.info(
-            f"Coins filtered by volume ({self.config.min_volume_base:,.0f} {self.config.base_currency} minimum): {len(filtered_coins_by_volume)}")
-
-        # Select only the Top-N by volume for detailed analysis to limit API calls
-        # or analyse all if TOP_N_FOR_ANALYSIS is very high
-        if len(filtered_coins_by_volume) > self.config.top_n_for_analysis:
-            # Sort by volume descending and select the Top-N
-            sorted_by_volume = sorted(
-                filtered_coins_by_volume, key=lambda c: market_data[c]['volume'], reverse=True)
-            coins_for_detailed_analysis = sorted_by_volume[:self.config.top_n_for_analysis]
-            logger.info(
-                f"Running detailed analysis for top {self.config.top_n_for_analysis} coins (by volume).")
-        else:
-            coins_for_detailed_analysis = filtered_coins_by_volume
-            logger.info(
-                f"Running detailed analysis for all {len(coins_for_detailed_analysis)} high-volume coins.")
-
-        # Always analyse open positions, even if they are not in the volume top-N.
-        if extra_coins:
-            for coin in extra_coins:
-                if coin in market_data and coin not in coins_for_detailed_analysis:
-                    coins_for_detailed_analysis.append(coin)
-
-        analysis: dict[str, dict] = {}
-        total_analysis_coins = len(coins_for_detailed_analysis)
-        for idx, coin in enumerate(coins_for_detailed_analysis, start=1):
-            logger.info(
-                f"🔎 Analysis progress: {idx}/{total_analysis_coins} - {coin}")
-            started_at = time.monotonic()
-            current_price = market_data[coin]['price']
-            coin_analysis = self._analyze_coin(coin, current_price)
-            elapsed = time.monotonic() - started_at
-            if elapsed >= self.config.slow_analysis_warning_seconds:
-                logger.warning(
-                    f"Slow coin analysis for {coin}: {elapsed:.1f}s")
-            if coin_analysis:
-                analysis[coin] = {
-                    'coin': coin,
-                    'price': current_price,
-                    'volume': market_data[coin]['volume'],
-                    **coin_analysis
-                }
-
-        # Sort by score/recommendation
-        sorted_analysis = dict(
-            sorted(analysis.items(), key=lambda x: x[1]['score'], reverse=True))
-        return sorted_analysis
+        """Delegates to :func:`src.market_analysis.analyze_markets`."""
+        return _market_analysis_analyze_markets(
+            self.config,
+            self._dynamic_excluded_coins,
+            self._analyze_coin,
+            market_data,
+            extra_coins,
+            logger=logger,
+        )
 
     def _confirm_order_fill(
         self,

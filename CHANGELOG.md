@@ -167,6 +167,18 @@ a version heading is assigned when a release is prepared.
   dataclass, so the fill maths and the simulated accounting are unit-testable
   without constructing a bot. Covered by 39 new tests in
   `tests/test_dry_run_execution.py`.
+- `src/market_analysis.py`, the market screening cluster that used to live in
+  `CryptoTradingBot`: `dynamic_excluded_coins` (the lossmaker exclusion set built
+  from recent sell-side underperformance - minimum sell count, cumulative loss,
+  win-rate and MAX-HOLD-TIME exit ratio gates over the configured journal
+  window), `select_analysis_coins` (the base-currency volume gate, the Top-N by
+  volume and the "always analyse open positions" extra-coins rule) and
+  `analyze_markets` (the scored per-coin analysis loop with its progress logging
+  and slow-coin warning). The `BotConfig` is injected and the two pieces of bot
+  state the loop touches - the dynamic exclusion set and the per-coin analyser -
+  arrive as explicit callables, so the volume gate, the Top-N selection and the
+  scored map are unit-testable without an exchange or a model. Covered by 28 new
+  tests in `tests/test_market_analysis.py`.
 ### Changed
 
 - `read_ai_copilot_usage()` now exists once, in `src/export_pnl_metrics.py`. The
@@ -309,9 +321,32 @@ a version heading is assigned when a release is prepared.
   identical return values, log output, journal rows and portfolio/performance
   state; the moved bodies are also AST-identical apart from the injected
   collaborators.
+- `src/trading_bot.py` shrank from 2884 to 2776 lines now that the market
+  screening cluster lives in `src/market_analysis.py`. `_analyze_markets()` and
+  `_dynamic_excluded_coins()` keep their names and signatures as thin delegators
+  and pass their own bound methods as the injected callables, so the existing
+  tests that patch or call a bot method still apply. The architecture ceiling was
+  ratcheted to the new size and `market_analysis` was registered as a layer-1
+  module. The old and new code were compared over 18 scenarios driven through
+  `_analyze_markets()` and `_dynamic_excluded_coins()` on a real bot (default
+  screening, Top-N trimming, the volume gate, no filtering, static exclusions,
+  a lossmaker journal with and without the feature flag, journal disabled,
+  missing, unreadable, header-only, missing columns, other exit reasons, window
+  and threshold variations, an empty market feed, extra coins only and a forced
+  slow-analysis warning), covering 172 log lines, and produced identical return
+  values, exclusion sets and log output; the moved bodies are also AST-identical
+  apart from the injected collaborators.
 
 ### Fixed
 
+- `tests/test_public_paper_dashboard.py` failed whenever the suite ran within two
+  hours of UTC midnight. Its fixture stamped the two journal rows at
+  `now - 2h` / `now - 1h`, but `load_dashboard_data()` buckets rows with
+  `stamp.date() == datetime.now(UTC).date()`, so shortly after midnight the
+  "two hours ago" row belongs to the previous UTC day and `today_buys` came back
+  as 0. The fixture now derives both timestamps from the elapsed part of the
+  current UTC day, so they stay ordered, in the past and inside today's bucket at
+  any hour.
 - `read_ai_shadow_suggestions()` crashed on every real co-pilot log line. The bot
   writes `asctime` timestamps in local time with no offset, and the reader
   subtracted them from `datetime.now(UTC)`, so the `TypeError` escaped the narrow

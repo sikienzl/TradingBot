@@ -10,9 +10,24 @@ from fastapi.testclient import TestClient
 from src import public_paper_dashboard as dashboard
 
 
+def _today_row_times(now: datetime) -> tuple[datetime, datetime]:
+    """Two increasing timestamps that are always on the current UTC day.
+
+    The dashboard buckets journal rows by ``stamp.date() == datetime.now(UTC)
+    .date()``, so fixed "two hours ago"/"one hour ago" offsets fall out of today
+    whenever the suite runs within two hours of UTC midnight. Splitting the
+    elapsed part of the day keeps both rows in today's bucket, in order, and in
+    the past.
+    """
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elapsed = now - day_start
+    return day_start + elapsed * 0.25, day_start + elapsed * 0.5
+
+
 @pytest.fixture
 def client(monkeypatch, tmp_path):
     now = datetime.now(UTC)
+    buy_time, sell_time = _today_row_times(now)
     data_dir = tmp_path / "data"
     reports_dir = tmp_path / "reports"
     data_dir.mkdir()
@@ -35,7 +50,7 @@ def client(monkeypatch, tmp_path):
         writer.writerows(
             [
                 {
-                    "timestamp": (now - timedelta(hours=2)).isoformat(),
+                    "timestamp": buy_time.isoformat(),
                     "coin": "BTC",
                     "action": "buy",
                     "amount_base": "10",
@@ -45,7 +60,7 @@ def client(monkeypatch, tmp_path):
                     "entry_cost_mode": "net_costs",
                 },
                 {
-                    "timestamp": (now - timedelta(hours=1)).isoformat(),
+                    "timestamp": sell_time.isoformat(),
                     "coin": "BTC",
                     "action": "sell",
                     "amount_base": "10",
