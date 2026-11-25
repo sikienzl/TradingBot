@@ -165,6 +165,19 @@ continues even if that run fails, so check the output and metric file.
 Schedule separate scorecard runs with the same `STATUS_PROM_FILE` to refresh
 metrics, and monitor their timestamp for staleness.
 
+## Daily dry-run review
+
+The Pi package also carries `deploy/daily-dryrun-review.service` and
+`.timer`, which run `scripts/run_daily_dryrun_review.sh` once a day over the
+local journal, bot log and AI-copilot state, writing
+`results/daily_review/latest_review.{json,txt,html}`. The unit reads
+`/opt/trading_2/.env`, so it only applies where the bot itself runs. It is a
+reporting convenience and is not installed by `scripts/install_pi.sh` or
+`scripts/install_monitoring_pi.sh`; enable it explicitly with
+`sudo systemctl enable --now daily-dryrun-review.timer`. A successful run over
+an empty window still exits 0, so treat the review as output to read, not as a
+health signal - the staleness gauges below are the health signal.
+
 ## Runtime health and alert delivery
 
 The Pi monitoring installer installs a 30-second operational-health timer. It

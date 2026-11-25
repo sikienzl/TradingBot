@@ -20,6 +20,32 @@ a version heading is assigned when a release is prepared.
   across 61 source files it now fails the run like the ruff gate, with the same
   step-summary and exit-code pattern. A typing regression can no longer land on
   `main` unnoticed.
+- The Pi release archive now stages the whole monitoring stack its own installer
+  needs, and `SERVER_README.md`/`docs/MONITORING.md` describe the units
+  `scripts/install_monitoring_pi.sh` actually installs instead of a subset. The
+  daily dry-run review units ship in the Pi package for the first time; they are
+  opt-in and are not enabled by either installer.
+
+### Fixed
+
+- `trading-bot-pi-<version>.tar.gz` omitted six files that
+  `scripts/install_monitoring_pi.sh` reads from the extracted package:
+  `deploy/trading-operational-health.service`, `.timer`,
+  `deploy/trading-alert-relay.service`, `deploy/trading-alert-relay.env.example`,
+  `deploy/trading-health.env.example`, `deploy/alertmanager.yml` and
+  `deploy/grafana-low-power.conf`, plus the `scripts/export_operational_health.py`
+  and `scripts/alert_webhook_relay.py` those units exec. On a v1.0.28 install the
+  monitoring installer aborted with `Missing unit file:
+  /opt/trading_2/deploy/trading-operational-health.service`, so the single-node Pi
+  profile could not enable its own alerting. The staging list also now carries
+  `scripts/daily_dryrun_review.py` and `scripts/run_daily_dryrun_review.sh`, which
+  `deploy/daily-dryrun-review.service` requires.
+- New `.github/scripts/tests/test_pi_package_manifest.py` keeps the hand-written
+  Pi staging list in release.yml from drifting again: it parses the staging step
+  and asserts that every `deploy/…`/`scripts/…` path the two Pi installers
+  reference is staged, that the monitoring unit loop is satisfied, that every
+  staged unit's `ExecStart` target is staged, and that every staged path exists
+  in the repository. Verified to fail against the v1.0.28 workflow.
 
 ## v1.0.28 - 2026-11-25
 

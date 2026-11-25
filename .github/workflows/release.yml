@@ -78,6 +78,10 @@ jobs:
              scripts/check_autoresearch_setup.sh \
              scripts/update_autoresearch_signal.py \
              scripts/fetch_research_signal.py \
+             scripts/export_operational_health.py \
+             scripts/alert_webhook_relay.py \
+             scripts/daily_dryrun_review.py \
+             scripts/run_daily_dryrun_review.sh \
              "${PKG}/scripts/"
           cp deploy/trading-bot.service \
              deploy/pnl-exporter.service \
@@ -94,12 +98,21 @@ jobs:
              deploy/node-exporter-textfile.service \
              deploy/prometheus.yml \
              deploy/trading-alerts.yml \
+             deploy/alertmanager.yml \
+             deploy/trading-operational-health.service \
+             deploy/trading-operational-health.timer \
+             deploy/trading-health.env.example \
+             deploy/trading-alert-relay.service \
+             deploy/trading-alert-relay.env.example \
              deploy/grafana-datasource.yml \
              deploy/grafana-dashboard.json \
              deploy/grafana-dashboard-provisioning.yml \
              deploy/grafana-memory-limit.conf \
+             deploy/grafana-low-power.conf \
              deploy/research-signal.service \
              deploy/research-signal.timer \
+             deploy/daily-dryrun-review.service \
+             deploy/daily-dryrun-review.timer \
              "${PKG}/deploy/"
 
           # Release metadata inside package
@@ -140,6 +153,15 @@ jobs:
             "${PKG}/deploy/scorecard-status.timer"
             "${PKG}/deploy/research-signal.service"
             "${PKG}/deploy/research-signal.timer"
+            "${PKG}/deploy/trading-operational-health.service"
+            "${PKG}/deploy/trading-operational-health.timer"
+            "${PKG}/deploy/trading-health.env.example"
+            "${PKG}/deploy/trading-alert-relay.service"
+            "${PKG}/deploy/trading-alert-relay.env.example"
+            "${PKG}/deploy/alertmanager.yml"
+            "${PKG}/deploy/grafana-low-power.conf"
+            "${PKG}/scripts/export_operational_health.py"
+            "${PKG}/scripts/alert_webhook_relay.py"
             "${PKG}/version.txt"
           )
           for required in "${required_files[@]}"; do
