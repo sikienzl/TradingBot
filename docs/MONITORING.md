@@ -167,16 +167,35 @@ metrics, and monitor their timestamp for staleness.
 
 ## Runtime health and alert delivery
 
-The Pi monitoring installer now installs a 30-second operational-health timer.
-It publishes `trading_kill_switch_active`, optional Hailo health, and research
-signal presence/age to the Node Exporter textfile collector. The health unit
-uses `/etc/trading-health.env`, not the bot's credential-bearing `.env`; copy
-`deploy/trading-health.env.example` there only when a Hailo health endpoint is
-configured. The endpoint must be loopback or a trusted private address.
+The Pi monitoring installer installs a 30-second operational-health timer. It
+publishes `trading_kill_switch_active`, optional Hailo health, research signal
+presence/age, and data-staleness gauges for the bot's own inputs -
+`trading_journal_present` / `trading_journal_age_seconds`,
+`trading_bot_log_present` / `trading_bot_log_age_seconds`, and, when a recorder
+directory is configured, `trading_market_data_present` /
+`trading_market_data_age_seconds` - to the Node Exporter textfile collector.
+The staleness gauges are what make a silently stopped collector or bot process
+observable: a daily report over an empty window still exits 0, so without them
+every downstream metric simply reads as zero. Each probe reads only a bounded
+tail of its file and fails closed to "absent" on a missing or unreadable file,
+which keeps "not collected" distinguishable from "stale".
+
+The health unit uses `/etc/trading-health.env`, not the bot's
+credential-bearing `.env`; copy `deploy/trading-health.env.example` there.
+`TRADING_JOURNAL_FILE` and `TRADING_BOT_LOG_FILE` default to the journal and
+bot log under `TRADING_DATA_DIR`. `TRADING_MARKET_DATA_DIR` stays empty on
+hosts that do not run the public market recorder, so no market metric is
+published at all instead of a false absence. `TRADING_LOG_TIMEZONE` is the zone
+of the naive `asctime` stamps in the bot log and defaults to `UTC`; set it to
+match `--log-timezone` of `scripts/public_paper_daily_report.py`. A Hailo
+health endpoint is only added when configured, and it must be loopback or a
+trusted private address.
 
 Prometheus alerts cover scorecard GO/HOLD/NO-GO and staleness, portfolio
 snapshot staleness, kill-switch activation, configured Hailo health failures,
-missing/stale research inputs, and missing operational metrics. The installer
+missing/stale research inputs, a missing or stale bot log, a stale trade
+journal, missing or stale market recorder data, and missing operational
+metrics. The installer
 also configures local Alertmanager and a loopback-only relay. Before installing
 monitoring, create `/etc/trading-alert-relay.env` from
 `deploy/trading-alert-relay.env.example` with the organization's private HTTPS

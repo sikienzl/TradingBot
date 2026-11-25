@@ -171,3 +171,27 @@ for that account in addition to the local file lock. The single-Pi profile
 leaves this disabled and has no PostgreSQL requirement. Every cluster execution
 node must use the same reachable database; inability to acquire the lease blocks
 startup.
+
+## Operational health exporter
+
+`scripts/export_operational_health.py` runs from the 30-second
+`trading-operational-health.timer` and reads `/etc/trading-health.env`, never
+the bot's credential-bearing `.env`. These settings are separate from the bot
+settings above.
+
+| Variable | Default | Description |
+|---|---|---|
+| `TRADING_DATA_DIR` | `.` | Base directory used for the defaults below |
+| `TRADING_KILL_SWITCH_FILE` | `.trading_kill_switch` | Kill-switch marker whose existence is exported |
+| `TRADING_JOURNAL_FILE` | `$TRADING_DATA_DIR/trade_journal.csv` | Journal probed for `trading_journal_age_seconds` |
+| `TRADING_BOT_LOG_FILE` | `$TRADING_DATA_DIR/trading_bot.log` | Bot log probed for `trading_bot_log_age_seconds`; the systemd unit points at `logs/bot.log` |
+| `TRADING_MARKET_DATA_DIR` | unset | Market recorder directory. Empty means the host does not run the recorder, so no market metric is published instead of a false absence |
+| `TRADING_LOG_TIMEZONE` | `UTC` | Zone of the naive `asctime` stamps in the bot log; keep it equal to `--log-timezone` of the daily report |
+| `RESEARCH_SIGNAL_PATH` | `$TRADING_DATA_DIR/research_signal_latest.json` | Research/news feed probed for presence and age |
+| `HAILO_HEALTH_URL` | unset | Optional Hailo health endpoint; loopback or trusted private address only |
+| `TRADING_HEALTH_METRICS_FILE` | `results/scorecards/textfile/trading_health.prom` | Textfile-collector fragment written atomically |
+
+Each staleness probe reads only a bounded tail of its file and reports
+`*_present 0` with no age when the source is missing or unreadable, so a probe
+failure never crashes the timer and "not collected" stays distinguishable from
+"stale". See [Monitoring](MONITORING.md) for the matching alert rules.

@@ -81,3 +81,48 @@ groups:
         annotations:
           summary: "Trading operational health metrics are missing"
           description: "The periodic operational-health textfile exporter may have stopped."
+
+      - alert: TradingBotLogMissing
+        expr: trading_bot_log_present == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Bot log has no parseable timestamps"
+          description: "The configured bot log is missing or unreadable, so bot activity cannot be observed."
+
+      - alert: TradingBotLogStale
+        expr: trading_bot_log_age_seconds > 900
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Bot process has not logged recently"
+          description: "No bot log line for over 15 minutes; the loop logs every CHECK_INTERVAL, so the process is stopped or wedged."
+
+      - alert: TradingJournalStale
+        expr: trading_journal_age_seconds > 93600
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Trade journal has no new rows for over 26 hours"
+          description: "Journal rows only appear on fills, so a quiet market is expected; a stopped collector looks identical unless this alert fires."
+
+      - alert: TradingMarketDataMissing
+        expr: trading_market_data_present == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Market recorder output is unavailable"
+          description: "TRADING_MARKET_DATA_DIR is configured but tickers.csv/candles_1m.csv are missing or have no parseable timestamp."
+
+      - alert: TradingMarketDataStale
+        expr: trading_market_data_age_seconds > 900
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Market recorder output is stale"
+          description: "The newest recorded ticker or 1m candle is over 15 minutes old; the recorder should append within seconds."

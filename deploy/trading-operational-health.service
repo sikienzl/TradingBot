@@ -1,5 +1,5 @@
 [Unit]
-Description=Export trading kill-switch, Hailo, and research health metrics
+Description=Export trading kill-switch, Hailo, research, and data-staleness metrics
 After=network-online.target
 
 [Service]
@@ -11,6 +11,8 @@ EnvironmentFile=-/etc/trading-health.env
 Environment=PYTHONPATH=/opt/trading_2
 Environment=TRADING_KILL_SWITCH_FILE=/opt/trading_2/.trading_kill_switch
 Environment=RESEARCH_SIGNAL_PATH=/opt/trading_2/data/research_signal_latest.json
+Environment=TRADING_JOURNAL_FILE=/opt/trading_2/trade_journal.csv
+Environment=TRADING_BOT_LOG_FILE=/opt/trading_2/logs/bot.log
 Environment=TRADING_HEALTH_METRICS_FILE=/opt/trading_2/results/scorecards/textfile/trading_health.prom
 ExecStart=/opt/trading_2/.venv/bin/python -m scripts.export_operational_health
 NoNewPrivileges=true

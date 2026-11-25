@@ -15,7 +15,7 @@ The live cluster workload inspected is paper/shadow only.
 | 5 | Execution and costs | **[⚠️ Partial]** Fees and spread ceiling are accounted for; ambiguous order outcomes latch the stop marker instead of retrying. Maker/taker estimates and exchange-native idempotency remain absent. | **[⚠️ Partial]** Same controls, but live exchange use remains unvalidated on the cluster. |
 | 6 | Single-Pi vs cluster operations | **[⚠️ Partial]** Local process lock, persisted live snapshot, startup balance comparison, open-order refusal, and uncertain-order latch exist; fill reconstruction needs operator review. | **[⚠️ Partial]** Optional account-scoped PostgreSQL advisory lease supplements local locks; shared PostgreSQL config and cluster deployment are operator prerequisites, and fill reconstruction remains manual. |
 | 7 | Evaluation and scorecard | **[✅ Implemented]** GO/HOLD/NO-GO and HOLD for insufficient data are implemented, with Pi systemd automation. | **[⚠️ Partial]** Scorecard code and monitoring rules exist, but the inspected cluster deployment does not show scorecard automation as part of its active bot topology. |
-| 8 | Monitoring and alerting | **[⚠️ Partial]** Pi installer configures Alertmanager, a private HTTPS webhook relay, and kill-switch/Hailo/research health alerts; operator webhook configuration and staging delivery validation remain required. | **[⚠️ Partial]** Alert rules and relay are available in the repository, but cluster-specific installation/configuration and live receiver validation remain outstanding. |
+| 8 | Monitoring and alerting | **[⚠️ Partial]** Pi installer configures Alertmanager, a private HTTPS webhook relay, and kill-switch/Hailo/research health alerts plus bounded journal/bot-log/market-data staleness probes; operator webhook configuration and staging delivery validation remain required. | **[⚠️ Partial]** Alert rules and relay are available in the repository, but cluster-specific installation/configuration and live receiver validation remain outstanding. |
 
 ## Findings and evidence
 
@@ -152,17 +152,25 @@ dashboard and test stale/missing metrics as HOLD.
 `src.public_paper_dashboard` exposes a read-only dashboard and has access
 control/read-only tests. The dashboard container was active on `.74` during
 inspection. Prometheus rules alert on scorecard NO-GO/HOLD/missing and stale
-portfolio snapshots. The Pi monitoring installer now deploys a 30-second
+portfolio snapshots. The Pi monitoring installer deploys a 30-second
 operational-health textfile exporter, Alertmanager, and a loopback-only relay
 to a private HTTPS webhook. Rules cover kill-switch activation, configured
 Hailo health, missing/stale research, and missing health metrics in addition to
-scorecard/snapshot status. No organization-specific webhook credential or
-staging delivery evidence is included in Git; daily report and market-data
-failure metrics remain uninstrumented.
+scorecard/snapshot status. Since `src.data_staleness` the exporter also probes
+the bot's own inputs - the trade journal, the bot log, and, when configured,
+the market recorder directory - so a silently stopped collector or bot process
+is observable instead of reading as zero everywhere; the matching
+`TradingBotLogMissing/Stale`, `TradingJournalStale`, and
+`TradingMarketDataMissing/Stale` rules close the 2026-11-16 class of outage
+where the collector died for days while the daily report still exited 0. Each
+probe reads a bounded tail and fails closed to "absent". No
+organization-specific webhook credential or staging delivery evidence is
+included in Git; daily-report exit status and disk/database capacity remain
+uninstrumented.
 
 **Next:** Configure the private receiver on each deployment, validate delivery
-in staging, and add daily-report, market-data, disk/database alerts. Keep the
-dashboard read-only and the Pi monitoring path independent from cluster
+in staging, and add daily-report exit-status and disk/database capacity alerts.
+Keep the dashboard read-only and the Pi monitoring path independent from cluster
 services.
 
 ## Prioritized implementation order
@@ -182,6 +190,8 @@ services.
 5. **P1: Establish paired model releases.** Build a single versioned artifact
    manifest and atomic deployment/rollback for CPU and Hailo artifacts; assign
    training/compilation to the future x86 worker only after it exists.
-6. **P2: Close operational visibility gaps.** Add alert receivers, cluster
-   scorecard promotion gating, and staleness/kill-switch/Hailo alerts; retain a
-   tested standalone Pi dashboard/scorecard path.
+6. **P2: Close operational visibility gaps.** Alert receivers, kill-switch,
+   Hailo, research-feed, scorecard, portfolio-snapshot, and data-staleness
+   alerts are implemented; cluster scorecard promotion gating, daily-report
+   exit status, and disk/database capacity alerts remain. Retain a tested
+   standalone Pi dashboard/scorecard path.

@@ -44,6 +44,7 @@ LAYERS: dict[int, tuple[str, ...]] = {
         "close_performance",
         "coin_analysis",
         "data_preparation",
+        "data_staleness",
         "dry_run_execution",
         "entry_selection",
         "entry_filters",

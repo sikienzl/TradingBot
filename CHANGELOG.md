@@ -241,8 +241,39 @@ a version heading is assigned when a release is prepared.
   probe, the paper-trade recovery and the iteration counter — arrive through
   `PortfolioBootstrapHooks`, so the whole startup path is unit-testable without a
   live bot. Covered by 40 new tests in `tests/test_portfolio_bootstrap.py`.
+- `src/data_staleness.py`, a layer-1 module of bounded staleness probes for the
+  bot's own inputs: the newest `timestamp` in the trade journal, the newest
+  `asctime` in the bot log (with a configurable zone, because
+  `logging.Formatter` writes naive local time) and the newest
+  `timestamp_utc` across `tickers.csv` / `candles_1m.csv` of the market
+  recorder. Every probe reads only a 1 MiB tail, never the whole file, and
+  fails closed to "absent" on a missing, unreadable or unparseable source so a
+  probe error cannot crash the health timer. Covered by 22 new tests in
+  `tests/test_data_staleness.py`.
+- Five Prometheus rules in `deploy/trading-alerts.yml`:
+  `TradingBotLogMissing` and `TradingBotLogStale` (critical, 15 minutes without
+  a log line, which means the loop is stopped or wedged), `TradingJournalStale`
+  (warning, 26 hours without a journal row) and `TradingMarketDataMissing` /
+  `TradingMarketDataStale` (warning). This is the alertable signal for the
+  2026-11-16 outage where the public-paper collector died for seven days while
+  the daily report kept exiting 0.
+- `docs/CONFIGURATION.md` gained an "Operational health exporter" section that
+  documents the `TRADING_JOURNAL_FILE`, `TRADING_BOT_LOG_FILE`,
+  `TRADING_MARKET_DATA_DIR` and `TRADING_LOG_TIMEZONE` settings separately from
+  the bot settings.
+
 ### Changed
 
+- `scripts/export_operational_health.py` now publishes the staleness gauges
+  `trading_journal_present` / `trading_journal_age_seconds` and
+  `trading_bot_log_present` / `trading_bot_log_age_seconds` on every host, and
+  `trading_market_data_present` / `trading_market_data_age_seconds` only where
+  `TRADING_MARKET_DATA_DIR` is configured, so a host that never runs the
+  recorder does not raise a false absence. A source that is missing or
+  unreadable reports `*_present 0` with no age, which keeps "not collected"
+  distinguishable from "stale" in the alert rules. `deploy/trading-operational-health.service`
+  carries the journal and bot-log paths and `deploy/trading-health.env.example`
+  documents the optional recorder directory.
 - `src/trading_bot.py` shrank from 2084 to 2055 lines by moving
   `_entry_cost_basis()` and `_record_close_performance()` into
   `src/close_performance.py`; its architecture ceiling was lowered from 2120 to
