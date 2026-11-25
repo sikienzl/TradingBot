@@ -241,6 +241,67 @@ a version heading is assigned when a release is prepared.
   probe, the paper-trade recovery and the iteration counter — arrive through
   `PortfolioBootstrapHooks`, so the whole startup path is unit-testable without a
   live bot. Covered by 40 new tests in `tests/test_portfolio_bootstrap.py`.
+- `src/bot_runtime.py`, the long-running bot loop and its process-lifetime
+  execution lock. `run_bot()` acquires an `ExecutionOwnerLock` on
+  `TRADING_EXECUTION_LOCK_FILE` before the loop starts, so a second bot process
+  against the same account exits instead of trading alongside the first, and it
+  releases the lock on every exit path. The loop body moved out of
+  `CryptoTradingBot.run()` unchanged.
+- `src/execution_owner.py`, the ownership primitives behind that lock:
+  `ExecutionOwnerLock` (an exclusive non-blocking `fcntl.flock` held for the
+  whole bot process lifetime, so a contending process gets a clear "another bot
+  process owns the execution lock" error instead of trading alongside the
+  first), and an optional account-scoped `PostgresAdvisoryExecutionLease` /
+  `RemoteExecutionLease` pair so two CM5 nodes can share one execution owner
+  through a PostgreSQL advisory lock keyed by the account ID. The lease is
+  opt-in via `TRADING_CLUSTER_EXECUTION_LEASE_ENABLED` and requires a shared
+  `TRADING_CLUSTER_EXECUTION_LEASE_DATABASE_URL` and
+  `TRADING_EXECUTION_ACCOUNT_ID`; single-Pi mode never touches PostgreSQL.
+- `src/inference_fallback.py`, a validated tabular inference fallback that walks
+  `hailo` -> CPU CatBoost -> `rules_only` without importing any Hailo package on
+  the general bot path. A backend is only used when it returns a finite,
+  in-range probability; a missing device, absent `hailo_platform`, invalid model
+  or out-of-range prediction falls through to the next backend, and the existing
+  rules signal is preserved when both models are unavailable. The selected
+  backend and every fallback are logged.
+- `src/news_veto.py`, an opt-in structured news veto with a durable daily
+  API-call budget. `evaluate_news_veto()` runs only after the momentum and
+  cooldown gates, sends only fresh, dated items to a strictly validated provider
+  schema, and can only veto a BUY — it can never create one. The provider, API
+  key, model and `NEWS_VETO_MAX_CALLS_PER_DAY` budget must all be configured;
+  provider errors, malformed responses or an exhausted budget fail closed for
+  the candidate. The consumed-call count is persisted atomically in
+  `NEWS_VETO_STATE_FILE`. The whole feature is off until `NEWS_VETO_ENABLED` is
+  set, so a Pi release without a configured provider is unchanged.
+- `src/model_release.py`, immutable paired CPU/Hailo model releases. A release
+  bundles the `.cbm`/`.onnx` and `.hef` artifacts built from one model contract,
+  with a metadata manifest, feature/label contract, training hash, artifact
+  checksums and validation metrics. `promote_release()` activates a validated
+  pair atomically (staged write plus directory sync), `validate_release()`
+  re-checks the contract and checksums, and `rollback_release()` restores the
+  prior known-good pair; only whole pairs are ever swapped.
+  `scripts/manage_model_release.py` drives promote/validate/rollback from the
+  command line, and `train_catboost_model.py` now records training provenance
+  and a fixed Hailo-compatible feature contract.
+- `scripts/export_operational_health.py`, a Prometheus textfile-collector
+  exporter for the operational signals the PnL exporter does not carry:
+  `trading_kill_switch_active`, `trading_hailo_health_check_enabled` /
+  `trading_hailo_service_up` and
+  `trading_research_signal_present` / `trading_research_signal_age_seconds`. The
+  kill-switch gauge doubles as the exporter heartbeat: `absent()` on it is the
+  `TradingOperationalHealthMetricsMissing` alert.
+  `deploy/trading-operational-health.service` / `.timer` run it every 30 seconds
+  into the Node Exporter textfile directory and
+  `scripts/install_monitoring_pi.sh` installs them.
+- `scripts/alert_webhook_relay.py` and `deploy/trading-alert-relay.service`, a
+  loopback-only Alertmanager receiver that forwards alerts to a private HTTPS
+  webhook. The webhook endpoint and credential live in
+  `/etc/trading-alert-relay.env` and are never committed.
+- Five Prometheus rules in `deploy/trading-alerts.yml` for the operational
+  signals: `TradingKillSwitchActive`, `TradingHailoServiceUnavailable`,
+  `TradingResearchSignalMissing` / `TradingResearchSignalStale` and
+  `TradingOperationalHealthMetricsMissing`, next to the scorecard and
+  portfolio-snapshot rules that were already there.
 - `src/data_staleness.py`, a layer-1 module of bounded staleness probes for the
   bot's own inputs: the newest `timestamp` in the trade journal, the newest
   `asctime` in the bot log (with a configurable zone, because
@@ -265,6 +326,28 @@ a version heading is assigned when a release is prepared.
 
 ### Changed
 
+- Live execution now fails closed on uncertainty. A live start reconciles the
+  persisted portfolio against Kraken before any order is allowed: unknown
+  holdings, a balance mismatch, an unreadable or non-list `fetch_open_orders()`
+  result, a non-dict balance payload or a non-finite/negative balance raises
+  instead of continuing, and a corrupt persisted state is a hard stop rather
+  than a silent reseed. `src/execution_service.py` re-checks open orders
+  immediately before each live order, and an ambiguous submit or fill outcome
+  latches the persistent kill switch (`TRADING_KILL_SWITCH_FILE`, default
+  `.trading_kill_switch`) so the bot stops until an operator removes the marker;
+  `TradingKillSwitchActive` alerts while it is present. Exchange fees are
+  journalled when they convert to the quote currency and net PnL is left blank
+  when a fee cannot be valued, rather than reported as a clean number.
+- The decision pyramid is now ordered and bounded. A spread ceiling
+  (`MAX_ENTRY_SPREAD_BPS`, default 100) rejects a candidate before any model
+  runs, alongside the existing `MIN_VOLUME_BASE` volume gate and Top-N analysis
+  cap, optional models are skipped before the ATR threshold is evaluated, and
+  the paid news veto runs last. A missing or wider quote skips the candidate
+  instead of trading through it.
+- News handling is backtest-safe. Each RSS item keeps both its source
+  `published_at` and the local `fetched_at`, undated and future-dated stories are
+  rejected, and items are deduplicated by link or by content/time identity, so a
+  replay cannot see information that was not available at decision time.
 - `scripts/export_operational_health.py` now publishes the staleness gauges
   `trading_journal_present` / `trading_journal_age_seconds` and
   `trading_bot_log_present` / `trading_bot_log_age_seconds` on every host, and
