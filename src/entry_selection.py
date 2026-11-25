@@ -10,6 +10,7 @@ import logging
 import math
 from collections import Counter
 from collections.abc import Callable, Container, Iterable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -510,3 +511,240 @@ def select_entry_candidates(
         "force_fill_candidates": force_fill_candidates,
         "entry_guard_results": entry_guard_results,
     }
+
+
+@dataclass(frozen=True)
+class EntryCandidateContext:
+    """Bot-owned state the entry-candidate sweep reads but does not own."""
+
+    config: Any
+    portfolio: Any
+
+
+@dataclass(frozen=True)
+class EntryCandidateHooks:
+    """Bot collaborators the entry-candidate sweep calls but does not own."""
+
+    dynamic_excluded_entry_pairs: Callable[[], set[tuple[str, str]]]
+    degraded_entry_sources: Callable[[], set[str]]
+    recent_pnl_guard_state: Callable[[], dict[str, Any]]
+    log_recent_pnl_guard_status: Callable[[dict[str, Any]], None]
+    entry_market_mode: Callable[[dict[str, Any]], str]
+    entry_pair_allowed: Callable[[str, dict[str, Any], Container[tuple[str, str]]], bool]
+    entry_guards_allow: Callable[[str, dict[str, Any], dict[str, bool]], bool]
+    passes_fallback_entry_filter: Callable[[str, dict[str, Any]], tuple[bool, Any]]
+    passes_downtrend_reversal_filter: Callable[[dict[str, Any]], tuple[bool, Any]]
+    passes_uptrend_entry_filter: Callable[[dict[str, Any]], tuple[bool, Any]]
+    log_blocked_uptrend_candidates: Callable[..., None]
+    log_blocked_downtrend_reversal_candidates: Callable[..., None]
+    log_fallback_entry_diagnostics: Callable[..., None]
+
+
+def entry_guards_allow(
+    config: Any,
+    coin: str,
+    data: dict[str, Any],
+    cache: dict[str, bool],
+    *,
+    volatility_guard: Callable[[dict[str, Any]], tuple[bool, Any]],
+    log: logging.Logger = logger,
+) -> bool:
+    """Cached per-iteration entry guards: tabular veto + volatility proxy."""
+    if coin in cache:
+        return cache[coin]
+
+    if data.get('tabular_sell_veto', False):
+        log.info(
+            "⛔ Confident tabular SELL vetoed new entry for %s: "
+            "P(sell)=%.3f",
+            coin,
+            float(data.get('tabular_sell_proba') or 0.0),
+        )
+        cache[coin] = False
+        return False
+
+    volatility_allowed, volatility_reason = (
+        volatility_guard(data)
+    )
+    if not volatility_allowed:
+        minimum_atr_pct = config.min_entry_atr_pct
+        if volatility_reason == 'atr_pct_unavailable':
+            log.warning(
+                "⛔ Entry withheld for %s: ATR(14)/price volatility proxy "
+                "is unavailable (minimum %.3f%%)",
+                coin,
+                minimum_atr_pct * 100,
+            )
+        else:
+            log.info(
+                "⛔ Entry withheld for %s: ATR(14)/price volatility proxy "
+                "%.3f%% is below minimum %.3f%%",
+                coin,
+                float(data['atr_pct']) * 100,
+                minimum_atr_pct * 100,
+            )
+        cache[coin] = False
+        return False
+
+    cache[coin] = True
+    return True
+
+
+def log_no_entry_candidates(
+    market_analysis: dict[str, Any],
+    selection: dict[str, Any],
+    downtrend_filter_results: dict[str, tuple[bool, str]],
+    uptrend_filter_results: dict[str, tuple[bool, str]],
+    entry_market_mode: str,
+    hooks: EntryCandidateHooks,
+    *,
+    log: logging.Logger = logger,
+) -> None:
+    """Explains an empty entry shortlist: signal mix, gates and diagnostics."""
+    recommendation_mix = dict(Counter(
+        data.get('recommendation', 'UNKNOWN')
+        for data in market_analysis.values()
+    ))
+    downtrend_reversal_eligible = sum(
+        1
+        for coin, data in market_analysis.items()
+        if data.get('recommendation') == 'HOLD (Down-Trend)'
+        and downtrend_filter_results.get(coin, (False, 'not_evaluated'))[0]
+    )
+    log.info(
+        "ℹ️ No entry candidates this round: strict=%d, fallback=%d, force_fill=%d, "
+        "downtrend_reversal_eligible=%d, entry_mode=%s, recommendation_mix=%s",
+        len(selection['strict_buy_candidates']),
+        len(selection['fallback_candidates']),
+        len(selection['force_fill_candidates']),
+        downtrend_reversal_eligible,
+        entry_market_mode,
+        recommendation_mix,
+    )
+    hooks.log_blocked_uptrend_candidates(
+        market_analysis,
+        uptrend_filter_results,
+    )
+    hooks.log_blocked_downtrend_reversal_candidates(
+        market_analysis,
+        downtrend_filter_results,
+    )
+    hooks.log_fallback_entry_diagnostics(
+        market_analysis,
+        selection['fallback_base_candidates'],
+        selection['fallback_filter_results'],
+        selection['fallback_allowed'],
+        selection['fallback_suppression_reason'],
+        entry_market_mode,
+    )
+    for coin, data in list(market_analysis.items())[:5]:
+        signal_confidence = data.get('signal_confidence')
+        confidence_text = ''
+        if signal_confidence is not None:
+            confidence_text = f", confidence={float(signal_confidence) * 100:.0f}%"
+        log.info(
+            "  - %s: rec=%s, rule=%s, score=%s, rule_score=%s, RSI=%.2f, source=%s%s",
+            coin,
+            data.get('recommendation', 'n/a'),
+            data.get('rule_recommendation', 'n/a'),
+            data.get('score', 0),
+            data.get('rule_score', 0),
+            float(data.get('rsi', np.nan)),
+            data.get('signal_source', 'n/a'),
+            confidence_text,
+        )
+
+
+def select_entry_candidate_shortlist(
+    context: EntryCandidateContext,
+    hooks: EntryCandidateHooks,
+    market_analysis: dict[str, Any],
+    *,
+    log: logging.Logger = logger,
+) -> list[str]:
+    """Rank entry candidates and fill trade slots (strict, fallback, force-fill)."""
+    occupied_positions = set(context.portfolio.open_trades.keys()) | set(
+        context.portfolio.holdings.keys())
+    available_trade_slots = max(
+        0, context.config.max_open_trades - len(context.portfolio.open_trades))
+    dynamic_excluded_entry_pairs = hooks.dynamic_excluded_entry_pairs()
+    if dynamic_excluded_entry_pairs:
+        log.info(
+            "Dynamically excluded lossmaker entry pairs: %s",
+            ', '.join(sorted(
+                f"{coin}/{source}" for coin, source in dynamic_excluded_entry_pairs)),
+        )
+    degraded_entry_sources = hooks.degraded_entry_sources()
+    if degraded_entry_sources:
+        log.info(
+            "Dynamically degraded entry sources (fallback/force-fill blocked): %s",
+            ', '.join(sorted(degraded_entry_sources)),
+        )
+    recent_pnl_guard = hooks.recent_pnl_guard_state()
+    recent_pnl_guard_active = bool(recent_pnl_guard.get('active', False))
+    hooks.log_recent_pnl_guard_status(recent_pnl_guard)
+
+    downtrend_filter_results = {
+        coin: hooks.passes_downtrend_reversal_filter(data)
+        for coin, data in market_analysis.items()
+    }
+    uptrend_filter_results = {
+        coin: hooks.passes_uptrend_entry_filter(data)
+        for coin, data in market_analysis.items()
+    }
+    entry_market_mode = hooks.entry_market_mode(market_analysis)
+
+    selection = select_entry_candidates(
+        market_analysis,
+        config=context.config,
+        occupied_positions=occupied_positions,
+        available_trade_slots=available_trade_slots,
+        dynamic_excluded_entry_pairs=dynamic_excluded_entry_pairs,
+        degraded_entry_sources=degraded_entry_sources,
+        recent_pnl_guard_active=recent_pnl_guard_active,
+        downtrend_filter_results=downtrend_filter_results,
+        uptrend_filter_results=uptrend_filter_results,
+        entry_market_mode=entry_market_mode,
+        entry_pair_allowed=hooks.entry_pair_allowed,
+        entry_guards_allow=hooks.entry_guards_allow,
+        fallback_entry_filter=hooks.passes_fallback_entry_filter,
+        logger=log,
+    )
+    top_buy_recommendations = selection['selected']
+
+    if recent_pnl_guard_active:
+        blocked_by_recent_guard = [
+            coin for coin in selection['strict_candidates_before_guard']
+            if str(market_analysis[coin].get(
+                'signal_source', 'rules')).strip().lower() != 'catboost'
+        ]
+        log_blocked_candidates = (
+            log.warning if blocked_by_recent_guard else log.info
+        )
+        log_blocked_candidates(
+            "Recent PnL guard withheld %d strict BUY candidates: %s",
+            len(blocked_by_recent_guard),
+            ', '.join(blocked_by_recent_guard[:10]) or "none",
+        )
+
+    log.info(
+        f"🔍 Market analysis complete. Top {len(top_buy_recommendations)} buy recommendations:")
+
+    if not top_buy_recommendations and market_analysis:
+        log_no_entry_candidates(
+            market_analysis,
+            selection,
+            downtrend_filter_results,
+            uptrend_filter_results,
+            entry_market_mode,
+            hooks,
+        )
+
+    for i, coin in enumerate(top_buy_recommendations):
+        data = market_analysis.get(coin, {})
+        log.info(f"  {i+1}. {coin}: {data.get('recommendation', 'HOLD')} "
+                    f"(Price: {data.get('price', 0):.4f} {context.config.base_currency}, "
+                    f"Score: {data.get('score', 0)}%, "
+                    f"Volumen: {data.get('volume', 0):,.0f} {context.config.base_currency}, "
+                    f"RSI: {data.get('rsi', np.nan):.2f})")
+    return top_buy_recommendations

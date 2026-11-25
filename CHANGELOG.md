@@ -211,8 +211,42 @@ a version heading is assigned when a release is prepared.
   the bot. The whole sweep is therefore unit-testable without an exchange, a
   portfolio implementation or a bot. Covered by 23 new tests in
   `tests/test_open_trade_manager.py`.
+- The entry-candidate sweep that used to sit in `TradingBot._select_entry_candidates`
+  now lives in `src/entry_selection.py` next to the pure ranking rules it already
+  delegates to: `select_entry_candidate_shortlist()` (occupied positions, free
+  slots, the dynamic lossmaker/source gates, the recent-PnL guard report and the
+  empty-shortlist diagnostics), `entry_guards_allow()` (the tabular SELL veto and
+  the ATR/price volatility proxy with its per-iteration cache) and
+  `log_no_entry_candidates()` (signal mix, blocked-gate diagnostics and the
+  per-coin detail lines). The bot-owned state and collaborators are passed in as
+  two frozen dataclasses, `EntryCandidateContext` (config, portfolio) and
+  `EntryCandidateHooks` (the twelve bot methods the sweep calls), so the whole
+  sweep is unit-testable without an exchange or a live bot.
 ### Changed
 
+- `src/trading_bot.py` shrank from 2375 to 2237 lines now that the entry-candidate
+  sweep lives in `src/entry_selection.py`. `_select_entry_candidates()` and
+  `_entry_guards_allow()` stay as thin delegators with their previous signatures —
+  the delegator builds the `EntryCandidateContext` / `EntryCandidateHooks` from the
+  bot's own bound methods, so tests that patch `bot._entry_volatility_guard()`,
+  `bot._passes_uptrend_entry_filter()` or `bot._entry_market_mode()` still take
+  effect — and the blocked-gate delegators (`_log_blocked_uptrend_candidates()`,
+  `_log_blocked_downtrend_reversal_candidates()`, `_log_fallback_entry_diagnostics()`)
+  stay because they are also called from the entry-execution path. The
+  `_log_no_entry_candidates()` delegator was removed: nothing outside the sweep
+  called it. The now-unused `_entry_select_candidates` import alias and the
+  `Counter` import were dropped from the bot. The architecture ceiling was
+  ratcheted from 2375 to 2237 lines and `entry_selection.py` got its own ceiling of
+  750 lines. The old and new code were compared over 16 scenarios (strict winners
+  with occupied positions, the recent-PnL guard withholding non-catboost candidates,
+  fallback activation, force-fill, defensive-mode suppression, fallback disabled,
+  an empty shortlist with blocked uptrend / downtrend-reversal / fallback-RSI gates,
+  a tabular SELL veto, an unavailable and a below-minimum volatility proxy, dynamic
+  lossmaker pair exclusions, degraded signal sources, no free slots, an empty market
+  analysis and a seven-coin cautious mix) and produced byte-identical shortlists and
+  log lines. All three moved functions are also AST-identical to the original after
+  the documented `self.config` → `context.config`, `self.portfolio` →
+  `context.portfolio`, `self._x()` → `hooks.x()` and `logger` → `log` rewrites.
 - `src/public_paper_dashboard.py` shrank from 1075 to 695 lines now that the
   market panel lives in `src/market_observations.py`. The `/api/market-observations`
   route is a thin delegator that calls `load_market_observations()`, and the
