@@ -1,7 +1,6 @@
 import hashlib
 import json
 import logging
-import math
 import os
 import signal
 import sys
@@ -9,7 +8,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Container
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, cast
+from typing import Any
 
 import ccxt
 import numpy as np
@@ -56,6 +55,15 @@ from src.bot_bootstrap import (
 )
 from src.bot_config import BotConfig
 from src.bot_runtime import run_bot as _run_bot
+from src.close_performance import (
+    ClosePerformanceHooks as _ClosePerformanceHooks,
+)
+from src.close_performance import (
+    entry_cost_basis as _close_entry_cost_basis,
+)
+from src.close_performance import (
+    record_close_performance as _close_record_close_performance,
+)
 from src.coin_analysis import (
     analyze_coin as _coin_analysis_analyze_coin,
 )
@@ -856,68 +864,31 @@ class CryptoTradingBot:
 
     @staticmethod
     def _entry_cost_basis(entry_trade: dict, buy_price: float, buy_amount_coin: float) -> float:
-        raw_basis = entry_trade.get('amount_base')
-        if raw_basis is None and entry_trade.get('execution_cost_mode') != 'net_costs':
-            logger.warning("Legacy DRY-RUN position has no cost basis; reconstructing from entry price")
-            raw_basis = buy_price * buy_amount_coin
-        try:
-            basis = float(cast(Any, raw_basis))
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Invalid entry cost basis") from exc
-        if not math.isfinite(basis) or basis <= 0:
-            raise ValueError("Invalid entry cost basis")
-        return basis
+        return _close_entry_cost_basis(
+            entry_trade, buy_price, buy_amount_coin, logger=logger)
 
     def _record_close_performance(self, entry_trade: dict, sell_price: float, sell_amount: float,
                                   *, net_proceeds: float | None = None,
                                   entry_basis: float | None = None):
-        buy_price = float(entry_trade.get('buy_price', 0.0))
-        buy_amount_coin = float(entry_trade.get('amount_coin', 0.0))
-        if buy_amount_coin <= 0:
-            return 0.0, 0.0, 0.0
-        pnl_base = (sell_price - buy_price) * sell_amount
-        pnl_pct = ((sell_price - buy_price) / buy_price) * \
-            100 if buy_price > 0 else 0.0
-        if net_proceeds is not None:
-            total_basis = entry_basis if entry_basis is not None else self._entry_cost_basis(
-                entry_trade, buy_price, buy_amount_coin)
-            basis = total_basis * min(sell_amount / buy_amount_coin, 1.0)
-            pnl_base = net_proceeds - basis
-            pnl_pct = pnl_base / basis * 100 if basis > 0 else 0.0
-        hold_seconds = (
-            datetime.now() - entry_trade.get('timestamp', datetime.now())).total_seconds()
-
-        self.performance['sells'] += 1
-        self.performance['closed_trades'] += 1
-        self.performance['realized_pnl_base'] += pnl_base
-        if pnl_base > 0:
-            self.performance['wins'] += 1
-        elif pnl_base < 0:
-            self.performance['losses'] += 1
-        else:
-            self.performance['break_even'] += 1
-
-        source = entry_trade.get('signal_source', 'rules')
-        self.performance['by_source'][source]['sells'] += 1
-        self.performance['by_source'][source]['pnl'] += pnl_base
-
-        if pnl_base < 0:
-            self.consecutive_losses += 1
-            if (
-                self.config.loss_streak_pause_threshold > 0
-                and self.config.loss_streak_pause_seconds > 0
-                and self.consecutive_losses >= self.config.loss_streak_pause_threshold
-            ):
-                self.buy_pause_until_utc = datetime.now(
-                    UTC) + timedelta(seconds=self.config.loss_streak_pause_seconds)
-                logger.warning(
-                    f"🧯 Loss streak detected ({self.consecutive_losses} in a row). "
-                    f"New BUYs paused until {self.buy_pause_until_utc.isoformat()}"
-                )
-        else:
-            self.consecutive_losses = 0
-
-        return pnl_base, pnl_pct, hold_seconds
+        return _close_record_close_performance(
+            self.config,
+            self.performance,
+            _ClosePerformanceHooks(
+                get_consecutive_losses=lambda: self.consecutive_losses,
+                set_consecutive_losses=lambda value: setattr(
+                    self, 'consecutive_losses', value),
+                set_buy_pause_until_utc=lambda value: setattr(
+                    self, 'buy_pause_until_utc', value),
+                now_local=datetime.now,
+                now_utc=lambda: datetime.now(UTC),
+            ),
+            entry_trade,
+            sell_price,
+            sell_amount,
+            net_proceeds=net_proceeds,
+            entry_basis=entry_basis,
+            logger=logger,
+        )
 
     def _register_buy_timestamp(self):
         now_utc = datetime.now(UTC)
