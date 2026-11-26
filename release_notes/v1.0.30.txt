@@ -1,0 +1,117 @@
+v1.0.30 - Scheduled-task exit status, disk capacity and analytics database alerts
+
+Date: 2026-11-26
+
+Summary
+
+This release closes audit point 6 of `docs/ARCHITECTURE_AUDIT.md`. It changes no
+trading logic, no signal, no risk rule and no order path. A scheduled wrapper that
+fails, a systemd timer that never starts, a filling volume and an unreachable
+analytics database now produce metrics and alerts instead of silence.
+
+Changes
+
+Scheduled-task status markers
+- New `src/task_status.py` (layer 1) reads the marker format the wrappers write:
+  `exit_code`, `started_unixtime` and `finished_unixtime` as plain `key=value`
+  lines. A missing, empty, unreadable or malformed marker returns `None`, so the
+  exporter can report absence instead of guessing.
+- `scripts/run_daily_dryrun_review.sh` and `scripts/run_public_paper_daily_report.sh`
+  rewrite `latest_status.env` after **every** attempt through an `EXIT` trap,
+  including a run that exits non-zero or is killed. Before this release a failed
+  run left the marker of the last success in place, which is exactly the failure
+  class the 2026-11-16 outage showed: the collector died for days while the daily
+  report still looked healthy. The paths are overridable with
+  `DAILY_REVIEW_STATUS_FILE` and `PUBLIC_PAPER_STATUS_FILE`. The public-paper
+  marker keeps the wrapper's `umask 077` (mode `0600`) because it lives in a
+  profile-owned report directory.
+
+Operational health exporter
+- Task gauges, selected with the new `TRADING_TASK_STATUS_FILES=name=path,...`:
+  `trading_task_status_present{task="..."}`,
+  `trading_task_last_exit_code{task="..."}` and
+  `trading_task_last_run_age_seconds{task="..."}`. Only listed tasks are
+  published, so a profile that does not run a timer exports nothing for it. An
+  unreadable marker publishes `present=0` and no exit code, so garbage cannot
+  raise a false failure alert.
+- Disk capacity gauges `trading_disk_total_bytes`, `trading_disk_free_bytes` and
+  `trading_disk_used_percent` for the comma-separated `TRADING_DISK_PATHS`
+  (default: `TRADING_DATA_DIR`). They use `shutil.disk_usage`, so the Pi profile
+  needs no second node exporter, and an unreadable path publishes nothing rather
+  than a false zero.
+- Analytics database gauges `trading_analytics_database_enabled`,
+  `trading_analytics_database_up` and `trading_analytics_database_size_bytes`,
+  enabled by the same `ANALYTICS_DB_URL` the bot already uses. `psycopg` is
+  imported lazily inside the probe, so a single-node Raspberry Pi without
+  PostgreSQL stays on the standard library and reports nothing database-related.
+  A connect or query error yields `up=0`, never a crash.
+
+Alerting
+- `deploy/trading-alerts.yml` grows from 14 to 20 rules:
+  `TradingScheduledTaskFailed` (critical), `TradingScheduledTaskMarkerMissing`
+  (warning), `TradingScheduledTaskStale` (warning, 48 h),
+  `TradingDiskSpaceLow` (critical, < 1 GiB), `TradingDiskUsedPercentHigh`
+  (warning, > 90 %) and `TradingAnalyticsDatabaseUnavailable` (warning).
+- `deploy/trading-operational-health.service` points the task export at the daily
+  review marker and the disk export at `/opt/trading_2`.
+  `deploy/trading-health.env.example` documents all three variables and states
+  that `ANALYTICS_DB_URL` must stay unset on a single-node Raspberry Pi.
+
+Tests
+- `tests/test_task_status.py` (new): marker parsing, missing/empty/garbage/
+  directory input, exit-code and age parsing, and label-safe `name=path` parsing.
+- `tests/test_alert_rules.py` (new, standard library only): asserts the six new
+  expressions, and rejects any rule that references a `trading_*` metric the real
+  exporter does not emit. This keeps the rule file and the exporter from drifting
+  apart without adding a YAML dependency to the slim CI test job.
+- `tests/test_operational_health.py` (+12): marker export, unlisted tasks, broken
+  marker, disk capacity against a real path, injected/unreachable/absent database
+  probe, `query_database_size` without `psycopg`, server error, success and empty
+  result, plus the `main()` wiring of the three new variables and the default
+  disk path.
+- `tests/test_daily_dryrun_review.py` and `tests/test_public_paper_daily_report.py`
+  (+2 each): a successful and a failing wrapper run, asserting the marker exit
+  code, the run age and the marker file mode.
+- Gate results on this release: `pytest tests/` 1358 passed; the slim CI
+  environment simulation 1332 passed and 2 skipped; ruff clean; mypy 0 errors
+  across 62 source files; deployment config check exit 0.
+
+Documentation
+- `docs/MONITORING.md` documents the marker files, the new gauges, the new rules
+  and the guard test.
+- `docs/ARCHITECTURE_AUDIT.md` marks scheduled-task exit status, disk capacity and
+  analytics database alerts as implemented for both profiles; the remaining items
+  in that area are staging delivery evidence for the private webhook and cluster
+  scorecard promotion gating.
+- `SERVER_README.md` describes what the enabled health timer now publishes.
+
+Notes
+- Release profiles: both are covered. The single-node Raspberry Pi release stays
+  autonomous - no Hailo-8, no second node, no K3s, no PostgreSQL, no tunnel - and
+  the new database probe is opt-in through `ANALYTICS_DB_URL`, so a Pi without
+  PostgreSQL is unaffected. `src/task_status.py` ships in the Pi archive because
+  the release workflow stages the whole `src/` tree. The public-paper marker and
+  its units stay on the cluster/public-paper side of the profile boundary; that
+  marker is only exported on a host that also runs the health exporter.
+- Operational changes for an existing install: extract this package, re-run
+  `scripts/install_monitoring_pi.sh` (it re-copies the alert rules and the health
+  unit), then `systemctl daemon-reload`. The new environment variables already
+  have defaults in the unit; only `ANALYTICS_DB_URL` needs an explicit entry in
+  `/etc/trading-health.env`, and only where an analytics database exists. Enable
+  the scheduled review explicitly if you want it:
+  `systemctl enable --now daily-dryrun-review.timer`. Optionally validate the
+  rule file with `promtool check rules deploy/trading-alerts.yml`.
+- New files on disk: `results/daily_review/latest_status.env` (world-readable,
+  contains no secrets) and `reports/latest_status.env` (mode `0600`).
+- Migration and rollback: none. No state format, database schema, model artifact,
+  configuration key or trading behaviour changed. Reverting this release leaves
+  the marker files inert; the new alert rules simply stop firing once the gauges
+  disappear.
+- Verification: `sha256sum -c trading-bot-pi-v1.0.30.tar.gz.sha256`, then confirm
+  `tar -tzf trading-bot-pi-v1.0.30.tar.gz | grep task_status` lists
+  `src/task_status.py`. After install, run the review once and check
+  `cat /opt/trading_2/results/daily_review/latest_status.env`, then
+  `curl -s localhost:9101/metrics | grep -E 'trading_task_|trading_disk_'`.
+- Still open, deliberately not in this release: staging delivery evidence for the
+  private webhook receiver, cluster scorecard promotion gating, a durable
+  historical news-item store, and the x86 training/compilation worker.

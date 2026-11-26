@@ -5,6 +5,8 @@ a version heading is assigned when a release is prepared.
 
 ## Unreleased
 
+## v1.0.30 - 2026-11-26
+
 ### Added
 
 - `src/task_status.py`, a small layer-1 reader for the status markers written by
