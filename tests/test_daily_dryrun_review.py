@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
+
+from src.task_status import read_task_status, task_exit_code, task_last_run_age_seconds
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts" / "daily_dryrun_review.py"
@@ -112,3 +117,45 @@ def test_review_counts_break_even_separately():
     )
     assert (report["wins"], report["losses"], report["break_even"]) == (1, 1, 1)
     assert report["win_rate_pct"] == 33.3333
+
+
+def run_wrapper(tmp_path: Path, lookback_hours: str) -> subprocess.CompletedProcess[str]:
+    """Run the real scheduled wrapper with output redirected into ``tmp_path``."""
+    env = {
+        **os.environ,
+        "PYTHON_BIN": sys.executable,
+        "DAILY_REVIEW_OUT_DIR": str(tmp_path),
+        "DAILY_REVIEW_LOOKBACK_HOURS": lookback_hours,
+    }
+    return subprocess.run(
+        ["bash", str(ROOT / "scripts" / "run_daily_dryrun_review.sh")],
+        env=env, check=False, capture_output=True, text=True,
+    )
+
+
+def test_scheduled_wrapper_records_successful_run_status(tmp_path: Path) -> None:
+    completed = run_wrapper(tmp_path, "24")
+
+    assert completed.returncode == 0, completed.stderr
+    assert (tmp_path / "latest_review.json").is_file()
+
+    status = read_task_status(tmp_path / "latest_status.env")
+    assert status is not None
+    assert task_exit_code(status) == 0
+    age = task_last_run_age_seconds(status)
+    assert age is not None and 0.0 <= age < 120.0
+    assert float(status["started_unixtime"]) <= float(status["finished_unixtime"])
+
+
+def test_scheduled_wrapper_records_failed_run_status(tmp_path: Path) -> None:
+    # An unusable --lookback-hours makes argparse exit 2, which is exactly the
+    # silent failure the status marker exists to make alertable.
+    completed = run_wrapper(tmp_path, "not-a-number")
+
+    assert completed.returncode == 2
+    assert not (tmp_path / "latest_review.json").exists()
+
+    status = read_task_status(tmp_path / "latest_status.env")
+    assert status is not None
+    assert task_exit_code(status) == 2
+    assert task_last_run_age_seconds(status) is not None

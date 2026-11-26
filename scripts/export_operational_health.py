@@ -1,23 +1,36 @@
 #!/usr/bin/env python3
-"""Export bot safety, Hailo, research-feed, and data-staleness health.
+"""Export bot safety, Hailo, research-feed, capacity and data-staleness health.
 
 Writes a Prometheus textfile-collector fragment. The staleness gauges are what
 make a silently stopped collector or bot process observable: without them a
 report over an empty window still succeeds and every downstream metric simply
-reads as zero.
+reads as zero. The task-status gauges close the other half of the same gap - a
+scheduled report that exits non-zero, or never runs at all, is known to systemd
+but was invisible to Prometheus until the wrappers started writing a status
+marker (``src/task_status.py``).
 """
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
+import shutil
 import tempfile
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
 from src.data_staleness import measure_staleness, resolve_log_timezone
+from src.pnl_prometheus_format import escape_label_value
+from src.task_status import (
+    parse_task_status_files,
+    read_task_status,
+    task_exit_code,
+    task_last_run_age_seconds,
+)
 
 
 def _research_age(path: Path, now: datetime) -> float | None:
@@ -47,6 +60,134 @@ def _research_age(path: Path, now: datetime) -> float | None:
     return max(0.0, (now - max(parsed)).total_seconds())
 
 
+def _task_status_lines(
+    task_status_files: dict[str, Path], now: datetime
+) -> list[str]:
+    """Gauges for the scheduled wrappers: exit code, marker presence, run age.
+
+    A task is only reported when the operator listed it, so a profile that does
+    not run a given timer publishes nothing for it instead of a false absence.
+    """
+    lines: list[str] = []
+    for name in sorted(task_status_files):
+        label = f'{{task="{escape_label_value(name)}"}}'
+        status = read_task_status(task_status_files[name])
+        lines.extend([
+            ("# HELP trading_task_status_present Whether the scheduled task wrote a "
+             "parseable status marker."),
+            "# TYPE trading_task_status_present gauge",
+            f"trading_task_status_present{label} {int(status is not None)}",
+        ])
+        if status is None:
+            continue
+        exit_code = task_exit_code(status)
+        lines.extend([
+            ("# HELP trading_task_last_exit_code Exit code of the last scheduled "
+             "task run."),
+            "# TYPE trading_task_last_exit_code gauge",
+            f"trading_task_last_exit_code{label} {exit_code if exit_code is not None else 0}",
+        ])
+        age = task_last_run_age_seconds(status, now)
+        if age is not None:
+            lines.extend([
+                ("# HELP trading_task_last_run_age_seconds Seconds since the last "
+                 "scheduled task run finished."),
+                "# TYPE trading_task_last_run_age_seconds gauge",
+                f"trading_task_last_run_age_seconds{label} {age:.3f}",
+            ])
+    return lines
+
+
+def _disk_lines(disk_paths: Sequence[str]) -> list[str]:
+    """Capacity gauges for the filesystems the bot writes to.
+
+    ``shutil.disk_usage`` is stdlib and needs no extra exporter, so the Pi
+    profile gets capacity coverage from the same 30 s timer as everything else.
+    An unreadable path is skipped: a missing gauge is distinguishable from a
+    full disk, and a wrong path must not silence the other gauges.
+    """
+    lines: list[str] = []
+    for raw in disk_paths:
+        path = raw.strip()
+        if not path:
+            continue
+        try:
+            usage = shutil.disk_usage(path)
+        except OSError:
+            continue
+        label = f'{{path="{escape_label_value(path)}"}}'
+        used_percent = 100.0 * usage.used / usage.total if usage.total else 0.0
+        lines.extend([
+            "# HELP trading_disk_total_bytes Total size of the filesystem in bytes.",
+            "# TYPE trading_disk_total_bytes gauge",
+            f"trading_disk_total_bytes{label} {usage.total}",
+            (
+                "# HELP trading_disk_free_bytes Space usable by the unprivileged bot "
+                "user, excluding reserved blocks."
+            ),
+            "# TYPE trading_disk_free_bytes gauge",
+            f"trading_disk_free_bytes{label} {usage.free}",
+            "# HELP trading_disk_used_percent Used share of the filesystem.",
+            "# TYPE trading_disk_used_percent gauge",
+            f"trading_disk_used_percent{label} {used_percent:.4f}",
+        ])
+    return lines
+
+
+def query_database_size(database_url: str) -> int | None:
+    """Size of the analytics database in bytes, or ``None`` when unavailable.
+
+    ``psycopg`` is not a Pi dependency, so the import happens here rather than
+    at module scope and a missing driver is just another unavailable probe.
+    """
+    try:
+        psycopg = importlib.import_module("psycopg")
+    except ImportError:
+        return None
+    try:
+        with psycopg.connect(database_url, connect_timeout=3) as connection:
+            row = connection.execute(
+                "SELECT pg_database_size(current_database())"
+            ).fetchone()
+    except Exception:  # noqa: BLE001 - any driver/server error means "unavailable"
+        return None
+    if not row or row[0] is None:
+        return None
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _database_lines(
+    analytics_db_url: str, database_probe: Callable[[str], int | None]
+) -> list[str]:
+    """Analytics database capacity gauges, only when a URL is configured."""
+    if not analytics_db_url.strip():
+        return []
+    lines = [
+        ("# HELP trading_analytics_database_enabled Whether an analytics database "
+         "URL is configured."),
+        "# TYPE trading_analytics_database_enabled gauge",
+        "trading_analytics_database_enabled 1",
+    ]
+    size = database_probe(analytics_db_url)
+    lines.extend([
+        ("# HELP trading_analytics_database_up Whether the analytics database "
+         "answered a size query."),
+        "# TYPE trading_analytics_database_up gauge",
+        f"trading_analytics_database_up {int(size is not None)}",
+    ])
+    if size is not None:
+        lines.extend([
+            ("# HELP trading_analytics_database_size_bytes Size of the analytics "
+             "database in bytes."),
+            "# TYPE trading_analytics_database_size_bytes gauge",
+            f"trading_analytics_database_size_bytes {size}",
+        ])
+    return lines
+
+
 def render_metrics(
     kill_switch_file: Path,
     hailo_health_url: str,
@@ -58,6 +199,10 @@ def render_metrics(
     log_timezone: str = "UTC",
     now: datetime | None = None,
     health_probe=urlopen,
+    task_status_files: dict[str, Path] | None = None,
+    disk_paths: Sequence[str] = (),
+    analytics_db_url: str = "",
+    database_probe: Callable[[str], int | None] = query_database_size,
 ) -> str:
     now = now or datetime.now(UTC)
     kill_switch_active = int(os.path.lexists(kill_switch_file))
@@ -127,6 +272,9 @@ def render_metrics(
                 "# TYPE trading_market_data_age_seconds gauge",
                 f"trading_market_data_age_seconds {market_age:.3f}",
             ])
+    lines.extend(_task_status_lines(task_status_files or {}, now))
+    lines.extend(_disk_lines(disk_paths))
+    lines.extend(_database_lines(analytics_db_url, database_probe))
     return "\n".join(lines) + "\n"
 
 
@@ -153,6 +301,9 @@ def write_metrics(output: Path, body: str) -> None:
 def main() -> int:
     root = Path(os.getenv("TRADING_DATA_DIR", "."))
     market_data = os.getenv("TRADING_MARKET_DATA_DIR", "").strip()
+    # Capacity is watched on the volume the bot works on unless the operator
+    # names the mount points explicitly, e.g. an NVMe data directory.
+    disk_raw = os.getenv("TRADING_DISK_PATHS", "").strip() or str(root)
     body = render_metrics(
         Path(os.getenv("TRADING_KILL_SWITCH_FILE", ".trading_kill_switch")),
         os.getenv("HAILO_HEALTH_URL", ""),
@@ -161,6 +312,10 @@ def main() -> int:
         Path(os.getenv("TRADING_BOT_LOG_FILE", str(root / "trading_bot.log"))),
         Path(market_data) if market_data else None,
         log_timezone=os.getenv("TRADING_LOG_TIMEZONE", "UTC"),
+        task_status_files=parse_task_status_files(
+            os.getenv("TRADING_TASK_STATUS_FILES", "")),
+        disk_paths=[*disk_raw.split(",")],
+        analytics_db_url=os.getenv("ANALYTICS_DB_URL", ""),
     )
     output = Path(os.getenv(
         "TRADING_HEALTH_METRICS_FILE",

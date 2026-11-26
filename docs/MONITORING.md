@@ -178,6 +178,21 @@ reporting convenience and is not installed by `scripts/install_pi.sh` or
 an empty window still exits 0, so treat the review as output to read, not as a
 health signal - the staleness gauges below are the health signal.
 
+Every attempt - success or failure - also rewrites
+`results/daily_review/latest_status.env` (override with
+`DAILY_REVIEW_STATUS_FILE`):
+
+- `exit_code` - exit status of the last wrapper run
+- `started_unixtime` / `finished_unixtime` - UTC epoch seconds of that run
+
+The operational-health exporter turns that marker into the task gauges below, so
+a wrapper that exits non-zero, or a timer that never starts, becomes visible
+without reading systemd state or the log file. `scripts/run_public_paper_daily_report.sh`
+writes the same marker to `$PUBLIC_PAPER_REPORT_DIR/latest_status.env`
+(override with `PUBLIC_PAPER_STATUS_FILE`); the public-paper profile keeps its
+own units out of the Pi package, so that marker is only exported on a host that
+also runs the health exporter.
+
 ## Runtime health and alert delivery
 
 The Pi monitoring installer installs a 30-second operational-health timer. It
@@ -193,6 +208,25 @@ every downstream metric simply reads as zero. Each probe reads only a bounded
 tail of its file and fails closed to "absent" on a missing or unreadable file,
 which keeps "not collected" distinguishable from "stale".
 
+Scheduled-task, capacity, and analytics gauges come from the same timer:
+
+- `TRADING_TASK_STATUS_FILES=name=path,name=path` exports each wrapper marker as
+  `trading_task_status_present{task="..."}` (0 when the marker is missing or
+  unreadable), `trading_task_last_exit_code{task="..."}` (0 when the marker has
+  no parseable code, so garbage cannot raise a failure alert), and
+  `trading_task_last_run_age_seconds{task="..."}`. Only listed tasks are
+  published, so a profile that does not run a timer exports nothing for it.
+- `TRADING_DISK_PATHS` (comma-separated) exports `trading_disk_total_bytes`,
+  `trading_disk_free_bytes`, and `trading_disk_used_percent` per path using
+  `shutil.disk_usage`, so no extra exporter is needed on the Pi. It defaults to
+  `TRADING_DATA_DIR`, the volume the bot writes journal, state, and results to.
+  An unreadable path publishes nothing rather than a false zero.
+- `ANALYTICS_DB_URL` (the same variable the bot uses for PostgreSQL analytics)
+  exports `trading_analytics_database_enabled`, `trading_analytics_database_up`,
+  and - only when the probe answers - `trading_analytics_database_size_bytes`.
+  The probe imports `psycopg` lazily and is not used at all when no URL is
+  configured, so the single-node Raspberry Pi release never needs the driver.
+
 The health unit uses `/etc/trading-health.env`, not the bot's
 credential-bearing `.env`; copy `deploy/trading-health.env.example` there.
 `TRADING_JOURNAL_FILE` and `TRADING_BOT_LOG_FILE` default to the journal and
@@ -207,8 +241,14 @@ trusted private address.
 Prometheus alerts cover scorecard GO/HOLD/NO-GO and staleness, portfolio
 snapshot staleness, kill-switch activation, configured Hailo health failures,
 missing/stale research inputs, a missing or stale bot log, a stale trade
-journal, missing or stale market recorder data, and missing operational
-metrics. The installer
+journal, missing or stale market recorder data, missing operational
+metrics, a failed / never-reported / overdue scheduled task
+(`TradingScheduledTaskFailed`, `TradingScheduledTaskMarkerMissing`,
+`TradingScheduledTaskStale`), low or nearly full disk
+(`TradingDiskSpaceLow`, `TradingDiskUsedPercentHigh`), and an unreachable
+analytics database (`TradingAnalyticsDatabaseUnavailable`). `tests/test_alert_rules.py`
+fails when one of those rules references a metric the exporter does not emit.
+The installer
 also configures local Alertmanager and a loopback-only relay. Before installing
 monitoring, create `/etc/trading-alert-relay.env` from
 `deploy/trading-alert-relay.env.example` with the organization's private HTTPS

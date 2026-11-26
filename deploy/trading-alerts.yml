@@ -126,3 +126,57 @@ groups:
         annotations:
           summary: "Market recorder output is stale"
           description: "The newest recorded ticker or 1m candle is over 15 minutes old; the recorder should append within seconds."
+
+      - alert: TradingScheduledTaskFailed
+        expr: trading_task_last_exit_code != 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scheduled trading task exited non-zero"
+          description: "The {{ $labels.task }} wrapper reported exit code {{ $value }}; the report or review it produces is missing or stale."
+
+      - alert: TradingScheduledTaskMarkerMissing
+        expr: trading_task_status_present == 0
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduled trading task never reported"
+          description: "The {{ $labels.task }} status marker is missing or unreadable, so the timer may never have run since the exporter was configured."
+
+      - alert: TradingScheduledTaskStale
+        expr: trading_task_last_run_age_seconds > 172800
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduled trading task has not run recently"
+          description: "The last {{ $labels.task }} run finished over 48 hours ago; the systemd timer is stopped, masked, or failing to start."
+
+      - alert: TradingDiskSpaceLow
+        expr: trading_disk_free_bytes < 1073741824
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Trading volume has less than 1 GiB available"
+          description: "Only {{ $value | humanize1024 }}B free on {{ $labels.path }}; the journal, state, and results will fail to be written."
+
+      - alert: TradingDiskUsedPercentHigh
+        expr: trading_disk_used_percent > 90
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Trading volume is more than 90% full"
+          description: "{{ $labels.path }} has been above 90% used for 30 minutes; plan cleanup or storage before the volume fills."
+
+      - alert: TradingAnalyticsDatabaseUnavailable
+        expr: trading_analytics_database_enabled == 1 and trading_analytics_database_up == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Analytics PostgreSQL is unreachable"
+          description: "ANALYTICS_DB_URL is configured but the size probe fails; the bot journals to CSV and skips PostgreSQL, so analytics dashboards go stale."

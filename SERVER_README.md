@@ -980,8 +980,11 @@ sudo bash /opt/trading_2/scripts/install_monitoring_pi.sh
 This installs and enables:
 - `scorecard-status.timer` (exports status metrics every 5 minutes)
 - `node-exporter-textfile.service` (exposes metrics at port 9100)
-- `trading-operational-health.timer` (30-second kill-switch, research-feed and
-  data-staleness gauges)
+- `trading-operational-health.timer` (30-second kill-switch, research-feed,
+  data-staleness, scheduled-task exit-status and disk-capacity gauges; the
+  analytics-database gauge only when `ANALYTICS_DB_URL` is set in
+  `/etc/trading-health.env`, which is created from
+  `deploy/trading-health.env.example`)
 - `trading-alert-relay.service` (loopback-only webhook relay)
 - local Prometheus scraping on port 9090, Alertmanager on 9093 and the
   `deploy/trading-alerts.yml` rule file

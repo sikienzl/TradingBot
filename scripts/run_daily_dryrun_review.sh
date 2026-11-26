@@ -17,6 +17,7 @@ fi
 
 LOOKBACK_HOURS="${DAILY_REVIEW_LOOKBACK_HOURS:-24}"
 OUT_DIR="${DAILY_REVIEW_OUT_DIR:-$ROOT_DIR/results/daily_review}"
+STATUS_FILE="${DAILY_REVIEW_STATUS_FILE:-$OUT_DIR/latest_status.env}"
 TS="$(date +%Y%m%d_%H%M%S)"
 OUT_JSON="$OUT_DIR/review_${TS}.json"
 OUT_TXT="$OUT_DIR/review_${TS}.txt"
@@ -26,6 +27,27 @@ LATEST_TXT="$OUT_DIR/latest_review.txt"
 LATEST_HTML="$OUT_DIR/latest_review.html"
 
 mkdir -p "$OUT_DIR"
+
+STARTED_UNIXTIME="$(date -u +%s)"
+
+# The health exporter reads this marker, so it is written for every attempt -
+# success or failure - and never contains credentials or account data.
+write_status() {
+  local exit_code="$1"
+  local finished_unixtime temporary_path
+  finished_unixtime="$(date -u +%s)"
+  temporary_path="${STATUS_FILE}.tmp.$$"
+  mkdir -p "$(dirname "$STATUS_FILE")"
+  {
+    printf 'exit_code=%s\n' "$exit_code"
+    printf 'started_unixtime=%s\n' "$STARTED_UNIXTIME"
+    printf 'finished_unixtime=%s\n' "$finished_unixtime"
+  } > "$temporary_path"
+  chmod 0644 "$temporary_path" 2>/dev/null || true
+  mv -f "$temporary_path" "$STATUS_FILE"
+}
+
+trap 'write_status $?' EXIT
 
 PYTHONPATH="$ROOT_DIR" "$PYTHON_CMD" "$ROOT_DIR/scripts/daily_dryrun_review.py" \
   --journal "$ROOT_DIR/trade_journal.csv" \
