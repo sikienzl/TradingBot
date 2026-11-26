@@ -56,6 +56,45 @@ a version heading is assigned when a release is prepared.
   store) and in `tests/test_fetch_research_signal.py` (one record per scored
   item, no duplicate on a rerun, a broken store never fails the signal, and
   `--news-store none` disables it).
+- `src/fill_reconciliation.py`, `src/journal_order_reader.py`,
+  `src/exchange_order_history.py` and `src/fill_reconciliation_report.py`, the
+  journal-to-exchange reconciliation the audit asked for. The journal only
+  records what the bot submitted; reconciliation asks what the exchange did.
+  `read_journal_orders()` reads a bounded tail of the journal and considers only
+  rows written by a live execution path (`dry_run=false`),
+  `collect_exchange_orders()` pages the account order history once per symbol
+  scope with a hard scope cap and resolves an individual `cl_ord_id` with an
+  explicit server-side filter, and `_compare()` classifies every row as
+  `matched`, `partial_fill`, `unmatched` or `not_checkable` and reports quantity
+  and fee differences. Nothing is ever raised to the caller: missing
+  credentials, an unreadable journal or a failing exchange call make the pass
+  `incomplete`, which is reported as "nothing verified" rather than as a match.
+  The module is read-only - it never places or cancels an order, rewrites the
+  journal, or touches portfolio state - so it complements the risk guardrails
+  instead of interacting with them.
+- `run_fill_reconciliation()` in `src.bot_runtime`, executed inside the
+  execution-owner lock after the live scorecard gate and before the trading
+  loop. It is skipped for a paper deployment, reuses the bot's own exchange
+  client, logs one summary line plus one line per finding, and is wrapped so a
+  reconciliation error can never stop the bot. A finding never vetoes a trade:
+  the operator decides.
+- `scripts/reconcile_fills.py`, the operator command, with stable exit codes
+  (`0` clean, `1` mismatch to review, `2` incomplete pass), `--journal`,
+  `--lookback-days`, `--page-limit`, `--symbol`, `--report`, `--json`,
+  `--findings` and `--allow-dry-run`. It refuses a `DRY_RUN=true` deployment by
+  default because a paper journal has no exchange side.
+- `deploy/fill-reconciliation.service` / `.timer`: an hourly read-only oneshot
+  under `User=trading` with `ProtectSystem=strict` and a single
+  `ReadWritePaths` for the report directory. `SuccessExitStatus=0 1 2` keeps a
+  finding distinguishable from a broken timer.
+- `tests/test_fill_reconciliation.py` (48 tests: config resolution, the journal
+  tail reader, per-row verdicts including partial fills, fees, missing ids and
+  torn rows, paging and scope limits, lookup fallback, report/marker round-trips
+  and the "incomplete never reads as clean" rule),
+  `tests/test_reconcile_fills_cli.py` (exit codes, dry-run refusal, overrides,
+  marker and JSON output) and five reconciliation tests in
+  `tests/test_bot_runtime.py` (skipped in dry-run, skipped when disabled, reuses
+  the bot exchange, never raises, and runs before the loop).
 
 ### Changed
 
@@ -79,6 +118,17 @@ a version heading is assigned when a release is prepared.
   systemd unit owns the store path instead of relying on the default. The store
   file is git-ignored runtime state; no migration is required because the store
   is additive and the aggregate signal file is unchanged.
+- The operational health exporter publishes `trading_fill_reconciliation_enabled`,
+  `_present`, `_complete`, `_mismatches` and `_age_seconds` from the
+  reconciliation marker, and `deploy/trading-operational-health.service` points
+  `TRADING_FILL_RECONCILIATION_REPORT` at that marker. The exporter only reads
+  the marker, so it needs no credentials and never calls the exchange. Four alert
+  rules cover it: `TradingFillReconciliationMismatch` (critical),
+  `TradingFillReconciliationIncomplete`, `TradingFillReconciliationStale` and
+  `TradingFillReconciliationMarkerMissing`; a `DRY_RUN=true` profile publishes
+  `enabled 0` and can never match them.
+- `tests/test_architecture.py` layers the four new modules (layer 1) and caps
+  `src/fill_reconciliation.py` at 581 lines in the size ratchet.
 
 ## v1.0.31 - 2026-11-26
 

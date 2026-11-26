@@ -57,7 +57,25 @@ def render(tmp_path: Path, gate_env: dict[str, str], *, dry_run: bool) -> str:
         health_probe=lambda *_args, **_kwargs: _Ok(),
         scorecard_gate=scorecard_gate_settings(gate_env),
         deployment_env_file=write_deployment_env(tmp_path, dry_run=dry_run),
+        fill_report_file=write_fill_marker(tmp_path),
     )
+
+
+def write_fill_marker(tmp_path: Path, *, age: timedelta = timedelta(minutes=10)) -> Path:
+    """Fill reconciliation marker as ``scripts/reconcile_fills.py`` writes it."""
+    stamp = datetime(2026, 11, 25, 12, 0, tzinfo=UTC) - age
+    marker = tmp_path / "fill_reconciliation.env"
+    marker.write_text(
+        "SCHEMA_VERSION=1\nSTATUS=complete\nREASON=reconciled\n"
+        f"CHECKED_AT_UNIXTIME={int(stamp.timestamp())}\nLOOKBACK_DAYS=30\n"
+        "JOURNAL_ROWS=4\nORDERS=4\nMATCHED=3\nPARTIAL_FILLS=1\nUNMATCHED=0\n"
+        "NOT_CHECKABLE=0\nQUANTITY_MISMATCH=0\nFEE_MISMATCH=0\nEXCHANGE_CALLS=2\n"
+        "EXCHANGE_ERRORS=0\nJOURNAL_QUANTITY_BASE=1.00000000\n"
+        "EXCHANGE_QUANTITY_BASE=1.00000000\nJOURNAL_FEE_BASE=2.00000000\n"
+        "EXCHANGE_FEE_BASE=2.00000000\n",
+        encoding="utf-8",
+    )
+    return marker
 
 
 def exported_metric_names(tmp_path: Path) -> set[str]:
@@ -128,6 +146,19 @@ NEW_ALERTS = {
         "trading_scorecard_gate_enabled == 0 "
         "and trading_scorecard_gate_live_enabled == 1"
     ),
+    "TradingFillReconciliationMismatch": "trading_fill_reconciliation_mismatches > 0",
+    "TradingFillReconciliationIncomplete": (
+        "trading_fill_reconciliation_enabled == 1 "
+        "and trading_fill_reconciliation_complete == 0"
+    ),
+    "TradingFillReconciliationStale": (
+        "trading_fill_reconciliation_enabled == 1 "
+        "and trading_fill_reconciliation_age_seconds > 10800"
+    ),
+    "TradingFillReconciliationMarkerMissing": (
+        "trading_fill_reconciliation_enabled == 1 "
+        "and trading_fill_reconciliation_present == 0"
+    ),
 }
 
 
@@ -197,6 +228,72 @@ def test_disabled_gate_is_visible_as_gate_enabled_zero(tmp_path) -> None:
     values = gauge_values(render(tmp_path, env, dry_run=False))
     assert values["trading_scorecard_gate_enabled"] == 0
     assert values["trading_scorecard_gate_live_enabled"] == 1
+
+
+def fill_render(tmp_path: Path, marker: Path | None, *, dry_run: bool) -> dict[str, float]:
+    """Gauge values for one fill reconciliation marker state."""
+    body = render_metrics(
+        tmp_path / "STOP", "", tmp_path / "signal.json", tmp_path / "journal.csv",
+        tmp_path / "bot.log",
+        now=datetime(2026, 11, 25, 12, 0, tzinfo=UTC),
+        scorecard_gate=scorecard_gate_settings(gate_env(tmp_path, None)),
+        deployment_env_file=write_deployment_env(tmp_path, dry_run=dry_run),
+        fill_report_file=marker,
+    )
+    return gauge_values(body)
+
+
+def test_fill_reconciliation_gauges_track_a_clean_recent_pass(tmp_path) -> None:
+    marker = write_fill_marker(tmp_path)
+    values = fill_render(tmp_path, marker, dry_run=False)
+    assert values["trading_fill_reconciliation_enabled"] == 1
+    assert values["trading_fill_reconciliation_present"] == 1
+    assert values["trading_fill_reconciliation_complete"] == 1
+    assert values["trading_fill_reconciliation_mismatches"] == 0
+    assert 500 < values["trading_fill_reconciliation_age_seconds"] < 700
+
+
+def test_fill_reconciliation_gauges_count_mismatches(tmp_path) -> None:
+    """``quantity_mismatch`` already includes every unmatched order.
+
+    ``src.fill_reconciliation`` increments it for a partial fill, an overfill, a
+    cancelled order the journal booked, and an order the exchange does not know
+    at all, so adding ``UNMATCHED`` again would alert on one order twice.
+    """
+    marker = tmp_path / "fill.env"
+    marker.write_text(
+        "STATUS=complete\nCHECKED_AT_UNIXTIME=1764079200\n"
+        "QUANTITY_MISMATCH=3\nFEE_MISMATCH=2\nUNMATCHED=1\n",
+        encoding="utf-8",
+    )
+    values = fill_render(tmp_path, marker, dry_run=False)
+    assert values["trading_fill_reconciliation_mismatches"] == 5
+
+
+def test_fill_reconciliation_incomplete_pass_is_reported(tmp_path) -> None:
+    marker = tmp_path / "fill.env"
+    marker.write_text(
+        "STATUS=incomplete\nREASON=no authenticated exchange\n"
+        "CHECKED_AT_UNIXTIME=1764079200\n",
+        encoding="utf-8",
+    )
+    values = fill_render(tmp_path, marker, dry_run=False)
+    assert values["trading_fill_reconciliation_complete"] == 0
+    assert "trading_fill_reconciliation_mismatches" not in values
+
+
+def test_paper_profile_cannot_match_fill_reconciliation_alerts(tmp_path) -> None:
+    """A dry-run deployment has no exchange side, so it publishes enabled 0."""
+    values = fill_render(tmp_path, None, dry_run=True)
+    assert values["trading_fill_reconciliation_enabled"] == 0
+    assert values["trading_fill_reconciliation_present"] == 0
+    assert "trading_fill_reconciliation_complete" not in values
+
+
+def test_missing_fill_marker_only_publishes_presence(tmp_path) -> None:
+    values = fill_render(tmp_path, tmp_path / "absent.env", dry_run=False)
+    assert values["trading_fill_reconciliation_present"] == 0
+    assert "trading_fill_reconciliation_age_seconds" not in values
 
 
 def test_alert_rules_stay_parsable_and_unique() -> None:

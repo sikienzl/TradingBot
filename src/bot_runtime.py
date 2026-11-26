@@ -6,6 +6,12 @@ configuration at construction time; repeating the check here covers a bot
 object that is built elsewhere (tests, tooling, a future cluster supervisor)
 and then started, and it records the accepted verdict in the log so an operator
 can see which scorecard run authorised real orders.
+
+Before the loop starts, the journalled live orders are compared with the
+exchange order history (:mod:`src.fill_reconciliation`). That comparison is
+read-only and never blocks startup: a mismatch is an operator finding, not a
+reason to refuse trading, and the risk guardrails remain the only thing that
+can stop an order.
 """
 
 from __future__ import annotations
@@ -16,6 +22,8 @@ from datetime import datetime
 from typing import Any
 
 from .bot_bootstrap import LIVE_MODE_ACTION, evaluate_live_scorecard_gate
+from .fill_reconciliation import reconcile_and_report, resolve_reconciliation_config
+from .fill_reconciliation_report import STATUS_UNMATCHED
 from .scorecard_gate import scorecard_gate_refusal, scorecard_gate_settings
 
 
@@ -46,10 +54,52 @@ def assert_live_scorecard_gate(bot: Any, logger: logging.Logger) -> None:
     raise ValueError(scorecard_gate_refusal(LIVE_MODE_ACTION, status, settings))
 
 
+def run_fill_reconciliation(bot: Any, logger: logging.Logger) -> None:
+    """Compare the journalled live orders with the exchange, log-only.
+
+    Simulated trading has no exchange side to compare against, so the check is
+    skipped there rather than reported as a gap. Everything else is delegated to
+    :func:`src.fill_reconciliation.reconcile_and_report`, which already turns
+    every failure into an incomplete report; the extra guard here only covers a
+    bug in this call path, because a reconciliation problem must never be the
+    reason a bot fails to start.
+    """
+    config = getattr(bot, "config", None)
+    if config is None or getattr(config, "dry_run", True):
+        return
+    settings = resolve_reconciliation_config()
+    if not settings.enabled:
+        logger.info(
+            "Fill reconciliation skipped: %s is disabled for this deployment",
+            "TRADING_FILL_RECONCILIATION_ENABLED",
+        )
+        return
+    try:
+        report = reconcile_and_report(
+            settings, exchange=getattr(bot, "exchange", None), log=logger
+        )
+    except Exception as exc:  # noqa: BLE001 - never let a report stop the bot
+        logger.warning("Fill reconciliation did not run: %s", exc)
+        return
+    if report.has_mismatches:
+        findings = (
+            report.quantity_mismatch
+            + report.fee_mismatch
+            + report.counts.get(STATUS_UNMATCHED, 0)
+        )
+        logger.warning(
+            "Fill reconciliation found %d journalled live order(s) that do not "
+            "match the exchange; see %s",
+            findings,
+            settings.report_file or "the log above",
+        )
+
+
 def run_bot(bot: Any, logger: logging.Logger) -> None:
     try:
         assert_live_scorecard_gate(bot, logger)
         with bot._execution_owner_lock:
+            run_fill_reconciliation(bot, logger)
             _run_loop(bot, logger)
     finally:
         bot.analytics_writer.close()

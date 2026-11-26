@@ -202,6 +202,47 @@ overrides are the CLI flags `--scorecard-status-json`, `--scorecard-status-env`,
 `--no-require-go-verdict`. `rollback` is never gated so a known-good release can
 always be restored. See [Monitoring](MONITORING.md).
 
+## Fill reconciliation against the exchange
+
+The journal records what the bot *submitted*. Reconciliation asks what the
+exchange *did*: it reads the recent live rows of the journal, fetches the
+account order history, and reports every order that is missing there or whose
+filled quantity or fee differs. It is read-only — it never places or cancels an
+order, never rewrites the journal, and never touches the portfolio state — so it
+complements the risk guardrails instead of interacting with them.
+
+On the single-node Raspberry Pi profile the pass runs twice: once from the bot
+at startup, inside the execution-owner lock and after the scorecard gate, and
+once per hour from `fill-reconciliation.timer`. A paper deployment (`DRY_RUN=true`)
+is skipped by design because its journal has no exchange side, and the manual
+command refuses unless `--allow-dry-run` is passed deliberately.
+
+| Variable | Default | Description |
+|---|---|---|
+| `TRADING_FILL_RECONCILIATION_ENABLED` | `DRY_RUN=false` | Automatic pass at bot startup. The manual CLI is always enabled when an operator runs it |
+| `TRADING_FILL_RECONCILIATION_LOOKBACK_DAYS` | `30` | Only journal rows newer than this are checked |
+| `TRADING_FILL_RECONCILIATION_PAGE_LIMIT` | `100` | Orders requested per exchange history page (Kraken's own page size) |
+| `TRADING_FILL_RECONCILIATION_SYMBOLS` | derived from the journal | Explicit unified-symbol scope, comma-separated; caps the number of private history calls |
+| `TRADING_FILL_RECONCILIATION_REPORT` | unset | `KEY=value` marker path; a `.json` report is written next to it |
+| `TRADING_JOURNAL_FILE` | `$PERFORMANCE_LOG_FILE` | Journal to read; the reconciliation falls back to the bot's own journal variable |
+| `TRADING_JOURNAL_READ_LIMIT` | `4194304` | Bytes of journal tail read, so a multi-year journal stays cheap |
+
+Missing credentials, an unreadable journal, or a failing exchange call make the
+pass *incomplete* rather than clean: nothing is verified, the reason is recorded
+in the marker, and the `TradingFillReconciliationIncomplete` alert fires. A
+quantity or fee difference, or an order the exchange does not know, is a
+mismatch and fires `TradingFillReconciliationMismatch`. The bot never stops
+trading because of a reconciliation result — the finding is logged and alerted,
+and the operator decides.
+
+```bash
+# Manual pass, human-readable summary; exit 0 clean, 1 mismatch, 2 incomplete
+.venv/bin/python -m scripts.reconcile_fills
+.venv/bin/python -m scripts.reconcile_fills --lookback-days 7 --json
+.venv/bin/python -m scripts.reconcile_fills --symbol ETH/EUR \
+    --report results/fill_reconciliation/latest_status.env
+```
+
 ## Operational health exporter
 
 `scripts/export_operational_health.py` runs from the 30-second
@@ -221,6 +262,7 @@ settings above.
 | `HAILO_HEALTH_URL` | unset | Optional Hailo health endpoint; loopback or trusted private address only |
 | `TRADING_HEALTH_METRICS_FILE` | `results/scorecards/textfile/trading_health.prom` | Textfile-collector fragment written atomically |
 | `TRADING_DEPLOYMENT_ENV_FILE` | `/opt/trading_2/.env` | Deployment `.env` whose `DRY_RUN` drives `trading_scorecard_gate_live_enabled`; only the run mode is read |
+| `TRADING_FILL_RECONCILIATION_REPORT` | unset | Reconciliation marker to export as presence/complete/mismatch/age gauges; unset means this host publishes none |
 
 Each staleness probe reads only a bounded tail of its file and reports
 `*_present 0` with no age when the source is missing or unreadable, so a probe

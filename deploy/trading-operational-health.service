@@ -16,6 +16,10 @@ Environment=TRADING_BOT_LOG_FILE=/opt/trading_2/logs/bot.log
 Environment=TRADING_TASK_STATUS_FILES=daily_review=/opt/trading_2/results/daily_review/latest_status.env
 Environment=TRADING_DISK_PATHS=/opt/trading_2
 Environment=TRADING_HEALTH_METRICS_FILE=/opt/trading_2/results/scorecards/textfile/trading_health.prom
+# Fill reconciliation summary written by the bot at startup and by
+# fill-reconciliation.timer. Read-only here: the exporter never calls the
+# exchange and never reads a credential.
+Environment=TRADING_FILL_RECONCILIATION_REPORT=/opt/trading_2/results/fill_reconciliation/latest_status.env
 # The live-mode scorecard gate gauge reads DRY_RUN from the bot deployment .env
 # and the verdict from results/scorecards/latest_status.(json|env) below
 # WorkingDirectory. Only the run mode is read - no credentials are exported.

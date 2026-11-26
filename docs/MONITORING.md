@@ -280,6 +280,20 @@ Scheduled-task, capacity, and analytics gauges come from the same timer:
   root. `TRADING_DEPLOYMENT_ENV_FILE` points at the `.env` that `DRY_RUN` is
   read from; a profile that never trades live publishes `live_enabled 0` and can
   never match a live-mode alert.
+- Fill reconciliation (`src.fill_reconciliation`) exports
+  `trading_fill_reconciliation_enabled` (1 when the deployment is expected to
+  reconcile, which is the `DRY_RUN=false` default),
+  `trading_fill_reconciliation_present` (0 when no parseable marker exists),
+  `trading_fill_reconciliation_complete` (0 when the last pass verified nothing,
+  for example missing credentials or a failing exchange call),
+  `trading_fill_reconciliation_mismatches` (orders of the last complete pass
+  whose filled quantity or fee differs from the journal; an order the exchange
+  does not know is counted once, inside the quantity counter) and
+  `trading_fill_reconciliation_age_seconds`. The exporter only reads the marker
+  that the bot and `fill-reconciliation.timer` write, so it needs no credentials
+  and never calls the exchange. `TRADING_FILL_RECONCILIATION_REPORT` selects the
+  marker; a host that does not run reconciliation publishes only `enabled 0` and
+  `present 0`.
 
 The health unit uses `/etc/trading-health.env`, not the bot's
 credential-bearing `.env`; copy `deploy/trading-health.env.example` there.
@@ -303,7 +317,12 @@ metrics, a failed / never-reported / overdue scheduled task
 analytics database (`TradingAnalyticsDatabaseUnavailable`), live trading that is
 configured without a fresh `GO` verdict (`TradingLiveModeScorecardGateBlocked`,
 critical) and live trading that runs with the gate switched off
-(`TradingLiveModeWithoutScorecardGate`, warning). `tests/test_alert_rules.py`
+(`TradingLiveModeWithoutScorecardGate`, warning), journalled fills that do not
+match the exchange (`TradingFillReconciliationMismatch`, critical), a
+reconciliation pass that verified nothing
+(`TradingFillReconciliationIncomplete`), an overdue reconciliation marker
+(`TradingFillReconciliationStale`) and a reconciliation marker that never
+appeared (`TradingFillReconciliationMarkerMissing`). `tests/test_alert_rules.py`
 fails when one of those rules references a metric the exporter does not emit.
 The installer
 also configures local Alertmanager and a loopback-only relay. Before installing

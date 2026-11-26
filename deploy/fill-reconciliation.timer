@@ -1,0 +1,14 @@
+[Unit]
+Description=Trading Bot – Fill reconciliation timer (hourly)
+
+[Timer]
+# First pass shortly after boot, then hourly. The pass is read-only and costs a
+# handful of private Kraken calls, so it stays well inside the rate limit while
+# still catching a lost fill within one trading session.
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+Unit=fill-reconciliation.service
+
+[Install]
+WantedBy=timers.target

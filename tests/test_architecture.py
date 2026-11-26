@@ -53,6 +53,7 @@ LAYERS: dict[int, tuple[str, ...]] = {
         "execution_costs",
         "execution_service",
         "execution_owner",
+        "exchange_order_history",
         "bot_runtime",
         "inference_backend",
         "inference_fallback",
@@ -63,12 +64,15 @@ LAYERS: dict[int, tuple[str, ...]] = {
         "exit_policy",
         "export_pnl_metrics",
         "exporter_paths",
+        "fill_reconciliation",
+        "fill_reconciliation_report",
         "get_account_balance",
         "get_data",
         "go_no_go_scorecard",
         "hailo_runtime",
         "indicator_service",
         "journal_guards",
+        "journal_order_reader",
         "market_analysis",
         "market_data",
         "market_observations",
@@ -127,6 +131,7 @@ LINE_CEILINGS: dict[str, int] = {
     "bot_config.py": 534,
     "ai_copilot_service.py": 584,
     "export_pnl_metrics.py": 366,
+    "fill_reconciliation.py": 581,
 }
 
 

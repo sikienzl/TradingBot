@@ -26,6 +26,11 @@ from urllib.request import urlopen
 from src.data_staleness import measure_staleness, resolve_log_timezone
 from src.env_file import env_bool
 from src.exporter_paths import ENV_PATH
+from src.fill_reconciliation_report import (
+    marker_age_seconds,
+    marker_int,
+    read_report_marker,
+)
 from src.pnl_prometheus_format import escape_label_value
 from src.scorecard_gate import ScorecardGateSettings, scorecard_gate_settings
 from src.task_status import (
@@ -140,6 +145,69 @@ def _scorecard_gate_lines(
     return lines
 
 
+def _fill_reconciliation_lines(
+    report_file: Path | None, env_file: Path, live_enabled: bool, now: datetime
+) -> list[str]:
+    """Gauges for the journal/exchange fill reconciliation of :mod:`src.fill_reconciliation`.
+
+    The reconciliation is the only control that answers "did the exchange do what
+    the journal claims", so a silent pass is the dangerous case: it either never
+    ran, or it ran without credentials and verified nothing. ``enabled`` follows
+    the reconciliation default (a live deployment reconciles, a paper deployment
+    has no exchange side), so a simulated profile publishes ``enabled 0`` and can
+    never match the alerts. The marker is written by the bot at startup and by
+    ``deploy/fill-reconciliation.timer``; it is read here rather than re-deriving
+    a verdict, so the exporter stays read-only and needs no credentials.
+    """
+    enabled = env_bool(
+        "TRADING_FILL_RECONCILIATION_ENABLED", live_enabled, str(env_file), quiet=True,
+    )
+    lines = [
+        ("# HELP trading_fill_reconciliation_enabled Whether journalled fills are "
+         "expected to be reconciled against the exchange on this host."),
+        "# TYPE trading_fill_reconciliation_enabled gauge",
+        f"trading_fill_reconciliation_enabled {int(enabled)}",
+    ]
+    values = read_report_marker(str(report_file)) if report_file else None
+    lines.extend([
+        ("# HELP trading_fill_reconciliation_present Whether the last fill "
+         "reconciliation wrote a parseable summary marker."),
+        "# TYPE trading_fill_reconciliation_present gauge",
+        f"trading_fill_reconciliation_present {int(values is not None)}",
+    ])
+    if values is None:
+        return lines
+    complete = str(values.get("status", "")).strip().lower() == "complete"
+    lines.extend([
+        ("# HELP trading_fill_reconciliation_complete Whether the last fill "
+         "reconciliation verified every journalled live order."),
+        "# TYPE trading_fill_reconciliation_complete gauge",
+        f"trading_fill_reconciliation_complete {int(complete)}",
+    ])
+    # ``quantity_mismatch`` already counts every unmatched order as well, so the
+    # two counters together are the number of bad orders, not the number of
+    # findings - adding UNMATCHED again would report one order twice.
+    counts = [marker_int(values, key) for key in ("quantity_mismatch", "fee_mismatch")]
+    if all(count is not None for count in counts):
+        mismatches = sum(count for count in counts if count is not None)
+        lines.extend([
+            ("# HELP trading_fill_reconciliation_mismatches Orders of the last "
+             "complete pass that differ from the journal in filled quantity "
+             "(orders the exchange does not know included) or in fees."),
+            "# TYPE trading_fill_reconciliation_mismatches gauge",
+            f"trading_fill_reconciliation_mismatches {mismatches}",
+        ])
+    age = marker_age_seconds(values, now)
+    if age is not None:
+        lines.extend([
+            ("# HELP trading_fill_reconciliation_age_seconds Age of the last fill "
+             "reconciliation pass."),
+            "# TYPE trading_fill_reconciliation_age_seconds gauge",
+            f"trading_fill_reconciliation_age_seconds {age:.3f}",
+        ])
+    return lines
+
+
 def _disk_lines(disk_paths: Sequence[str]) -> list[str]:
     """Capacity gauges for the filesystems the bot writes to.
 
@@ -247,6 +315,7 @@ def render_metrics(
     database_probe: Callable[[str], int | None] = query_database_size,
     scorecard_gate: ScorecardGateSettings | None = None,
     deployment_env_file: Path | None = None,
+    fill_report_file: Path | None = None,
 ) -> str:
     now = now or datetime.now(UTC)
     kill_switch_active = int(os.path.lexists(kill_switch_file))
@@ -320,10 +389,11 @@ def render_metrics(
     lines.extend(_disk_lines(disk_paths))
     lines.extend(_database_lines(analytics_db_url, database_probe))
     if scorecard_gate is not None:
+        env_file = deployment_env_file or Path(ENV_PATH)
+        lines.extend(_scorecard_gate_lines(scorecard_gate, env_file, now))
+        live_enabled = not env_bool("DRY_RUN", True, str(env_file), quiet=True)
         lines.extend(
-            _scorecard_gate_lines(
-                scorecard_gate, deployment_env_file or Path(ENV_PATH), now,
-            )
+            _fill_reconciliation_lines(fill_report_file, env_file, live_enabled, now)
         )
     return "\n".join(lines) + "\n"
 
@@ -354,6 +424,9 @@ def main() -> int:
     # Capacity is watched on the volume the bot works on unless the operator
     # names the mount points explicitly, e.g. an NVMe data directory.
     disk_raw = os.getenv("TRADING_DISK_PATHS", "").strip() or str(root)
+    # The reconciliation marker path is the same one the reconciliation unit and
+    # the bot write; unset means "this host publishes no reconciliation report".
+    fill_report = os.getenv("TRADING_FILL_RECONCILIATION_REPORT", "").strip()
     body = render_metrics(
         Path(os.getenv("TRADING_KILL_SWITCH_FILE", ".trading_kill_switch")),
         os.getenv("HAILO_HEALTH_URL", ""),
@@ -369,6 +442,7 @@ def main() -> int:
         scorecard_gate=scorecard_gate_settings(),
         deployment_env_file=Path(
             os.getenv("TRADING_DEPLOYMENT_ENV_FILE", ENV_PATH)),
+        fill_report_file=Path(fill_report) if fill_report else None,
     )
     output = Path(os.getenv(
         "TRADING_HEALTH_METRICS_FILE",
