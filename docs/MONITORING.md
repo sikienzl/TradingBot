@@ -134,6 +134,48 @@ bash scripts/run_weekly_scorecard.sh
 
 The weekly script uses `PYTHON_BIN` if set, otherwise `.venv/bin/python`, otherwise `python3`. The VS Code task `Scorecard: Weekly Go/No-Go` runs the same automation.
 
+## Scorecard gating of live trading and model promotion
+
+The verdict in `results/scorecards/latest_status.env` / `latest_status.json` is
+not only a report: `src.scorecard_gate` makes a fresh `GO` a prerequisite for
+two actions.
+
+- `DRY_RUN=false` is refused at startup (`src.bot_bootstrap`) and again
+  immediately before the trading loop (`src.bot_runtime`), so the bot exits
+  before an exchange client or the execution lock exists.
+- `scripts/manage_model_release.py promote` refuses to activate a new model
+  pair. `rollback` stays available without a verdict on purpose - going back to
+  a known-good release must always work, especially after a `NO-GO`.
+
+An action is allowed only when the marker exists, parses, reports `GO`, has a
+usable timestamp no older than `SCORECARD_GATE_MAX_AGE_SECONDS` (default eight
+days, i.e. one weekly cycle plus slack), and was not a `maintenance_override`
+run. Everything else - missing file, unreadable file, `HOLD`, `NO-GO`, `ERROR`,
+stale verdict - fails closed and the process refuses to start with the reason in
+the message. The JSON marker is preferred and the env marker is the fallback, so
+a Pi that only runs the weekly timer is covered without enabling JSON export.
+
+Deliberate operator overrides, both of which log a warning because they remove
+the last pre-trade gate:
+
+```sh
+# bot: skip the live-mode prerequisite
+SCORECARD_GATE_ENABLED=false
+
+# promotion CLI: skip it for one promotion
+python3 scripts/manage_model_release.py promote ... --no-require-go-verdict
+```
+
+Check the evidence the gate sees:
+
+```sh
+grep -E '^(TIMESTAMP_UTC|RUN_MODE|VERDICT)=' results/scorecards/latest_status.env
+python3 - <<'PY'
+from src.scorecard_gate import scorecard_gate_settings
+print(scorecard_gate_settings().evaluate())
+PY
+```
+
 ## Node Exporter textfile collector
 
 Relative path setup:
@@ -226,6 +268,18 @@ Scheduled-task, capacity, and analytics gauges come from the same timer:
   and - only when the probe answers - `trading_analytics_database_size_bytes`.
   The probe imports `psycopg` lazily and is not used at all when no URL is
   configured, so the single-node Raspberry Pi release never needs the driver.
+- The live-trading scorecard gate (`src.scorecard_gate`) exports
+  `trading_scorecard_gate_enabled` (0 only when an operator set
+  `SCORECARD_GATE_ENABLED=false`), `trading_scorecard_gate_live_enabled`
+  (1 when the deployment `.env` sets `DRY_RUN=false`),
+  `trading_scorecard_gate_allowed` (1 only for a fresh `GO` verdict), and
+  `trading_scorecard_gate_age_seconds` when the marker has a usable timestamp.
+  The gate reads `results/scorecards/latest_status.json` first and falls back to
+  `results/scorecards/latest_status.env`, so it needs no extra configuration
+  under either release profile as long as the unit runs from the deployment
+  root. `TRADING_DEPLOYMENT_ENV_FILE` points at the `.env` that `DRY_RUN` is
+  read from; a profile that never trades live publishes `live_enabled 0` and can
+  never match a live-mode alert.
 
 The health unit uses `/etc/trading-health.env`, not the bot's
 credential-bearing `.env`; copy `deploy/trading-health.env.example` there.
@@ -246,7 +300,10 @@ metrics, a failed / never-reported / overdue scheduled task
 (`TradingScheduledTaskFailed`, `TradingScheduledTaskMarkerMissing`,
 `TradingScheduledTaskStale`), low or nearly full disk
 (`TradingDiskSpaceLow`, `TradingDiskUsedPercentHigh`), and an unreachable
-analytics database (`TradingAnalyticsDatabaseUnavailable`). `tests/test_alert_rules.py`
+analytics database (`TradingAnalyticsDatabaseUnavailable`), live trading that is
+configured without a fresh `GO` verdict (`TradingLiveModeScorecardGateBlocked`,
+critical) and live trading that runs with the gate switched off
+(`TradingLiveModeWithoutScorecardGate`, warning). `tests/test_alert_rules.py`
 fails when one of those rules references a metric the exporter does not emit.
 The installer
 also configures local Alertmanager and a loopback-only relay. Before installing

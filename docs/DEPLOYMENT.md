@@ -60,6 +60,9 @@ pip install -r requirements.txt
 cp .env.live.example .env
 ```
 
-Then run bot/scorecard from that server only.
+Then run bot/scorecard from that server only. With `DRY_RUN=false` the bot also
+requires a fresh `GO` scorecard verdict before it starts, so run
+`scripts/run_weekly_scorecard.sh` (or enable `scorecard.timer`) first; see
+[scorecard gating](MONITORING.md#scorecard-gating-of-live-trading-and-model-promotion).
 
 For the complete server, dashboard, and Hailo runbook, see [SERVER_README.md](../SERVER_README.md).

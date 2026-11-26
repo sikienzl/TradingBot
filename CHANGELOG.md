@@ -5,6 +5,54 @@ a version heading is assigned when a release is prepared.
 
 ## Unreleased
 
+### Added
+
+- `src/scorecard_gate.py`, a fail-closed reader for the weekly scorecard verdict
+  markers. It accepts the uppercase `key=value` marker
+  `scripts/run_weekly_scorecard.sh` always writes
+  (`results/scorecards/latest_status.env`) and the lowercase JSON marker written
+  when `STATUS_JSON_ENABLED=true`, prefers the JSON marker, and returns
+  `allowed=False` for a missing, empty, malformed, unreadable, stale, `HOLD`,
+  `NO-GO`, `ERROR` or maintenance-override verdict. No reader ever raises, so a
+  broken marker can never be read as approval. The default maximum age is eight
+  days - one weekly cycle plus slack - because the Pi profile produces exactly
+  one verdict per week.
+- Live trading is now gated on that verdict. `src.bot_bootstrap` refuses
+  `DRY_RUN=false` during startup validation, before an exchange client or the
+  execution lock exists, and `src.bot_runtime.run_bot` re-checks immediately
+  before entering the trading loop. Configure with `SCORECARD_GATE_ENABLED`
+  (default `true`), `SCORECARD_GATE_MAX_AGE_SECONDS`, `SCORECARD_STATUS_JSON`
+  and `SCORECARD_STATUS_ENV`; the deliberate override logs a warning.
+- Model promotion is gated on the same verdict.
+  `scripts/manage_model_release.py promote` now refuses without a fresh `GO` and
+  accepts `--scorecard-status-json`, `--scorecard-status-env`,
+  `--scorecard-max-age-seconds`, `--allow-maintenance-override` and
+  `--no-require-go-verdict`. `rollback` stays ungated on purpose: reverting to a
+  previously validated release must always work, including right after a
+  `NO-GO`.
+- The operational health exporter publishes `trading_scorecard_gate_enabled`,
+  `trading_scorecard_gate_live_enabled`, `trading_scorecard_gate_allowed` and
+  `trading_scorecard_gate_age_seconds`. `DRY_RUN` is read from the deployment
+  `.env` (`TRADING_DEPLOYMENT_ENV_FILE`, set explicitly in
+  `deploy/trading-operational-health.service`); only the run mode is read, never
+  a credential.
+- Two alert rules in `deploy/trading-alerts.yml` (20 to 22):
+  `TradingLiveModeScorecardGateBlocked` (critical - live trading is configured
+  but the scorecard evidence is missing, stale or not `GO`) and
+  `TradingLiveModeWithoutScorecardGate` (warning - live trading runs with the
+  gate switched off). A `DRY_RUN=true` profile publishes `live_enabled 0` and can
+  never match either rule, so the single-Pi release is unaffected.
+- Tests: `tests/test_scorecard_gate.py` (marker parsing, fail-closed readers,
+  age handling, marker precedence, settings resolution, refusal text), gate cases
+  in `tests/test_bot_bootstrap.py`, `tests/test_bot_runtime.py`,
+  `tests/test_manage_model_release_gate.py` (promotion refusal, override flags,
+  ungated rollback) and gauge-level cases in `tests/test_alert_rules.py`.
+
+### Changed
+
+- `src/env_file.env_bool()` accepts `quiet=True` so the 30-second health timer
+  cannot spam stderr when the deployment `.env` is unreadable.
+
 ## v1.0.30 - 2026-11-26
 
 ### Added
