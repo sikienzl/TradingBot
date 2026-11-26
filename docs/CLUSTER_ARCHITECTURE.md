@@ -141,6 +141,13 @@ verified, cluster live execution must stop rather than fall back to local-only
 locks. Validate this behavior against the actual shared database before
 enabling a second execution process.
 
+The append-only research news store (`data/research_news_items.jsonl`) is also a
+host-local file: it is written only by the node that runs
+`scripts/fetch_research_signal.py` and is read through the
+`integration.news_store_path` entry of the signal file. Sharing the signal
+directory read-only is enough for another node to replay the same per-item
+history; there is no cross-node write coordination for the store.
+
 The durable risk-state file (`TRADING_RISK_STATE_FILE`) and the kill-switch
 marker are host-local files, not cluster services. Each node therefore keeps its
 own daily-loss budget, loss-streak pause, hourly BUY budget and re-entry

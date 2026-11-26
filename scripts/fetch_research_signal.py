@@ -7,6 +7,11 @@ Providers are modular and can be enabled/disabled independently:
 
 Output remains backward-compatible with the existing
 research_signal_latest.json format consumed by train/predict.
+
+Every scored news item is additionally appended to an immutable per-item store
+(``src.news_item_store``) so a decision can be replayed against the news that
+was actually visible at that point in time, instead of against whatever the
+latest fetch happened to keep.
 """
 
 import argparse
@@ -20,6 +25,19 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
 from typing import Any
+
+# The script runs from the repository root (systemd sets PYTHONPATH and the Pi
+# package ships src/ next to scripts/), but make the import work when the
+# script is invoked directly as well.
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from src.news_item_store import (
+    DEFAULT_NEWS_ITEM_STORE_PATH,
+    append_news_items,
+    news_store_stats,
+)
 
 FNG_URL = "https://api.alternative.me/fng/?limit=1"
 REQUEST_TIMEOUT_SEC = 15
@@ -438,6 +456,41 @@ def _combine_provider_signals(
     }
 
 
+def _resolve_output_path(path: str) -> str:
+    if os.path.isabs(path):
+        return path
+    return os.path.join(_ROOT, path)
+
+
+def _resolve_store_path(path: str) -> str:
+    """Absolute store path, or empty when the per-item store is disabled."""
+    if path.strip().lower() in {"", "none", "off", "false"}:
+        return ""
+    if os.path.isabs(path):
+        return path
+    return os.path.join(_ROOT, path)
+
+
+def _append_news_store_records(store_path: str, signal: dict[str, Any]) -> dict[str, Any]:
+    """Append this run's news items to the immutable store and report the store.
+
+    The store is supplementary: an unwritable store is recorded in the payload
+    and must not fail the signal, which the bot still needs in order to make a
+    fail-closed decision from the aggregate file.
+    """
+    items = [item for item in signal.get("news_items", []) if isinstance(item, dict)]
+    details: dict[str, Any] = {"news_store_path": store_path}
+    try:
+        counts = append_news_items(store_path, items)
+        details["news_store_appended"] = counts["appended"]
+        details["news_store_duplicates"] = counts["duplicates"]
+        details["news_store_invalid"] = counts["invalid"]
+        details["news_store"] = news_store_stats(store_path)
+    except OSError as exc:
+        details["news_store_error"] = f"{type(exc).__name__}: {exc}"
+    return details
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Fetch modular research signal (FNG + optional RSS news) and write canonical JSON."
@@ -470,6 +523,15 @@ def main() -> None:
         help="Max recent RSS items scored per feed.",
     )
     parser.add_argument(
+        "--news-store",
+        default=os.getenv(
+            "RESEARCH_NEWS_STORE_PATH", DEFAULT_NEWS_ITEM_STORE_PATH),
+        help=(
+            "Append-only JSONL store for individual news items "
+            "('none' disables it)."
+        ),
+    )
+    parser.add_argument(
         "--fng-weight",
         type=float,
         default=float(os.getenv("RESEARCH_FNG_WEIGHT", "1.0")),
@@ -483,10 +545,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    output_path = args.output
-    if not os.path.isabs(output_path):
-        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        output_path = os.path.join(root, output_path)
+    output_path = _resolve_output_path(args.output)
+    store_path = _resolve_store_path(args.news_store)
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -540,16 +600,28 @@ def main() -> None:
         signal.setdefault("source_details", {})[
             "provider_errors"] = provider_errors
 
+    if store_path:
+        signal.setdefault("integration", {}).update(
+            _append_news_store_records(store_path, signal))
+
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(signal, f, indent=2)
         f.write("\n")
 
     active = ",".join([p.get("provider", "?") for p in provider_signals])
+    store_summary = "store=disabled"
+    if store_path:
+        store = signal.get("integration", {}).get("news_store", {})
+        store_summary = (
+            f"store={store_path} "
+            f"(records={store.get('records', 'unknown')}, "
+            f"appended={signal.get('integration', {}).get('news_store_appended', 'unknown')})"
+        )
     print(
         f"Research signal written to {output_path} "
         f"(providers={active}, regime={signal['market_regime']}, "
         f"sentiment={signal['sentiment_score']}, "
-        f"confidence={signal['confidence']})"
+        f"confidence={signal['confidence']}, {store_summary})"
     )
 
 

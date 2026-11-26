@@ -31,6 +31,31 @@ a version heading is assigned when a release is prepared.
   `pytest numpy pandas ccxt`, asserts `hailo_platform`, `catboost` and `sklearn`
   are not importable, and runs both new test files. It is the single-Raspberry-Pi
   no-device profile in CI.
+- `src/news_item_store.py`, a layer-1 append-only JSONL store for the individual
+  news items behind each research signal. The aggregate signal file only kept the
+  latest fetch, so a decision could not be replayed. Every record is a canonical
+  JSON line carrying the source `published_at` and local `fetched_at` timestamps,
+  the provider, a content hash and a stable `record_id` derived from the link (or
+  the title plus publication time), which makes the hourly fetch idempotent and
+  means history is never rewritten. `replay_news_items(path, as_of)` returns the
+  point-in-time view a simulated decision would have seen, `read_news_items()`
+  reads the recent tail without loading the whole file, and a torn final line is
+  repaired inside the exclusive file lock. Retention and rotation stay operator
+  policy.
+- `--news-store` on `scripts/fetch_research_signal.py` (default
+  `RESEARCH_NEWS_STORE_PATH`, `data/research_news_items.jsonl`, `none` disables
+  it). The fetcher appends every scored item and publishes the path back into the
+  signal file as `integration.news_store_path` together with the append counters,
+  so the bot needs no new configuration and no restart. A store failure is
+  recorded as `integration.news_store_error` and never fails the signal itself.
+- `tests/test_news_item_store.py` covering identity and idempotency, both
+  timestamps, directory creation and torn-write repair, tail reads across chunk
+  boundaries, point-in-time replay, and the path-resolution precedence.
+- Store-backed tests in `tests/test_news_veto.py` (the veto reads the durable
+  store, keeps both timestamps and fails closed on an empty or future-dated
+  store) and in `tests/test_fetch_research_signal.py` (one record per scored
+  item, no duplicate on a rerun, a broken store never fails the signal, and
+  `--news-store none` disables it).
 
 ### Changed
 
@@ -44,6 +69,16 @@ a version heading is assigned when a release is prepared.
   **[✅ Implemented]** for the Pi profile; the cluster column stays
   **[⚠️ Partial]** because continuous readiness probing of the target-cluster
   Hailo service is still an operator task.
+- `src.news_veto.evaluate_news_veto` now prefers the durable per-item store when
+  the signal file points at one, so the paid veto sees the same records the
+  fetcher persisted rather than the aggregate snapshot; a configured store with
+  no fresh item still fails closed to a veto. Audit row 3 is **[✅ Implemented]**
+  for the Pi profile, and `docs/CONFIGURATION.md` documents
+  `RESEARCH_NEWS_STORE_PATH`.
+- `deploy/research-signal.service` now passes `--news-store` explicitly so the
+  systemd unit owns the store path instead of relying on the default. The store
+  file is git-ignored runtime state; no migration is required because the store
+  is additive and the aggregate signal file is unchanged.
 
 ## v1.0.31 - 2026-11-26
 
