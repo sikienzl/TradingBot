@@ -12,96 +12,13 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "y", "on")
-
-def _env_str(name: str, default: str = "") -> str:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().strip('"').strip("'")
-
-def _env_symbol_int_map(name: str, default: str = "") -> dict[str, int]:
-    raw = _env_str(name, default)
-    if not raw:
-        return {}
-
-    parsed: dict[str, int] = {}
-    for item in raw.split(','):
-        token = item.strip()
-        if not token or ':' not in token:
-            continue
-        symbol, value = token.split(':', 1)
-        symbol = symbol.strip().upper()
-        value = value.strip()
-        if not symbol or not value:
-            continue
-        try:
-            parsed[symbol] = int(value)
-        except ValueError:
-            continue
-    return parsed
-
-def _env_symbol_float_map(name: str, default: str = "") -> dict[str, float]:
-    raw = _env_str(name, default)
-    if not raw:
-        return {}
-
-    parsed: dict[str, float] = {}
-    for item in raw.split(','):
-        token = item.strip()
-        if not token or ':' not in token:
-            continue
-        symbol, value = token.split(':', 1)
-        symbol = symbol.strip().upper()
-        value = value.strip()
-        if not symbol or not value:
-            continue
-        try:
-            parsed[symbol] = float(value)
-        except ValueError:
-            continue
-    return parsed
-
-def _env_threshold_float_pairs(name: str, default: str = "") -> list[tuple[float, float]]:
-    raw = _env_str(name, default)
-    if not raw:
-        return []
-
-    parsed: list[tuple[float, float]] = []
-    for item in raw.split(','):
-        token = item.strip()
-        if not token or ':' not in token:
-            continue
-        threshold, value = token.split(':', 1)
-        try:
-            parsed.append(
-                (float(threshold.strip()), float(value.strip())))
-        except ValueError:
-            continue
-    return sorted(parsed, key=lambda entry: entry[0])
-
-def _env_threshold_int_pairs(name: str, default: str = "") -> list[tuple[float, int]]:
-    raw = _env_str(name, default)
-    if not raw:
-        return []
-
-    parsed: list[tuple[float, int]] = []
-    for item in raw.split(','):
-        token = item.strip()
-        if not token or ':' not in token:
-            continue
-        threshold, value = token.split(':', 1)
-        try:
-            parsed.append(
-                (float(threshold.strip()), int(value.strip())))
-        except ValueError:
-            continue
-    return sorted(parsed, key=lambda entry: entry[0])
+from src.env_parsing import env_bool as _env_bool
+from src.env_parsing import env_optional_float as _env_optional_float
+from src.env_parsing import env_str as _env_str
+from src.env_parsing import symbol_float_map as _env_symbol_float_map
+from src.env_parsing import symbol_int_map as _env_symbol_int_map
+from src.env_parsing import threshold_float_pairs as _env_threshold_float_pairs
+from src.env_parsing import threshold_int_pairs as _env_threshold_int_pairs
 
 
 class BotConfig:
@@ -177,6 +94,9 @@ class BotConfig:
             )
         self.live_portfolio_state_file = _env_str(
             'LIVE_PORTFOLIO_STATE_FILE', '.live_portfolio_state.json')
+        # Durable daily-loss anchor and loss-streak state (audit point 4).
+        self.risk_state_file = _env_str(
+            'TRADING_RISK_STATE_FILE', '.trading_risk_state.json')
         self.trade_amount = float(os.getenv('TRADE_AMOUNT', str(20)))
         self.portfolio_trade_amount_multipliers = _env_threshold_float_pairs(
             'PORTFOLIO_TRADE_AMOUNT_MULTIPLIERS',
@@ -225,6 +145,22 @@ class BotConfig:
             os.getenv('MAX_ENTRY_SPREAD_BPS', '100'))
         if not math.isfinite(self.max_entry_spread_bps) or self.max_entry_spread_bps < 0:
             raise ValueError("MAX_ENTRY_SPREAD_BPS must be finite and non-negative")
+        # Pre-trade execution-cost budget for live orders, in basis points of the
+        # order value (fee + slippage + spread). 0 disables the cost ceiling; the
+        # spread ceiling above still applies.
+        self.max_entry_cost_bps = float(os.getenv('MAX_ENTRY_COST_BPS', '120'))
+        if not math.isfinite(self.max_entry_cost_bps) or self.max_entry_cost_bps < 0:
+            raise ValueError("MAX_ENTRY_COST_BPS must be finite and non-negative")
+        # Fee/slippage assumptions for the pre-trade estimate. Unset means "use the
+        # exchange-reported taker fee / the documented default".
+        self.live_taker_fee_rate = _env_optional_float('LIVE_TAKER_FEE_RATE')
+        if (self.live_taker_fee_rate is not None
+                and not 0.0 <= self.live_taker_fee_rate < 1.0):
+            raise ValueError("LIVE_TAKER_FEE_RATE must be in [0, 1)")
+        self.live_slippage_rate = _env_optional_float('LIVE_SLIPPAGE_RATE')
+        if (self.live_slippage_rate is not None
+                and not 0.0 <= self.live_slippage_rate < 1.0):
+            raise ValueError("LIVE_SLIPPAGE_RATE must be in [0, 1)")
         # Number of top coins for analysis
         self.top_n_for_analysis = int(os.getenv('TOP_N_FOR_ANALYSIS', str(10)))
         self.exchange_timeout_ms = int(os.getenv('EXCHANGE_TIMEOUT_MS', str(15000)))

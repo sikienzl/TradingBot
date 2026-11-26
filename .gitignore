@@ -52,6 +52,7 @@ news_veto_state.json
 .live_portfolio_state.json
 .trading_execution.lock
 .trading_kill_switch
+.trading_risk_state.json
 
 # Testing
 .pytest_cache/

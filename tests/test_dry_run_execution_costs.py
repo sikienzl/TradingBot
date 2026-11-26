@@ -262,7 +262,7 @@ def test_live_trade_does_not_apply_costs(monkeypatch, tmp_path):
         def fetch_open_orders(self, symbol):
             return []
 
-        def create_market_buy_order(self, symbol, amount):
+        def create_market_buy_order(self, symbol, amount, params=None):
             assert symbol == "BTC/EUR"
             assert amount == 1
             return {"filled": amount, "average": 100, "cost": 100, "status": "closed"}
@@ -285,7 +285,7 @@ def test_live_buy_accounts_only_confirmed_partial_fill(monkeypatch, tmp_path):
         def fetch_open_orders(self, symbol):
             return []
 
-        def create_market_buy_order(self, symbol, amount):
+        def create_market_buy_order(self, symbol, amount, params=None):
             assert symbol == "BTC/EUR"
             assert amount == 1
             return {
@@ -321,7 +321,7 @@ def test_live_buy_network_failure_does_not_mutate_portfolio(monkeypatch, tmp_pat
         def fetch_open_orders(self, symbol):
             return []
 
-        def create_market_buy_order(self, symbol, amount):
+        def create_market_buy_order(self, symbol, amount, params=None):
             raise ccxt.NetworkError("exchange unavailable")
 
     bot.exchange = Exchange()
@@ -354,7 +354,7 @@ def test_live_buy_fetch_order_outage_does_not_account_unconfirmed_fill(
         def fetch_open_orders(self, symbol):
             return []
 
-        def create_market_buy_order(self, symbol, amount):
+        def create_market_buy_order(self, symbol, amount, params=None):
             return {"id": "unknown-buy", "status": "open", "amount": amount}
 
         def cancel_order(self, order_id, symbol):

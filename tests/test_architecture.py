@@ -28,6 +28,7 @@ LAYERS: dict[int, tuple[str, ...]] = {
     # Stable contracts and pure rule helpers: no src dependencies of their own.
     0: (
         "api_models",
+        "env_parsing",
         "hailo_contract",
         "strategy_rules",
     ),
@@ -49,10 +50,12 @@ LAYERS: dict[int, tuple[str, ...]] = {
         "entry_selection",
         "entry_filters",
         "env_file",
+        "execution_costs",
         "execution_service",
         "execution_owner",
         "bot_runtime",
         "inference_fallback",
+        "kill_switch",
         "news_veto",
         "model_release",
         "exit_policy",
@@ -68,6 +71,7 @@ LAYERS: dict[int, tuple[str, ...]] = {
         "market_data",
         "market_observations",
         "open_trade_manager",
+        "order_submission",
         "portfolio",
         "pnl_exporter",
         "pnl_metrics",
@@ -78,6 +82,8 @@ LAYERS: dict[int, tuple[str, ...]] = {
         "predict_hailo_remote",
         "recent_pnl_guard",
         "research_signal",
+        "risk_guardrails",
+        "risk_state",
         "scorecard_gate",
         "simulation",
         "state_store",
@@ -112,11 +118,11 @@ TRADING_BOT_IMPORTERS: frozenset[str] = frozenset({"init_kraken_paper"})
 # ceiling is the current line count, so a module can only ever move down.
 LINE_CEILINGS: dict[str, int] = {
     "trading_bot.py": 2055,
-    "execution_service.py": 760,
+    "execution_service.py": 751,
     "entry_selection.py": 750,
     "public_paper_dashboard.py": 695,
     "historical_backtest.py": 637,
-    "bot_config.py": 598,
+    "bot_config.py": 534,
     "ai_copilot_service.py": 584,
     "export_pnl_metrics.py": 366,
 }

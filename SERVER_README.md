@@ -281,6 +281,16 @@ or power outage. The simulation iteration is saved along with the portfolio;
 performance counters are not restored, and the trade journal is a separate
 file.
 
+The hard risk guardrails keep a separate durable file, `TRADING_RISK_STATE_FILE`
+(default `.trading_risk_state.json`, `/data/.trading_risk_state.json` in the
+container). It stores the daily portfolio-value anchor, the loss streak and BUY
+pause, the hourly BUY budget, and the per-coin re-entry timestamps, so a restart
+cannot reset a daily-loss block or an entry pause. Keep it on the same persistent
+volume as the portfolio state and back it up with it. A missing file starts
+neutral; an unreadable or invalid file blocks new entries until an operator
+repairs it, and in live mode a file that cannot be written also creates the
+kill-switch marker and stops the bot.
+
 #### Separate paper run with public Kraken market data
 
 Use a **new** private data directory, never the existing shadow directory.

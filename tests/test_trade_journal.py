@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from src.execution_costs import ESTIMATE_JOURNAL_FIELDS, FILL_JOURNAL_FIELDS
 from src.trade_journal import (
     TRADE_JOURNAL_FIELDS,
     JournalContext,
@@ -168,6 +169,41 @@ def test_missing_journal_is_created_with_full_schema(tmp_path):
     assert fields == TRADE_JOURNAL_FIELDS
     with path.open(newline="", encoding="utf-8") as handle:
         assert list(csv.reader(handle)) == [TRADE_JOURNAL_FIELDS]
+
+
+def test_execution_and_idempotency_columns_are_part_of_the_schema():
+    """The columns a restart needs to keep a partial fill and its estimate."""
+    expected = [
+        "client_order_id", "requested_amount_coin", "partial_fill",
+        "est_fee_base", "est_slippage_base", "est_spread_base",
+        "est_total_cost_base", "est_cost_pct", "est_taker_fee_rate",
+        "est_slippage_rate", "est_spread_bps",
+    ]
+    assert all(field in TRADE_JOURNAL_FIELDS for field in expected)
+    assert ["client_order_id", *FILL_JOURNAL_FIELDS,
+            *ESTIMATE_JOURNAL_FIELDS] == expected
+
+
+def test_old_journal_gains_the_execution_columns(tmp_path):
+    path = tmp_path / "journal.csv"
+    legacy = list(TRADE_JOURNAL_FIELDS)
+    for column in ("client_order_id", "partial_fill", "est_cost_pct"):
+        legacy.remove(column)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(legacy)
+        writer.writerow([""] * len(legacy))
+
+    fields = init_journal(Config(performance_log_file=str(path)))
+
+    # The missing columns are appended, never reordered, so old rows stay valid.
+    assert fields == list(dict.fromkeys(legacy + TRADE_JOURNAL_FIELDS))
+    assert set(fields) == set(TRADE_JOURNAL_FIELDS)
+    rows = journal_rows(path)
+    assert len(rows) == 1
+    for column in ("client_order_id", "requested_amount_coin", "partial_fill",
+                   "est_fee_base", "est_cost_pct", "est_spread_bps"):
+        assert rows[0][column] == ""
 
 
 def test_existing_journal_with_full_schema_is_left_untouched(tmp_path):

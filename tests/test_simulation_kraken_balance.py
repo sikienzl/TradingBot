@@ -251,6 +251,16 @@ def test_initialization_command_uses_only_free_eur_and_refuses_existing_state(mo
     monkeypatch.setattr(ccxt, "kraken", lambda config: Exchange())
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["init", "--credentials-file", str(credentials)])
+    # ``main`` writes its deployment profile straight into ``os.environ``;
+    # pre-registering the keys lets monkeypatch restore them afterwards so the
+    # values cannot leak into a later test in the same worker.
+    for key in (
+        "KRAKEN_API_KEY", "KRAKEN_API_SECRET", "DRY_RUN", "SIMULATE_DATA",
+        "SIMULATION_INITIAL_BALANCE_FROM_KRAKEN", "EXCHANGE_NAME",
+        "BASE_CURRENCY", "USE_ML_MODEL", "USE_TABULAR_MODEL",
+        "ANALYTICS_DB_ENABLED", "PERFORMANCE_LOG_ENABLED",
+    ):
+        monkeypatch.delenv(key, raising=False)
     main()
     state = json.loads((tmp_path / ".portfolio_state.json").read_text())
     assert state["cash"] == 25

@@ -1,3 +1,4 @@
+import json
 import logging
 import signal
 from datetime import UTC, datetime, timedelta
@@ -1949,3 +1950,162 @@ def test_open_trade_extremes_are_updated_and_persisted(monkeypatch):
     assert trade["peak_price"] == 105.0
     assert trade["trough_price"] == 98.0
     assert saved == [True]
+
+
+# ---------------------------------------------------------------------------
+# Durable risk state (audit point 4)
+# ---------------------------------------------------------------------------
+def _risk_state_bot(monkeypatch, tmp_path):
+    """A bot whose durable risk state lives in ``tmp_path``."""
+    monkeypatch.setenv("TRADING_RISK_STATE_FILE", str(tmp_path / "risk_state.json"))
+    return _make_test_bot(monkeypatch)
+
+
+def test_risk_state_survives_a_restart(monkeypatch, tmp_path, caplog):
+    first = _risk_state_bot(monkeypatch, tmp_path)
+    first._refresh_daily_anchor(250.0)
+    first.config.loss_streak_pause_threshold = 1
+    first.config.loss_streak_pause_seconds = 600
+    first._record_close_performance(
+        {"buy_price": 100.0, "amount_coin": 1.0, "timestamp": datetime.now(),
+         "signal_source": "rules"},
+        sell_price=99.0, sell_amount=1.0)
+    first._register_buy_timestamp()
+    first._register_sell_timestamp("BTC")
+    assert (tmp_path / "risk_state.json").exists()
+
+    with caplog.at_level(logging.INFO):
+        second = _risk_state_bot(monkeypatch, tmp_path)
+
+    assert second.risk_state_unreadable is False
+    assert second.daily_anchor_date == first.daily_anchor_date
+    assert second.daily_anchor_value == pytest.approx(250.0)
+    assert second.consecutive_losses == first.consecutive_losses == 1
+    # The persisted timestamp format has whole-second precision only.
+    assert second.buy_pause_until_utc == first.buy_pause_until_utc.replace(
+        microsecond=0)
+    assert len(second.buy_timestamps_utc) == 1
+    assert set(second.last_sell_timestamps_utc) == {"BTC"}
+    assert "Restored risk state" in caplog.text
+
+    can_open, reason = second._can_open_new_positions(250.0)
+    assert can_open is False
+    assert "BUY pause" in reason
+
+
+def test_unreadable_risk_state_blocks_new_entries(monkeypatch, tmp_path, caplog):
+    path = tmp_path / "risk_state.json"
+    path.write_text("{ not json", encoding="utf-8")
+    monkeypatch.setenv("TRADING_RISK_STATE_FILE", str(path))
+
+    with caplog.at_level(logging.ERROR):
+        bot = _make_test_bot(monkeypatch)
+
+    assert bot.risk_state_unreadable is True
+    assert "could not be read" in caplog.text
+    # Every other guardrail is irrelevant while the budget is unknown.
+    bot.config.max_daily_loss_pct = 0.0
+    bot.config.max_buys_per_hour = 0
+    bot.daily_anchor_value = 1000.0
+    bot.buy_pause_until_utc = None
+    can_open, reason = bot._can_open_new_positions(10.0)
+    assert can_open is False
+    assert reason == (
+        "Risk state unreadable - daily-loss budget and loss streak unknown")
+
+
+def test_risk_state_persistence_is_optional(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRADING_RISK_STATE_FILE", "")
+    bot = _make_test_bot(monkeypatch)
+    bot._refresh_daily_anchor(100.0)
+    bot._register_buy_timestamp()
+    assert list(tmp_path.glob("risk_state.json")) == []
+    assert bot._can_open_new_positions(100.0) == (True, "")
+
+
+def test_unwritable_risk_state_blocks_entries_in_dry_run(monkeypatch, tmp_path, caplog):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    state_file = state_dir / "risk_state.json"
+    state_file.write_text(
+        json.dumps({
+            "version": 1,
+            "daily_anchor_date": datetime.now(UTC).date().isoformat(),
+            "daily_anchor_value": 100.0,
+        }),
+        encoding="utf-8")
+    state_dir.chmod(0o500)
+    monkeypatch.setenv("TRADING_RISK_STATE_FILE", str(state_file))
+    bot = _make_test_bot(monkeypatch)
+    assert bot.risk_state_unreadable is False
+
+    try:
+        with caplog.at_level(logging.CRITICAL):
+            bot._persist_risk_state()
+
+        assert bot.risk_state_unreadable is True
+        assert "could not be persisted" in caplog.text
+        assert bot._can_open_new_positions(100.0)[0] is False
+    finally:
+        state_dir.chmod(0o700)
+
+
+def test_unwritable_risk_state_latches_kill_switch_when_live(monkeypatch, tmp_path):
+    # ``src.bot_bootstrap`` refuses DRY_RUN=false without a fresh GO verdict, so
+    # the live path needs the same evidence a deployment supplies.
+    marker = tmp_path / "scorecard_status.env"
+    marker.write_text(
+        f"TIMESTAMP_UTC={datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
+        "RUN_MODE=standard\nVERDICT=GO\nUNDERLYING_EXIT_CODE=0\nFINAL_EXIT_CODE=0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SCORECARD_STATUS_ENV", str(marker))
+    monkeypatch.setenv("SCORECARD_STATUS_JSON", str(tmp_path / "absent.json"))
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    state_file = state_dir / "risk_state.json"
+    state_file.write_text(
+        json.dumps({
+            "version": 1,
+            "daily_anchor_date": datetime.now(UTC).date().isoformat(),
+            "daily_anchor_value": 100.0,
+        }),
+        encoding="utf-8")
+    state_dir.chmod(0o500)
+    monkeypatch.setenv("TRADING_RISK_STATE_FILE", str(state_file))
+    monkeypatch.setenv("TRADING_KILL_SWITCH_FILE", str(tmp_path / "STOP"))
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("SIMULATE_DATA", "true")
+    # ``src/init_kraken_paper.main`` writes straight into ``os.environ``, so an
+    # earlier test in the same worker can leave this flag set for this one.
+    monkeypatch.delenv("SIMULATION_INITIAL_BALANCE_FROM_KRAKEN", raising=False)
+    monkeypatch.setenv("USE_TABULAR_MODEL", "false")
+    monkeypatch.setenv("USE_ML_MODEL", "false")
+    monkeypatch.setenv("ANALYTICS_DB_ENABLED", "false")
+    monkeypatch.setenv("PERFORMANCE_LOG_ENABLED", "false")
+    try:
+        bot = CryptoTradingBot(BotConfig())
+        assert bot.config.dry_run is False
+        assert bot.risk_state_unreadable is False
+
+        with pytest.raises(RuntimeError, match="Cannot persist risk state"):
+            bot._persist_risk_state()
+
+        assert bot.risk_state_unreadable is True
+        assert "uncertain_order_outcome: risk state write failed" in (
+            tmp_path / "STOP").read_text(encoding="utf-8")
+    finally:
+        state_dir.chmod(0o700)
+
+
+def test_daily_anchor_persistence_is_idempotent(monkeypatch, tmp_path):
+    bot = _risk_state_bot(monkeypatch, tmp_path)
+    bot._refresh_daily_anchor(100.0)
+    payload = json.loads(
+        (tmp_path / "risk_state.json").read_text(encoding="utf-8"))
+    assert payload["daily_anchor_value"] == pytest.approx(100.0)
+    bot._refresh_daily_anchor(120.0)
+    again = json.loads(
+        (tmp_path / "risk_state.json").read_text(encoding="utf-8"))
+    # The anchor is only written once per UTC day, so the budget stays stable.
+    assert again["daily_anchor_value"] == pytest.approx(100.0)

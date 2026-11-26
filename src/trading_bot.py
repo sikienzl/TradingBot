@@ -7,7 +7,7 @@ import sys
 import uuid
 from collections import defaultdict
 from collections.abc import Container
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import Any
 
 import ccxt
@@ -187,6 +187,7 @@ from src.journal_guards import (
     _compute_dynamic_lossmaker_entry_pairs,
     _compute_recent_pnl_guard_state,
 )
+from src.kill_switch import activate_kill_switch
 from src.market_analysis import (
     analyze_markets as _market_analysis_analyze_markets,
 )
@@ -204,6 +205,7 @@ from src.open_trade_manager import (
 from src.open_trade_manager import (
     manage_open_trades as _open_trade_manage_open_trades,
 )
+from src.order_submission import build_client_order_id
 from src.portfolio import Portfolio
 from src.portfolio_bootstrap import (
     PortfolioBootstrapContext,
@@ -212,6 +214,14 @@ from src.portfolio_bootstrap import (
 from src.portfolio_bootstrap import (
     update_portfolio_balance as _portfolio_bootstrap_update_balance,
 )
+from src.risk_guardrails import (
+    GuardrailState,
+    can_open_new_positions,
+    is_coin_in_reentry_cooldown,
+    register_buy_timestamp,
+    resolve_reentry_cooldown_seconds,
+)
+from src.risk_state import RiskState, read_risk_state, write_risk_state
 from src.simulation import SimulationEngine
 from src.state_store import (
     cooldown_remaining_minutes as _state_cooldown_remaining_minutes,
@@ -372,6 +382,11 @@ class CryptoTradingBot:
         self.last_sell_timestamps_utc: dict[str, datetime] = {}
         self.consecutive_losses: int = 0
         self.buy_pause_until_utc: datetime | None = None
+        #: Path of the durable risk-state file ('' disables persistence).
+        self._risk_state_file = str(getattr(config, 'risk_state_file', '') or '')
+        #: True when the durable risk state exists but cannot be trusted.
+        self.risk_state_unreadable: bool = False
+        self._restore_risk_state()
         _bootstrap_log_startup_details(logger, config, self.run_id, self.config_hash)
         self.exchange = self._initialize_exchange()
         self._simulation_engine = SimulationEngine(
@@ -870,7 +885,7 @@ class CryptoTradingBot:
     def _record_close_performance(self, entry_trade: dict, sell_price: float, sell_amount: float,
                                   *, net_proceeds: float | None = None,
                                   entry_basis: float | None = None):
-        return _close_record_close_performance(
+        result = _close_record_close_performance(
             self.config,
             self.performance,
             _ClosePerformanceHooks(
@@ -889,74 +904,28 @@ class CryptoTradingBot:
             entry_basis=entry_basis,
             logger=logger,
         )
+        self._persist_risk_state()
+        return result
 
     def _register_buy_timestamp(self):
-        now_utc = datetime.now(UTC)
-        self.buy_timestamps_utc.append(now_utc)
-        cutoff = now_utc - timedelta(hours=1)
-        self.buy_timestamps_utc = [
-            ts for ts in self.buy_timestamps_utc if ts >= cutoff]
+        self.buy_timestamps_utc = register_buy_timestamp(self.buy_timestamps_utc)
+        self._persist_risk_state()
 
     def _register_sell_timestamp(self, coin: str):
         self.last_sell_timestamps_utc[coin] = datetime.now(UTC)
+        self._persist_risk_state()
 
     def _resolve_reentry_cooldown_seconds(self, current_price: float, atr: float) -> tuple[int, str]:
         """Returns an effective re-entry cooldown (seconds), optionally adjusted by volatility."""
-        base = max(0, int(self.config.reentry_cooldown_seconds))
-        minimum = max(0, int(self.config.reentry_cooldown_min_seconds))
-        maximum = max(minimum, int(self.config.reentry_cooldown_max_seconds))
-
-        if base <= 0:
-            return 0, 'base_zero'
-
-        if not self.config.reentry_dynamic_enabled:
-            return min(max(base, minimum), maximum), 'static'
-
-        if (
-            current_price is None
-            or current_price <= 0
-            or atr is None
-            or np.isnan(atr)
-            or atr <= 0
-        ):
-            return min(max(base, minimum), maximum), 'fallback_no_atr'
-
-        atr_pct = float(atr) / float(current_price)
-        low = max(0.0, float(self.config.reentry_volatility_low_atr_pct))
-        high = max(low, float(self.config.reentry_volatility_high_atr_pct))
-
-        if atr_pct < low:
-            mult = float(self.config.reentry_cooldown_mult_low_vol)
-            regime = 'low_vol'
-        elif atr_pct > high:
-            mult = float(self.config.reentry_cooldown_mult_high_vol)
-            regime = 'high_vol'
-        else:
-            mult = float(self.config.reentry_cooldown_mult_mid_vol)
-            regime = 'mid_vol'
-
-        effective = round(base * mult)
-        effective = min(max(effective, minimum), maximum)
-        reason = f'{regime},atr_pct={atr_pct:.4f},mult={mult:.2f}'
-        return effective, reason
+        return resolve_reentry_cooldown_seconds(self.config, current_price, atr)
 
     def _is_coin_in_reentry_cooldown(self, coin: str, cooldown_seconds: int | None = None) -> tuple[bool, int]:
-        cooldown = max(
-            0,
-            int(self.config.reentry_cooldown_seconds if cooldown_seconds is None else cooldown_seconds),
+        return is_coin_in_reentry_cooldown(
+            self.config,
+            self.last_sell_timestamps_utc,
+            coin,
+            cooldown_seconds,
         )
-        if cooldown <= 0:
-            return False, 0
-
-        last_sell = self.last_sell_timestamps_utc.get(coin)
-        if last_sell is None:
-            return False, 0
-
-        elapsed = (datetime.now(UTC) - last_sell).total_seconds()
-        remaining = int(max(0, cooldown - elapsed))
-        if remaining > 0:
-            return True, remaining
-        return False, 0
 
     def _refresh_daily_anchor(self, portfolio_value: float):
         today_utc = datetime.now(UTC).date()
@@ -969,37 +938,66 @@ class CryptoTradingBot:
             self.buy_pause_until_utc = None
             logger.info(
                 f"🗓️ Daily-risk-anchor set: {portfolio_value:.2f} {self.config.base_currency} ({today_utc})")
+            self._persist_risk_state()
+
+    def _restore_risk_state(self) -> None:
+        """Replays the risk counters persisted by an earlier process. An
+        unreadable file is never treated as "no risk state": the flag keeps new
+        entries blocked until an operator repairs it."""
+        state = read_risk_state(self._risk_state_file, logger=logger)
+        self.risk_state_unreadable = state.unreadable
+        if not state.restored:
+            return
+        self.daily_anchor_date = state.anchor_date
+        self.daily_anchor_value = state.anchor_value
+        self.consecutive_losses = state.consecutive_losses
+        self.buy_pause_until_utc = state.buy_pause_until_utc
+        self.buy_timestamps_utc = list(state.buy_timestamps_utc or [])
+        self.last_sell_timestamps_utc = dict(state.last_sell_timestamps_utc or {})
+        logger.info(
+            "♻️ Restored risk state from %s: anchor=%.2f %s (%s) | loss streak=%d | BUYs=%d | cooldowns=%d",
+            self._risk_state_file, self.daily_anchor_value, self.config.base_currency,
+            self.daily_anchor_date, self.consecutive_losses,
+            len(self.buy_timestamps_utc), len(self.last_sell_timestamps_utc))
+
+    def _persist_risk_state(self) -> None:
+        """Persists the risk counters so a restart cannot erase the daily budget.
+        A live process that cannot write its risk state latches the kill switch
+        and stops; a simulated one only blocks further entries."""
+        if not self._risk_state_file:
+            return
+        snapshot = RiskState(
+            anchor_date=self.daily_anchor_date, anchor_value=self.daily_anchor_value,
+            consecutive_losses=self.consecutive_losses,
+            buy_pause_until_utc=self.buy_pause_until_utc,
+            buy_timestamps_utc=list(self.buy_timestamps_utc),
+            last_sell_timestamps_utc=dict(self.last_sell_timestamps_utc))
+        try:
+            write_risk_state(snapshot, self._risk_state_file, logger=logger)
+        except RuntimeError as exc:
+            self.risk_state_unreadable = True
+            logger.critical(
+                "⛔ Risk state could not be persisted (%s); new entries stay blocked "
+                "until the file is writable again.", exc)
+            if not self.config.dry_run:
+                activate_kill_switch(self.config, "risk state write failed", logger)
+                raise
+
+    def _risk_guardrail_state(self) -> GuardrailState:
+        """The live risk counters, including whether the durable state is unreadable."""
+        return GuardrailState(
+            buy_pause_until_utc=self.buy_pause_until_utc,
+            daily_anchor_value=self.daily_anchor_value,
+            buy_timestamps_utc=self.buy_timestamps_utc,
+            risk_state_unreadable=self.risk_state_unreadable,
+        )
 
     def _can_open_new_positions(self, portfolio_value: float) -> tuple[bool, str]:
-        now_utc = datetime.now(UTC)
-
-        if self.buy_pause_until_utc and now_utc < self.buy_pause_until_utc:
-            remaining = (self.buy_pause_until_utc - now_utc).total_seconds()
-            return False, f"BUY pause active for another {int(max(0, remaining))}s"
-
-        if self.config.max_daily_loss_pct > 0 and self.daily_anchor_value > 0:
-            drawdown_pct = max(
-                0.0,
-                (self.daily_anchor_value - portfolio_value) /
-                self.daily_anchor_value * 100.0,
-            )
-            if drawdown_pct >= self.config.max_daily_loss_pct:
-                return False, (
-                    f"Daily-Loss-Limit erreicht ({drawdown_pct:.2f}% >= "
-                    f"{self.config.max_daily_loss_pct:.2f}%)"
-                )
-
-        if self.config.max_buys_per_hour > 0:
-            cutoff = now_utc - timedelta(hours=1)
-            self.buy_timestamps_utc = [
-                ts for ts in self.buy_timestamps_utc if ts >= cutoff]
-            if len(self.buy_timestamps_utc) >= self.config.max_buys_per_hour:
-                return False, (
-                    f"BUY-Limit pro Stunde erreicht "
-                    f"({len(self.buy_timestamps_utc)}/{self.config.max_buys_per_hour})"
-                )
-
-        return True, ""
+        return can_open_new_positions(
+            self.config,
+            self._risk_guardrail_state(),
+            portfolio_value,
+        )
 
     def _log_performance_report(self):
         closed = self.performance['closed_trades']
@@ -1717,6 +1715,8 @@ class CryptoTradingBot:
             signal_confidence=signal_confidence,
             recommendation=recommendation,
             reason=reason,
+            client_order_id=build_client_order_id(
+                self.run_id, self.config_hash, self.iteration, coin, action),
             logger=logger,
         )
 

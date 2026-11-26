@@ -2,7 +2,10 @@
 
 Static repository review plus read-only inspection of both CM5 nodes on
 2026-11-25. Status describes current evidence, not the desired architecture.
-The live cluster workload inspected is paper/shadow only.
+The live cluster workload inspected is paper/shadow only. Rows marked
+**[✅ Implemented]** describe repository code that is covered by tests; where the
+inspected cluster does not itself exercise that code path, the cluster column
+stays **[⚠️ Partial]**.
 
 ## Status by profile
 
@@ -11,8 +14,8 @@ The live cluster workload inspected is paper/shadow only.
 | 1 | Data basis and model lifecycle | **[⚠️ Partial]** Paired contract/checksum manifest and atomic activation/rollback are implemented; candidate training and DFC compilation remain separate operator steps. | **[⚠️ Partial]** Same paired release tooling; DFC and target-device validation remain external, and no x86 worker is deployed. |
 | 2 | Decision pyramid and hardware fallback | **[⚠️ Partial]** Volume, spread, and ATR gates now precede optional inference; Hailo→CPU→rules fallback is tested. | **[⚠️ Partial]** Same cascade and gates; target-cluster service/device availability is not continuously exercised by CI. |
 | 3 | News integration | **[⚠️ Partial]** RSS items now retain `published_at`/`fetched_at`, are deduplicated, and can drive an opt-in structured final veto with a daily call limit; persistent historical item storage is not implemented. | **[⚠️ Partial]** Same code is available, but the inspected cluster has no configured paid provider/credentials; Hailo features do not consume news. |
-| 4 | Hard risk and kill switch | **[⚠️ Partial]** A persistent file kill switch now blocks live orders; daily anchor/loss-streak state remains process-local. | **[⚠️ Partial]** The file switch is host-local; no cluster-wide shared switch or distributed ownership is implemented. |
-| 5 | Execution and costs | **[⚠️ Partial]** Fees and spread ceiling are accounted for; ambiguous order outcomes latch the stop marker instead of retrying. Maker/taker estimates and exchange-native idempotency remain absent. | **[⚠️ Partial]** Same controls, but live exchange use remains unvalidated on the cluster. |
+| 4 | Hard risk and kill switch | **[✅ Implemented]** The daily anchor, loss-streak pause, hourly BUY budget and re-entry cooldowns are persisted in `TRADING_RISK_STATE_FILE` and restored at startup; unreadable or unwritable risk state blocks new entries and latches the persistent kill switch in live mode. | **[⚠️ Partial]** Same persisted state per node, but the file and the stop marker are host-local; no cluster-wide shared switch or distributed state store is implemented. |
+| 5 | Execution and costs | **[✅ Implemented]** Exchange fill/fee records, a pre-trade taker-fee + spread + slippage cost budget (`MAX_ENTRY_COST_BPS`), and a Kraken `cl_ord_id` per submission are in place; a submission timeout is reconciled instead of resubmitted and an unknown outcome latches the stop marker. Partial fills keep their requested amount in the journal. | **[⚠️ Partial]** Same controls, but live exchange use remains unvalidated on the cluster. |
 | 6 | Single-Pi vs cluster operations | **[⚠️ Partial]** Local process lock, persisted live snapshot, startup balance comparison, open-order refusal, and uncertain-order latch exist; fill reconstruction needs operator review. | **[⚠️ Partial]** Optional account-scoped PostgreSQL advisory lease supplements local locks; shared PostgreSQL config and cluster deployment are operator prerequisites, and fill reconstruction remains manual. |
 | 7 | Evaluation and scorecard | **[✅ Implemented]** GO/HOLD/NO-GO and HOLD for insufficient data are implemented, with Pi systemd automation. A fresh `GO` verdict is now a prerequisite for `DRY_RUN=false` and for `scripts/manage_model_release.py promote`. | **[⚠️ Partial]** Same gate code and monitoring rules; the inspected cluster deployment still does not show scorecard automation as part of its active bot topology, so the gate reads the marker produced by the Pi/cluster `scorecard-status` timer. |
 | 8 | Monitoring and alerting | **[⚠️ Partial]** Pi installer configures Alertmanager, a private HTTPS webhook relay, and kill-switch/Hailo/research health alerts plus bounded journal/bot-log/market-data staleness probes, scheduled-task exit-status markers, disk-capacity gauges, and an optional analytics-database probe; operator webhook configuration and staging delivery validation remain required. | **[⚠️ Partial]** Alert rules and relay are available in the repository, but cluster-specific installation/configuration and live receiver validation remain outstanding. |
@@ -80,17 +83,25 @@ staging before enabling the paid veto.
 
 ### 4. Hard risk and kill switch
 
-`src.trading_bot.CryptoTradingBot._can_open_new_positions`,
-`_refresh_daily_anchor`, and close-performance bookkeeping enforce configured
-entry limits, daily-loss checks, cooldowns, and loss-streak pauses.
-`src.execution_service.execute_real_trade` checks the persistent marker
-configured by `TRADING_KILL_SWITCH_FILE` immediately before all live orders.
-The daily anchor and loss-streak state remain process-local; the kill switch
-blocks both buys and sells.
+`src.risk_guardrails.can_open_new_positions` enforces the daily-loss budget,
+loss-streak pause, and hourly BUY budget, and
+`resolve_reentry_cooldown_seconds`/`is_coin_in_reentry_cooldown` scale the
+per-coin re-entry cooldown with the ATR regime. The state behind those gates is
+now durable: `src.risk_state.read_risk_state`/`write_risk_state` store the daily
+anchor, loss streak, BUY pause, hourly BUY timestamps, and last-sell timestamps
+in `TRADING_RISK_STATE_FILE` through an atomic replace, and
+`CryptoTradingBot._restore_risk_state` reloads them at startup while every close,
+BUY, and anchor refresh persists them again. A missing file stays neutral; an
+unreadable or invalid file sets `risk_state_unreadable`, which blocks every new
+entry with an explicit reason. If the file cannot be written, dry-run mode keeps
+entries blocked, and live mode additionally latches the persistent kill switch
+(`src.kill_switch.activate_kill_switch`, `TRADING_KILL_SWITCH_FILE`) and stops.
+`src.execution_service.execute_real_trade` checks that marker before all live
+orders, so the guardrails and the switch always veto any signal source.
 
-**Next:** Persist risk state and an operator-controlled kill-switch latch;
-evaluate it immediately before every order, fail closed on unreadable state,
-and test restart persistence and precedence over rules, CPU, Hailo, and LLM.
+**Next:** Keep the switch and the risk-state file host-local on the Pi, and give
+the CM5 profile a shared store plus an operator-controlled latch before running
+more than one bot process against one account.
 
 ### 5. Execution and fee logic
 
@@ -100,14 +111,20 @@ Kraken/CCXT exchange errors. Live fill confirmation preserves the final order
 record and includes quote/traded-asset fees in entry basis and net sell proceeds
 when they can be converted. Unknown fee assets are preserved and leave journal
 net-PnL fields blank. The configured spread ceiling is checked before detailed
-analysis and again before entry. Ambiguous order submission/fill outcomes
-persistently activate the kill switch instead of being blindly retried.
-Separate maker/taker schedules and exchange-native idempotency keys remain
-absent.
+analysis and again before entry. `src.execution_costs` then estimates the taker
+fee (from the parsed market, or `LIVE_TAKER_FEE_RATE`), the bid/ask spread, and
+`LIVE_SLIPPAGE_RATE`, and `execution_cost_block_reason` rejects an entry whose
+total exceeds `MAX_ENTRY_COST_BPS`; the estimate is journaled in the `est_*`
+columns. A quote that cannot be matched to the reference price contributes no
+spread instead of an invented one. `src.order_submission.submit_market_order`
+sends a deterministic `cl_ord_id` and, after a `ccxt.NetworkError`, looks the
+order up in the open/closed lists instead of resubmitting; an outcome that stays
+unknown latches the kill switch rather than risking a duplicate. Partial fills
+keep `requested_amount_coin` and `partial_fill` in the journal.
 
-**Next:** Account using exchange fill/fee records, preserve partial fills, and
-include spread and fee estimates in pre-trade approval. Add timeout/idempotency
-tests that prove a retry cannot create a duplicate order.
+**Next:** Reconcile journal rows against Kraken fill history automatically, and
+validate the cost budget and idempotency path against the live exchange before
+enabling live trading on either profile.
 
 ### 6. Runtime modes, locking, and reconciliation
 
@@ -227,12 +244,14 @@ independent from cluster services.
 
 ## Prioritized implementation order
 
-1. **P0: Prevent duplicate or unsafe orders.** Add a persistent independent
-   kill switch, startup exchange reconciliation, and one-process/local plus
-   cluster-wide execution ownership.
-2. **P0: Fix live accounting and gates.** Include exchange fees and spread in
-   live approval/journaling; make retries idempotent and preserve partial-fill
-   state.
+1. **P0: Prevent duplicate or unsafe orders.** A persistent independent kill
+   switch, startup exchange reconciliation, one-process/local plus cluster-wide
+   execution ownership, and per-submission `cl_ord_id` idempotency are
+   implemented; the remaining gap is a cluster-wide shared switch.
+2. **P0: Fix live accounting and gates.** Exchange fees and spread are included
+   in live approval and journaling, retries are idempotent, and partial-fill
+   state is preserved; automatic reconciliation of journal rows against Kraken
+   fill history remains.
 3. **P1: Finish inference fallback.** Implement and test Hailo -> CPU -> rules
    selection without importing Hailo dependencies on the Pi path; keep missing
    inputs at HOLD.

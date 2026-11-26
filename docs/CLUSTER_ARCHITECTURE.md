@@ -132,6 +132,14 @@ verified, cluster live execution must stop rather than fall back to local-only
 locks. Validate this behavior against the actual shared database before
 enabling a second execution process.
 
+The durable risk-state file (`TRADING_RISK_STATE_FILE`) and the kill-switch
+marker are host-local files, not cluster services. Each node therefore keeps its
+own daily-loss budget, loss-streak pause, hourly BUY budget and re-entry
+cooldowns, and an uncertain order outcome or an unwritable risk-state file only
+latches that node's marker. A cluster-wide shared switch and a shared risk-state
+store remain open work; until they exist, run exactly one candidate execution
+node per account.
+
 ## Single-Pi boundary
 
 The CM5 cluster is optional. The Raspberry Pi release can run the rules-based
