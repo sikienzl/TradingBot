@@ -5,6 +5,8 @@ a version heading is assigned when a release is prepared.
 
 ## Unreleased
 
+## v1.0.31 - 2026-11-26
+
 ### Added
 
 - `src/scorecard_gate.py`, a fail-closed reader for the weekly scorecard verdict

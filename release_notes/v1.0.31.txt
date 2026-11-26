@@ -1,0 +1,163 @@
+v1.0.31 - Scorecard promotion gating, durable risk state and pre-trade cost budget
+
+Date: 2026-11-26
+
+Summary
+
+This release closes audit points 4 and 5 for the single-node Raspberry Pi profile
+and adds the scorecard promotion gate from audit point 7. It changes no signal,
+no entry rule and no strategy parameter. Live trading now needs a fresh weekly
+`GO` verdict before it may start, the hard risk guardrails survive a restart, and
+every live entry is measured against an explicit fee, spread and slippage budget
+before any paid news or LLM call.
+
+Changes
+
+Scorecard promotion gate (audit point 7)
+- New `src/scorecard_gate.py` (layer 1) reads the verdict markers written by
+  `scripts/run_weekly_scorecard.sh`: the uppercase `key=value` marker in
+  `results/scorecards/latest_status.env` and the lowercase JSON marker that
+  appears when `STATUS_JSON_ENABLED=true`. The JSON marker wins, and a missing,
+  empty, malformed, unreadable, stale, `HOLD`, `NO-GO`, `ERROR` or
+  maintenance-override verdict returns `allowed=False`. No reader ever raises, so
+  a broken marker can never be read as approval. The default maximum age is eight
+  days, one weekly cycle plus slack, because the Pi profile produces one verdict
+  per week.
+- `src.bot_bootstrap` refuses `DRY_RUN=false` during startup validation, before an
+  exchange client or the execution lock exists, and `src.bot_runtime.run_bot`
+  re-checks immediately before entering the trading loop. Configure with
+  `SCORECARD_GATE_ENABLED` (default `true`), `SCORECARD_GATE_MAX_AGE_SECONDS`,
+  `SCORECARD_STATUS_JSON` and `SCORECARD_STATUS_ENV`; a deliberate override logs a
+  warning.
+- `scripts/manage_model_release.py promote` refuses without a fresh `GO` and
+  accepts `--scorecard-status-json`, `--scorecard-status-env`,
+  `--scorecard-max-age-seconds`, `--allow-maintenance-override` and
+  `--no-require-go-verdict`. `rollback` stays ungated on purpose: reverting to a
+  previously validated release must always work, including right after a `NO-GO`.
+- The operational health exporter publishes `trading_scorecard_gate_enabled`,
+  `trading_scorecard_gate_live_enabled`, `trading_scorecard_gate_allowed` and
+  `trading_scorecard_gate_age_seconds`. `DRY_RUN` is read from the deployment
+  `.env` through `TRADING_DEPLOYMENT_ENV_FILE`; only the run mode is read, never a
+  credential.
+- `deploy/trading-alerts.yml` grows from 20 to 22 rules:
+  `TradingLiveModeScorecardGateBlocked` (critical) and
+  `TradingLiveModeWithoutScorecardGate` (warning). A `DRY_RUN=true` profile
+  publishes `live_enabled 0` and can never match either rule.
+
+Durable risk guardrail state (audit point 4)
+- New `src/risk_state.py` (layer 1) stores the daily portfolio-value anchor, the
+  consecutive-loss counter and BUY pause, the hourly BUY budget and the per-coin
+  re-entry timestamps in `TRADING_RISK_STATE_FILE` (default
+  `.trading_risk_state.json`). The file is written through a temporary file plus
+  `fsync` and `os.replace`, with the directory flushed, after every close, BUY and
+  daily anchor, and restored at startup. A missing file starts neutral; an
+  unreadable or invalid file marks the state `unreadable`.
+- New `src/risk_guardrails.py` holds the evaluation that used to be inline: daily
+  loss budget, loss-streak pause, hourly BUY budget (timestamps pruned before the
+  comparison) and `resolve_reentry_cooldown_seconds`, which scales the re-entry
+  cooldown with the ATR regime and falls back to the configured base when ATR is
+  missing or not positive.
+- `can_open_new_positions` checks in order: unreadable state, active BUY pause,
+  daily loss budget, hourly BUY budget. An unreadable state refuses every new
+  entry with an explicit reason instead of guessing, so a restart can no longer
+  reset a pause or a loss limit.
+- Live mode treats an unwritable risk-state file as live execution uncertainty: it
+  latches the persistent kill switch and stops, matching the existing
+  ambiguous-order behaviour. Dry-run mode keeps new entries blocked instead.
+- New `src/kill_switch.py` is shared by the uncertain-order path and the
+  risk-state write path. The `TRADING_KILL_SWITCH_FILE` marker is created with
+  `O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW` and mode `0600`, never through a
+  symlink.
+
+Execution cost budget and idempotent submission (audit point 5)
+- New `src/execution_costs.py` estimates the taker fee (from the parsed market
+  `taker`, falling back to `LIVE_TAKER_FEE_RATE`), the bid/ask spread from the
+  quote that already passed the spread gate, and `LIVE_SLIPPAGE_RATE` (default
+  `0.001`). `execution_cost_block_reason` rejects an entry whose total exceeds
+  `MAX_ENTRY_COST_BPS` (default `120`; a budget below `1` bps disables the gate).
+  The check runs after the spread gate and before any paid news or LLM call, so a
+  rejected candidate never costs an API call. A quote that cannot be matched to
+  the reference price contributes no spread rather than an invented one.
+- New `src/order_submission.py` sends a deterministic Kraken `cl_ord_id` derived
+  from the run id, config hash, iteration, coin and action (64 characters or
+  fewer). On `ccxt.NetworkError` the order is looked up in the open and closed
+  order lists and accounted for instead of being resubmitted; only an outcome that
+  stays unknown latches the kill switch and stops the bot, so a retry can never
+  duplicate an order.
+- `src.execution_service.execute_real_trade` checks the kill switch before any
+  other work, applies the cost budget, and threads the client order id through
+  submission and journaling.
+- The trade journal gained `client_order_id`, `requested_amount_coin`,
+  `partial_fill` and the eight `est_*` cost columns. `init_journal` appends
+  missing columns to an existing file instead of reordering it, so old rows stay
+  valid and a partial fill keeps its requested amount. The analytics database
+  schema is unchanged.
+- New layer-0 `src/env_parsing.py` holds the environment parsers that used to be
+  private in `src/bot_config.py` (`env_bool`, `env_str`, `env_optional_float`,
+  `symbol_int_map`, `symbol_float_map`, `threshold_float_pairs`,
+  `threshold_int_pairs`). `src.bot_config` imports them under the previous private
+  names, so parsing behaviour is unchanged.
+
+Tests
+- New suites: `tests/test_scorecard_gate.py`, `tests/test_risk_state.py`,
+  `tests/test_risk_guardrails.py`, `tests/test_execution_costs.py`,
+  `tests/test_order_submission.py`, `tests/test_kill_switch.py`,
+  `tests/test_env_parsing.py`.
+- Extended: restart, unreadable and unwritable risk-state cases in
+  `tests/test_trading_bot_risk.py`; cost-budget, idempotency, partial-fill and
+  journal cases in `tests/test_execution_service.py` and
+  `tests/test_trade_journal.py`; gate cases in `tests/test_bot_bootstrap.py`,
+  `tests/test_bot_runtime.py` and `tests/test_manage_model_release_gate.py`;
+  gauge-level cases in `tests/test_alert_rules.py`.
+- `tests/conftest.py` redirects `TRADING_RISK_STATE_FILE` into each test's own
+  temporary directory so durable risk state cannot leak between tests.
+- Gate results on this release: `pytest tests/` 1569 passed; the slim CI
+  environment simulation 1543 passed and 2 skipped; ruff clean; mypy 0 errors
+  across 69 source files; deployment config check exit 0.
+
+Documentation
+- `docs/ARCHITECTURE_AUDIT.md` marks audit points 4 and 5 as implemented for the
+  single-node Raspberry Pi profile; the cluster column stays partial because the
+  risk-state file and the stop marker are host-local.
+- `docs/CONFIGURATION.md` documents `SCORECARD_GATE_*`, `MAX_ENTRY_COST_BPS`,
+  `LIVE_TAKER_FEE_RATE`, `LIVE_SLIPPAGE_RATE` and `TRADING_RISK_STATE_FILE`, plus
+  the `cl_ord_id` derivation.
+- `.env.example` and `.env.live.example` carry the new keys; `SERVER_README.md`
+  describes the risk-state file and its container path
+  `/data/.trading_risk_state.json`; `docs/CLUSTER_ARCHITECTURE.md` states that
+  exactly one candidate execution node per account may run until a shared store
+  exists.
+- `.gitignore` excludes `.trading_risk_state.json`.
+
+Notes
+- Release profiles: both are built, but this release changes the single-node
+  Raspberry Pi profile. The Pi stays autonomous - no Hailo-8, no second node, no
+  K3s, no PostgreSQL, no tunnel - and every new control is either default-on with
+  a documented override or default-neutral. The CM5 cluster profile is unchanged
+  in behaviour; its risk-state file and stop marker remain host-local, which is
+  why the audit table keeps that column partial.
+- Behaviour change to expect: with `SCORECARD_GATE_ENABLED=true` (the default), a
+  deployment that sets `DRY_RUN=false` without a fresh `GO` marker now refuses to
+  start instead of trading. Dry-run and paper deployments are unaffected.
+- Operational changes for an existing install: extract this package, add the new
+  keys to the deployment `.env` only if the defaults are wrong for you, and re-run
+  `scripts/install_monitoring_pi.sh` to re-copy the alert rules. Then
+  `systemctl daemon-reload`. Nothing in this release requires touching a running
+  container or a cluster service.
+- New files on disk: `TRADING_RISK_STATE_FILE` (default
+  `.trading_risk_state.json`, git-ignored) and the shared kill-switch marker. Both
+  are host-local and mode `0600`.
+- Migration and rollback: the journal gains columns by append, so an existing
+  `trade_journal.csv` stays byte-identical in its old columns and is migrated on
+  first open. The risk-state file is versioned (`RISK_STATE_VERSION = 1`); an
+  unknown version is treated as invalid and blocks entries rather than being
+  guessed. Reverting this release leaves the risk-state file and the `est_*`
+  columns inert; the scorecard gate simply stops refusing startup.
+- Verification: `sha256sum -c trading-bot-pi-v1.0.31.tar.gz.sha256`, then confirm
+  that the Pi archive contains the seven new modules: `risk_state`,
+  `risk_guardrails`, `execution_costs`, `order_submission`, `kill_switch`,
+  `scorecard_gate` and `env_parsing`.
+- Still open, deliberately not in this release: a cluster-wide shared kill switch
+  and distributed risk-state store, automatic journal-to-fill reconciliation
+  against Kraken history, a durable historical news-item store, cluster scorecard
+  automation, and the x86 training/compilation worker.
