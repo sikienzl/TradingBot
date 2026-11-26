@@ -31,6 +31,13 @@ from src.fill_reconciliation_report import (
     marker_int,
     read_report_marker,
 )
+from src.jsonl_retention import (
+    read_report_marker as read_retention_marker,
+)
+from src.jsonl_retention import (
+    report_int,
+    resolve_report_path,
+)
 from src.pnl_prometheus_format import escape_label_value
 from src.scorecard_gate import ScorecardGateSettings, scorecard_gate_settings
 from src.task_status import (
@@ -208,6 +215,54 @@ def _fill_reconciliation_lines(
     return lines
 
 
+def _jsonl_retention_lines(report_file: Path | None) -> list[str]:
+    """Size gauges for the append-only JSONL stores, from the retention marker.
+
+    The news store and the verdict history grow with every fetch and every
+    scorecard run, and ``src.jsonl_retention.py`` refuses a store above
+    ``MAX_STORE_BYTES`` rather than holding it in RAM. The byte gauge is the one
+    that shows the failure mode: a store that keeps growing past the guard is
+    no longer pruned at all. The marker is the single source of truth, so the
+    exporter stays read-only and never counts a multi-megabyte file itself.
+    """
+    values = read_retention_marker(str(report_file)) if report_file else None
+    if values is None:
+        return []
+    lines: list[str] = []
+    for store in ("news", "verdict"):
+        path = str(values.get(f"{store}_path", "")).strip()
+        if not path:
+            continue
+        label = f'{{store="{escape_label_value(store)}"}}'
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        lines.extend([
+            ("# HELP trading_jsonl_store_bytes Size of the append-only JSONL "
+             "store as seen by the last retention pass."),
+            "# TYPE trading_jsonl_store_bytes gauge",
+            f"trading_jsonl_store_bytes{label} {size}",
+        ])
+        records = report_int(values, f"{store}_records")
+        if records is not None:
+            lines.extend([
+                ("# HELP trading_jsonl_store_records Records left in the "
+                 "append-only JSONL store by the last retention pass."),
+                "# TYPE trading_jsonl_store_records gauge",
+                f"trading_jsonl_store_records{label} {records}",
+            ])
+        pruned = report_int(values, f"{store}_pruned")
+        if pruned is not None:
+            lines.extend([
+                ("# HELP trading_jsonl_store_pruned Records removed from the "
+                 "append-only JSONL store by the last retention pass."),
+                "# TYPE trading_jsonl_store_pruned gauge",
+                f"trading_jsonl_store_pruned{label} {pruned}",
+            ])
+    return lines
+
+
 def _disk_lines(disk_paths: Sequence[str]) -> list[str]:
     """Capacity gauges for the filesystems the bot writes to.
 
@@ -316,6 +371,7 @@ def render_metrics(
     scorecard_gate: ScorecardGateSettings | None = None,
     deployment_env_file: Path | None = None,
     fill_report_file: Path | None = None,
+    retention_report_file: Path | None = None,
 ) -> str:
     now = now or datetime.now(UTC)
     kill_switch_active = int(os.path.lexists(kill_switch_file))
@@ -395,6 +451,7 @@ def render_metrics(
         lines.extend(
             _fill_reconciliation_lines(fill_report_file, env_file, live_enabled, now)
         )
+    lines.extend(_jsonl_retention_lines(retention_report_file))
     return "\n".join(lines) + "\n"
 
 
@@ -427,6 +484,9 @@ def main() -> int:
     # The reconciliation marker path is the same one the reconciliation unit and
     # the bot write; unset means "this host publishes no reconciliation report".
     fill_report = os.getenv("TRADING_FILL_RECONCILIATION_REPORT", "").strip()
+    # Same resolution the retention unit writes with, including the default
+    # path, so the exporter needs no extra configuration on a standard host.
+    retention_report = resolve_report_path()
     body = render_metrics(
         Path(os.getenv("TRADING_KILL_SWITCH_FILE", ".trading_kill_switch")),
         os.getenv("HAILO_HEALTH_URL", ""),
@@ -443,6 +503,7 @@ def main() -> int:
         deployment_env_file=Path(
             os.getenv("TRADING_DEPLOYMENT_ENV_FILE", ENV_PATH)),
         fill_report_file=Path(fill_report) if fill_report else None,
+        retention_report_file=Path(retention_report) if retention_report else None,
     )
     output = Path(os.getenv(
         "TRADING_HEALTH_METRICS_FILE",

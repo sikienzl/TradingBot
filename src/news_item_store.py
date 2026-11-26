@@ -12,8 +12,11 @@ Contract:
 * One JSON object per line, ``sort_keys=True``, UTF-8, never rewritten.
 * ``record_id`` is the stable identity of the item (link, else content hash),
   so re-running the hourly fetch is idempotent.
-* Records are only appended. Retention/rotation stays an operator task, like
-  the trade journal.
+* Records are only appended by this module. Nothing here ever removes a
+  record, so appending never depends on the retention policy. Pruning the
+  store to an age horizon and a record floor is :mod:`src.jsonl_retention`,
+  run by ``scripts/prune_jsonl_stores.py``; its floor keeps the dedupe window
+  intact, so a pruned store still rejects a re-fetched headline.
 * A line that cannot be parsed is skipped by every reader, so a torn write
   from a killed process cannot make the store unreadable.
 """

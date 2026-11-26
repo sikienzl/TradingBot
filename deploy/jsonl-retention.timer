@@ -1,0 +1,15 @@
+[Unit]
+Description=Trading Bot – JSONL store retention timer (daily)
+
+[Timer]
+# Early morning, away from the 21:00 dry-run review and the weekly scorecard,
+# so the rewrite happens while the news fetcher is idle between hourly runs.
+# Persistent=true catches up after downtime, which is what keeps a Pi that was
+# switched off for a week from growing the stores unbounded.
+OnCalendar=*-*-* 03:30:00
+AccuracySec=60s
+Persistent=true
+Unit=jsonl-retention.service
+
+[Install]
+WantedBy=timers.target

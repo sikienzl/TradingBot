@@ -51,6 +51,9 @@ The history is the last evidence fallback for the live gate, the tuning chain
 and the health exporter when both markers are missing, and it is the source the
 tuning cycle's recent-`NO-GO` guard reads. Read it with
 `python -m scripts.scorecard_verdict_history show --limit 5` or `... stats`.
+The file stays append-only for every writer, and `jsonl-retention.timer` bounds
+it to an age horizon plus a record floor above that reader window - see
+"JSONL store retention" below.
 
 `latest_status.json` fields (when enabled):
 - `timestamp_utc`
@@ -273,9 +276,10 @@ Scheduled-task, capacity, and analytics gauges come from the same timer:
   `trading_task_last_run_age_seconds{task="..."}`. Only listed tasks are
   published, so a profile that does not run a timer exports nothing for it.
   The Pi unit lists `daily_review`, `scorecard`
-  (`results/scorecards/latest_status.env`) and `weekly_tuning`
-  (`results/tuning/latest_status.env`): both weekly wrappers write a marker on
-  every attempt, including a crash before their main step, so a stopped timer is
+  (`results/scorecards/latest_status.env`), `weekly_tuning`
+  (`results/tuning/latest_status.env`) and `jsonl_retention`
+  (`results/jsonl_retention/latest_status.env`): each wrapper writes a marker on
+  every attempt, including a crash before its main step, so a stopped timer is
   visible as a stale or failed task instead of as silence.
 - `TRADING_DISK_PATHS` (comma-separated) exports `trading_disk_total_bytes`,
   `trading_disk_free_bytes`, and `trading_disk_used_percent` per path using
@@ -313,6 +317,16 @@ Scheduled-task, capacity, and analytics gauges come from the same timer:
   and never calls the exchange. `TRADING_FILL_RECONCILIATION_REPORT` selects the
   marker; a host that does not run reconciliation publishes only `enabled 0` and
   `present 0`.
+- JSONL store retention (`src.jsonl_retention`) exports
+  `trading_jsonl_store_bytes{store="news"|"verdict"}` from the size of each
+  append-only store on disk, plus `trading_jsonl_store_records` and
+  `trading_jsonl_store_pruned` for the last prune pass. The values come from the
+  `results/jsonl_retention/latest_status.env` marker that
+  `scripts/prune_jsonl_stores.py` writes, so the exporter never opens a store,
+  never takes its lock and never rewrites anything. A store that retention does
+  not manage (disabled policy, or a marker without that store) publishes nothing
+  rather than a false zero, and `TRADING_JSONL_RETENTION_REPORT` selects the
+  marker path for both the pruner and the exporter.
 
 The health unit uses `/etc/trading-health.env`, not the bot's
 credential-bearing `.env`; copy `deploy/trading-health.env.example` there.
@@ -345,7 +359,13 @@ match the exchange (`TradingFillReconciliationMismatch`, critical), a
 reconciliation pass that verified nothing
 (`TradingFillReconciliationIncomplete`), an overdue reconciliation marker
 (`TradingFillReconciliationStale`) and a reconciliation marker that never
-appeared (`TradingFillReconciliationMarkerMissing`). `tests/test_alert_rules.py`
+appeared (`TradingFillReconciliationMarkerMissing`), an append-only JSONL store
+that keeps growing past 16 MiB for a day
+(`TradingJsonlStoreGrowing`, warning) and one that passed the 256 MiB retention
+size guard (`TradingJsonlStoreOverRetentionGuard`, critical - the pruner refuses
+a store that large, so it needs an operator). A missing or overdue retention
+marker is reported by the generic `TradingScheduledTask*` rules through the
+`jsonl_retention` task. `tests/test_alert_rules.py`
 fails when one of those rules references a metric the exporter does not emit.
 The installer
 also configures local Alertmanager and a loopback-only relay. Before installing
@@ -364,3 +384,46 @@ cat /opt/trading_2/results/scorecards/textfile/trading_health.prom
 promtool check rules /etc/prometheus/rules/trading-alerts.yml
 amtool check-config /etc/alertmanager/alertmanager.yml
 ```
+
+## JSONL store retention
+
+Both append-only JSONL stores grow on every run and are never rewritten by their
+writers, so `src/jsonl_retention.py` owns the policy and
+`scripts/prune_jsonl_stores.py` applies it once a day from
+`jsonl-retention.timer` (`03:30`, `Persistent=true` so a missed pass runs at the
+next boot). The Pi installer enables that timer; the cluster profile has no
+retention unit and stays an operator decision, because the store lock is a
+host-local `flock` and only one node per store may prune it.
+
+For each store the pruner takes the same exclusive lock the appender uses, keeps
+the file inode (truncate and write, never a rename, so a concurrent appender
+cannot lose a record), copies the previous content to `<store>.bak-<UTC stamp>`
+first, and then drops only records that are older than the age horizon **and**
+beyond the record floor. The two limits are independent and `0` turns one off.
+A record with no usable timestamp is always kept, malformed lines are dropped, a
+missing store is reported and not created, and a store larger than 256 MiB is
+refused rather than rewritten. The default floors (news 8192 records, verdict 512
+records) stay above the dedupe/read window of each store, so pruning never lets a
+re-fetched headline through and never removes the evidence the tuning cycle reads.
+
+```sh
+# inspect what a pass would do, without touching either store
+python -m scripts.prune_jsonl_stores --dry-run
+# prune now and print the counts
+python -m scripts.prune_jsonl_stores
+systemctl start jsonl-retention.service
+systemctl status jsonl-retention.timer
+```
+
+Exit codes: `0` pruned or unchanged, `1` a store could not be pruned, `2`
+retention is disabled. The unit accepts all three as a clean unit exit; the
+marker and the alerts carry the distinction. Read the last pass with
+`cat /opt/trading_2/results/jsonl_retention/latest_status.env` - it holds the
+`exit_code`/`started_unixtime`/`finished_unixtime` scheduled-task contract plus
+the per-store `news_*`/`verdict_*` counts, and the health exporter lists it as the
+`jsonl_retention` task.
+
+Rollback is configuration only: `TRADING_JSONL_RETENTION_ENABLED=0` in the
+deployment `.env` stops every rewrite, and the last `<store>.bak-<stamp>` copy
+restores a store byte for byte. Nothing in the bot, the scorecard or the
+dashboard depends on retention being enabled.

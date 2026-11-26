@@ -49,7 +49,7 @@ environment overrides before starting the bot.
 | `UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN` | `ONDO:0.445` | Coin-specific CatBoost sell-probability override for uptrend entry gating |
 | `UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN` | `TRX:-0.13,ONDO:-0.055` | Coin-specific probability-edge override for uptrend entry gating |
 | `TABULAR_RESEARCH_SIGNAL_PATH` | `./data/research_signal_latest.json` | Latest AutoResearch JSON used as model input features |
-| `RESEARCH_NEWS_STORE_PATH` | `./data/research_news_items.jsonl` | Append-only per-item news store written by `scripts/fetch_research_signal.py` (`none` disables it). The bot reads it back through `integration.news_store_path` in the signal file, so no bot restart is needed to change it |
+| `RESEARCH_NEWS_STORE_PATH` | `./data/research_news_items.jsonl` | Append-only per-item news store written by `scripts/fetch_research_signal.py` (`none` disables it). The bot reads it back through `integration.news_store_path` in the signal file, so no bot restart is needed to change it. `jsonl-retention.timer` bounds it - see [JSONL store retention](#jsonl-store-retention) |
 | `AUTO_TUNE_TABULAR_CONFIDENCE` | `false` | Auto-adjust CatBoost threshold |
 | `USE_ML_MODEL` | `false` | Enable LLM signal (GPU recommended) |
 
@@ -217,7 +217,7 @@ byte cap) and fails closed to "no evidence" instead of raising.
 
 | Variable | Default | Description |
 |---|---|---|
-| `SCORECARD_VERDICT_HISTORY_FILE` | `results/scorecards/verdict_history.jsonl` | Append-only verdict history. A relative path is resolved against the deployment root; `off`, `none`, `false`, `no` or `disabled` turns it off |
+| `SCORECARD_VERDICT_HISTORY_FILE` | `results/scorecards/verdict_history.jsonl` | Append-only verdict history. A relative path is resolved against the deployment root; `off`, `none`, `false`, `no` or `disabled` turns it off. `jsonl-retention.timer` bounds it - see [JSONL store retention](#jsonl-store-retention) |
 
 ```bash
 # Newest verdicts, oldest first
@@ -257,6 +257,56 @@ the apply, anything else a failed step. `deploy/tuning-cycle.service` accepts
 `0` and `3` as clean unit exits and records the code in the task marker, which
 is what `TradingScheduledTaskFailed` and the new `TradingTuningCycleApplyBlocked`
 alert read. See [Monitoring](MONITORING.md).
+
+## JSONL store retention
+
+The two append-only JSONL stores - the per-item news store and the verdict
+history - are never rewritten by their writers, so both grow on every run.
+`src.jsonl_retention` holds the policy and `scripts/prune_jsonl_stores.py`
+applies it from `jsonl-retention.timer` (daily `03:30`, `Persistent=true`). No
+store module imports the retention code: appending can never depend on it, and
+the pruner is the only mutator.
+
+A pass takes the store's own exclusive `flock`, keeps the file inode (truncate and
+write rather than a rename, so a concurrent appender cannot lose a record), copies
+the previous content to `<store>.bak-<UTC stamp>` and only then drops records that
+are older than the age horizon **and** beyond the record floor. The two limits are
+independent and `0` disables one of them. Records with no usable timestamp are
+kept, malformed lines are dropped, a missing store is reported and not created, a
+store larger than 256 MiB is refused, and a store whose content does not change is
+left untouched. The default floors stay above each store's dedupe/read window, so
+pruning never admits a re-fetched headline and never removes the evidence the
+tuning cycle reads.
+
+| Variable | Default | Description |
+|---|---|---|
+| `TRADING_JSONL_RETENTION_ENABLED` | `1` | Master switch for the pruner. `0`/`off`/`false`/`no`/`disabled` makes the command exit `2` and rewrite nothing - the rollback |
+| `TRADING_JSONL_RETENTION_REPORT` | `results/jsonl_retention/latest_status.env` | Scheduled-task marker for the last pass. `off`/`none`/`false`/`no`/`disabled` skips it; `--no-report` does the same for one run |
+| `TRADING_JSONL_RETENTION_BACKUPS` | `1` | Rotated `<store>.bak-<UTC stamp>` copies kept before a rewrite. `0` prunes without a backup |
+| `TRADING_JSONL_RETENTION_NEWS_DAYS` | `180` | News store age horizon on `fetched_at`/`stored_at`. `0` disables the age limit |
+| `TRADING_JSONL_RETENTION_NEWS_RECORDS` | `8192` | Newest news records always kept; must stay above the store dedupe window (4096) |
+| `TRADING_JSONL_RETENTION_VERDICT_DAYS` | `730` | Verdict history age horizon on `timestamp_utc`. `0` disables the age limit |
+| `TRADING_JSONL_RETENTION_VERDICT_RECORDS` | `512` | Newest verdict records always kept; must stay above the reader window (256) |
+
+The store paths are not duplicated here: the pruner resolves them through
+`RESEARCH_NEWS_STORE_PATH` and `SCORECARD_VERDICT_HISTORY_FILE`, and
+`--news-store`/`--verdict-store` override them for one run. A malformed or
+negative number falls back to the default rather than disabling a limit.
+
+```bash
+# what would a pass remove, without touching either store
+.venv/bin/python -m scripts.prune_jsonl_stores --dry-run
+# prune now
+.venv/bin/python -m scripts.prune_jsonl_stores
+```
+
+Exit codes: `0` pruned or unchanged, `1` a store could not be pruned, `2`
+retention is disabled. The systemd unit accepts all three so the marker, not the
+unit state, carries the outcome. Retention is additive: `TRADING_JSONL_RETENTION_ENABLED=0`
+restores the previous behaviour and the last `.bak-` copy restores a store byte for
+byte. The single-node Raspberry Pi profile installs and enables the timer; the CM5
+cluster profile has no retention unit, and because the lock is a host-local
+`flock` only one node per store may run the pruner.
 
 ## Fill reconciliation against the exchange
 
@@ -319,6 +369,7 @@ settings above.
 | `TRADING_HEALTH_METRICS_FILE` | `results/scorecards/textfile/trading_health.prom` | Textfile-collector fragment written atomically |
 | `TRADING_DEPLOYMENT_ENV_FILE` | `/opt/trading_2/.env` | Deployment `.env` whose `DRY_RUN` drives `trading_scorecard_gate_live_enabled`; only the run mode is read |
 | `TRADING_FILL_RECONCILIATION_REPORT` | unset | Reconciliation marker to export as presence/complete/mismatch/age gauges; unset means this host publishes none |
+| `TRADING_JSONL_RETENTION_REPORT` | `results/jsonl_retention/latest_status.env` | Retention marker to export as `trading_jsonl_store_bytes`/`_records`/`_pruned`; the same variable the pruner writes, and the exporter only reads it |
 
 Each staleness probe reads only a bounded tail of its file and reports
 `*_present 0` with no age when the source is missing or unreadable, so a probe

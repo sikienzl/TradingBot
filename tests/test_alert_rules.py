@@ -58,6 +58,7 @@ def render(tmp_path: Path, gate_env: dict[str, str], *, dry_run: bool) -> str:
         scorecard_gate=scorecard_gate_settings(gate_env),
         deployment_env_file=write_deployment_env(tmp_path, dry_run=dry_run),
         fill_report_file=write_fill_marker(tmp_path),
+        retention_report_file=write_retention_marker(tmp_path),
     )
 
 
@@ -73,6 +74,39 @@ def write_fill_marker(tmp_path: Path, *, age: timedelta = timedelta(minutes=10))
         "EXCHANGE_ERRORS=0\nJOURNAL_QUANTITY_BASE=1.00000000\n"
         "EXCHANGE_QUANTITY_BASE=1.00000000\nJOURNAL_FEE_BASE=2.00000000\n"
         "EXCHANGE_FEE_BASE=2.00000000\n",
+        encoding="utf-8",
+    )
+    return marker
+
+
+def write_retention_marker(
+    tmp_path: Path, *, age: timedelta = timedelta(hours=9)
+) -> Path:
+    """Retention run summary as ``scripts/prune_jsonl_stores.py`` writes it.
+
+    The store paths point at real files in ``tmp_path`` because the exporter
+    reports the current size of each store, not a size from the marker. The
+    ``news_bytes``/``verdict_bytes`` counters in the marker deliberately say 20
+    while the files are 19 bytes, so a test can tell the two apart.
+    """
+    stamp = datetime(2026, 11, 25, 12, 0, tzinfo=UTC) - age
+    news_store = tmp_path / "research_news_items.jsonl"
+    news_store.write_text('{"record_id":"n1"}\n', encoding="utf-8")
+    verdict_store = tmp_path / "verdict_history.jsonl"
+    verdict_store.write_text('{"record_id":"v1"}\n', encoding="utf-8")
+    marker = tmp_path / "retention.env"
+    marker.write_text(
+        "schema_version=1\nstatus=complete\nreason=ok\nexit_code=0\n"
+        f"started_unixtime={int(stamp.timestamp())}\n"
+        f"finished_unixtime={int(stamp.timestamp())}\nbackups_kept=1\n"
+        f"news_enabled=1\nnews_path={news_store}\nnews_days=180\n"
+        "news_min_records=8192\nnews_scanned=1\nnews_pruned=0\nnews_kept=1\n"
+        "news_undated=0\nnews_malformed=0\nnews_records=1\nnews_bytes=20\n"
+        "news_error=\n"
+        f"verdict_enabled=1\nverdict_path={verdict_store}\nverdict_days=730\n"
+        "verdict_min_records=512\nverdict_scanned=1\nverdict_pruned=0\n"
+        "verdict_kept=1\nverdict_undated=0\nverdict_malformed=0\n"
+        "verdict_records=1\nverdict_bytes=20\nverdict_error=\n",
         encoding="utf-8",
     )
     return marker
@@ -162,6 +196,8 @@ NEW_ALERTS = {
         "trading_fill_reconciliation_enabled == 1 "
         "and trading_fill_reconciliation_present == 0"
     ),
+    "TradingJsonlStoreOverRetentionGuard": "trading_jsonl_store_bytes > 268435456",
+    "TradingJsonlStoreGrowing": "trading_jsonl_store_bytes > 16777216",
 }
 
 
@@ -297,6 +333,33 @@ def test_missing_fill_marker_only_publishes_presence(tmp_path) -> None:
     values = fill_render(tmp_path, tmp_path / "absent.env", dry_run=False)
     assert values["trading_fill_reconciliation_present"] == 0
     assert "trading_fill_reconciliation_age_seconds" not in values
+
+
+def test_jsonl_store_gauges_report_current_store_sizes(tmp_path) -> None:
+    """The size gauges come from the real files, not from the marker counters."""
+    body = render(
+        tmp_path,
+        {"SCORECARD_STATUS_JSON": str(tmp_path / "absent.json")},
+        dry_run=False,
+    )
+    values = gauge_values(body)
+    assert values['trading_jsonl_store_bytes{store="news"}'] == 19
+    assert values['trading_jsonl_store_bytes{store="verdict"}'] == 19
+    assert values['trading_jsonl_store_records{store="news"}'] == 1
+    assert values['trading_jsonl_store_pruned{store="verdict"}'] == 0
+
+
+def test_jsonl_store_gauges_are_absent_without_a_retention_marker(tmp_path) -> None:
+    """A profile that never runs retention publishes no store gauge at all."""
+    body = render_metrics(
+        tmp_path / "STOP", "", tmp_path / "signal.json", tmp_path / "journal.csv",
+        tmp_path / "bot.log",
+        now=datetime(2026, 11, 25, 12, 0, tzinfo=UTC),
+        scorecard_gate=scorecard_gate_settings(gate_env(tmp_path, None)),
+        deployment_env_file=write_deployment_env(tmp_path, dry_run=True),
+        retention_report_file=tmp_path / "absent.env",
+    )
+    assert "trading_jsonl_store_bytes" not in body
 
 
 def test_alert_rules_stay_parsable_and_unique() -> None:

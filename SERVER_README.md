@@ -829,6 +829,40 @@ cat results/tuning/latest_status.env
 .venv/bin/python -m scripts.scorecard_verdict_history show --limit 5
 ```
 
+## 4c. JSONL Store Retention
+
+The per-item news store (`data/research_news_items.jsonl`) and the verdict history
+(`results/scorecards/verdict_history.jsonl`) are append-only and never rewritten by
+their writers, so both grow on every run. `scripts/prune_jsonl_stores.py`
+(`src/jsonl_retention.py`) bounds them and `install_pi.sh` enables
+`jsonl-retention.timer` for it (daily 03:30, `Persistent=true`). A pass takes the
+store's own exclusive lock, keeps the file inode so a concurrent writer cannot lose
+a record, saves a rotating `<store>.bak-<UTC stamp>` copy, and drops only records
+older than the age horizon **and** beyond the record floor. Records without a usable
+timestamp are kept, a missing store is not created, and a store above 256 MiB is
+refused. The default floors stay above each store's dedupe/read window, so pruning
+never admits a re-fetched headline and never removes the tuning evidence chain.
+
+Systemd units:
+- `jsonl-retention.service` (accepts exit `0` pruned/unchanged, `1` a store could
+  not be pruned, `2` retention disabled)
+- `jsonl-retention.timer` (daily 03:30, catches up a missed pass at the next boot)
+
+Useful commands:
+
+```sh
+.venv/bin/python -m scripts.prune_jsonl_stores --dry-run
+sudo systemctl start jsonl-retention.service
+sudo systemctl status jsonl-retention.timer
+cat results/jsonl_retention/latest_status.env
+```
+
+The last pass is exported as the `jsonl_retention` scheduled-task gauges plus
+`trading_jsonl_store_bytes`/`_records`/`_pruned`, and the store-size alerts read
+those. Rollback is configuration only: `TRADING_JSONL_RETENTION_ENABLED=0` stops
+every rewrite and the newest `.bak-` copy restores a store byte for byte. See
+[JSONL store retention](docs/CONFIGURATION.md#jsonl-store-retention).
+
 ## 5. Updating From New Package
 Before replacing code, keep a backup of:
 - .env
@@ -1064,7 +1098,7 @@ two-node CM5 cluster are deployed differently:
 - `trading-bot-pi-<version>.tar.gz` - single Raspberry Pi: runtime scripts,
   the `docs/` guides, `requirements-pi.txt`, systemd units (including the
   weekly scorecard, research-signal, auto-tuning, daily dry-run review,
-  operational-health and alert-relay units), the Prometheus/Alertmanager and
+  JSONL store retention, operational-health and alert-relay units), the Prometheus/Alertmanager and
   Grafana config files the monitoring installer copies (including
   `deploy/alertmanager.yml` and the `deploy/*.env.example` templates), the
   analytics PostgreSQL backup wrappers and their service/timer units

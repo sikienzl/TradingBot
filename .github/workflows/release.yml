@@ -82,6 +82,7 @@ jobs:
              scripts/fetch_research_signal.py \
              scripts/export_operational_health.py \
              scripts/reconcile_fills.py \
+             scripts/prune_jsonl_stores.py \
              scripts/alert_webhook_relay.py \
              scripts/daily_dryrun_review.py \
              scripts/run_daily_dryrun_review.sh \
@@ -106,6 +107,8 @@ jobs:
              deploy/trading-operational-health.timer \
              deploy/fill-reconciliation.service \
              deploy/fill-reconciliation.timer \
+             deploy/jsonl-retention.service \
+             deploy/jsonl-retention.timer \
              deploy/trading-health.env.example \
              deploy/trading-alert-relay.service \
              deploy/trading-alert-relay.env.example \
@@ -166,6 +169,10 @@ jobs:
             "${PKG}/deploy/trading-operational-health.timer"
             "${PKG}/deploy/fill-reconciliation.service"
             "${PKG}/deploy/fill-reconciliation.timer"
+            "${PKG}/deploy/jsonl-retention.service"
+            "${PKG}/deploy/jsonl-retention.timer"
+            "${PKG}/scripts/prune_jsonl_stores.py"
+            "${PKG}/src/jsonl_retention.py"
             "${PKG}/scripts/reconcile_fills.py"
             "${PKG}/src/fill_reconciliation.py"
             "${PKG}/deploy/trading-health.env.example"

@@ -13,7 +13,7 @@ stays **[⚠️ Partial]**.
 |---|---|---|---|
 | 1 | Data basis and model lifecycle | **[⚠️ Partial]** Paired contract/checksum manifest and atomic activation/rollback are implemented; candidate training and DFC compilation remain separate operator steps. | **[⚠️ Partial]** Same paired release tooling; DFC and target-device validation remain external, and no x86 worker is deployed. |
 | 2 | Decision pyramid and hardware fallback | **[✅ Implemented]** Volume, spread, and ATR gates run before any model or paid call, and the paid news veto runs after the pre-trade cost budget; the order is asserted end to end. Backend selection sits behind `src.inference_backend` with injected backends, and a dedicated CI job runs the Hailo→CPU→rules-only matrix with no Hailo package, device or model files installed. | **[⚠️ Partial]** Same cascade and gates; target-cluster service/device availability is not continuously exercised by CI, and a cluster fallback is only visible in the bot log. |
-| 3 | News integration | **[✅ Implemented]** RSS items retain `published_at`/`fetched_at`, are deduplicated, and are additionally appended to an immutable per-item JSONL store (`src/news_item_store.py`) with a point-in-time replay helper; the opt-in structured final veto reads that store and fails closed when it has no fresh item. | **[⚠️ Partial]** Same code is available, but the inspected cluster has no configured paid provider/credentials and no store retention policy; Hailo features do not consume news. |
+| 3 | News integration | **[✅ Implemented]** RSS items retain `published_at`/`fetched_at`, are deduplicated, and are additionally appended to an immutable per-item JSONL store (`src/news_item_store.py`) with a point-in-time replay helper; the opt-in structured final veto reads that store and fails closed when it has no fresh item. The store is bounded by the shared retention policy (`src/jsonl_retention.py`, `deploy/jsonl-retention.timer`). | **[⚠️ Partial]** Same code is available, but the inspected cluster has no configured paid provider/credentials and no retention unit installed; Hailo features do not consume news. |
 | 4 | Hard risk and kill switch | **[✅ Implemented]** The daily anchor, loss-streak pause, hourly BUY budget and re-entry cooldowns are persisted in `TRADING_RISK_STATE_FILE` and restored at startup; unreadable or unwritable risk state blocks new entries and latches the persistent kill switch in live mode. | **[⚠️ Partial]** Same persisted state per node, but the file and the stop marker are host-local; no cluster-wide shared switch or distributed state store is implemented. |
 | 5 | Execution and costs | **[✅ Implemented]** Exchange fill/fee records, a pre-trade taker-fee + spread + slippage cost budget (`MAX_ENTRY_COST_BPS`), and a Kraken `cl_ord_id` per submission are in place; a submission timeout is reconciled instead of resubmitted and an unknown outcome latches the stop marker. Partial fills keep their requested amount in the journal, and `src.fill_reconciliation` now compares every journalled live order against the Kraken order history automatically (bot startup plus an hourly timer) and reports unmatched orders and quantity/fee differences. | **[⚠️ Partial]** Same controls and the same reconciliation code, but live exchange use remains unvalidated on the cluster. |
 | 6 | Single-Pi vs cluster operations | **[⚠️ Partial]** Local process lock, persisted live snapshot, startup balance comparison, open-order refusal, uncertain-order latch, and automatic journal-to-exchange fill reconciliation with alerting exist; deriving a trusted position snapshot from Kraken fills still needs operator review. | **[⚠️ Partial]** Optional account-scoped PostgreSQL advisory lease supplements local locks; shared PostgreSQL config and cluster deployment are operator prerequisites, the reconciliation marker is host-local, and fill-to-position reconstruction remains manual. |
@@ -103,8 +103,12 @@ instead of the aggregate file and fails closed if that store has no fresh item.
 A store failure never fails the research signal itself.
 
 **Next:** Validate the selected provider's structured-output support and pricing
-in staging before enabling the paid veto, and agree a retention/rotation policy
-for the per-item store on both profiles.
+in staging before enabling the paid veto. The per-item store is no longer an
+operator growth risk: `src/jsonl_retention.py` rewrites it under the store's own
+exclusive lock to an age horizon plus a record floor that keeps the dedupe window
+intact, keeps a rotating backup, and publishes a `src.task_status` marker; the Pi
+profile installs it as `jsonl-retention.timer`. The inspected cluster has no such
+unit, and only one writer per store may prune it.
 
 ### 4. Hard risk and kill switch
 
@@ -256,8 +260,10 @@ wrapper marker.
 **Next:** Run the weekly scorecard on the cluster profile itself (the inspected
 `.74`/`.75` topology has no scorecard unit) so the gate has local evidence there,
 and keep the Hailo shadow runbook aligned with the promotion gate. Verdict
-history retention is an operator step on both profiles: the file is append-only
-and grows once per run.
+history retention is now repository code rather than an operator step:
+`src/jsonl_retention.py` prunes the append-only history to an age horizon and a
+record floor above the reader window, and the Pi profile runs it from
+`jsonl-retention.timer`; the inspected cluster has no retention unit installed.
 
 ### 8. Monitoring and alerting
 
@@ -310,6 +316,25 @@ deliberate - the task marker and the tuning cycle summary distinguish the cause.
 contents, including the missing-interpreter case that previously exited `127`
 with no marker at all.
 
+Both append-only JSONL stores (`data/research_news_items.jsonl` and
+`results/scorecards/verdict_history.jsonl`) grow on every run and had no bound, so
+`src/jsonl_retention.py` now owns the policy and `scripts/prune_jsonl_stores.py`
+applies it: each store is rewritten in place under its own exclusive `flock`,
+reusing the file inode so a concurrent appender cannot lose a record, keeping a
+rotating `<store>.bak-<UTC stamp>` first, and keeping every record that has no
+usable timestamp. The age horizon and the record floor are independent, `0` turns
+either off, and the default floors stay above each store's dedupe window so a
+pruned store still rejects a re-fetched headline and the tuning cycle still reads
+its evidence chain. The command publishes a `src.task_status` marker at
+`results/jsonl_retention/latest_status.env`, which the Pi health unit lists as the
+`jsonl_retention` task, and the exporter publishes
+`trading_jsonl_store_bytes`/`_records`/`_pruned` from that marker; the matching
+`TradingJsonlStoreGrowing` and `TradingJsonlStoreOverRetentionGuard` rules make an
+unbounded store alertable instead of a slow disk exhaustion. Retention is enabled
+by default and `TRADING_JSONL_RETENTION_ENABLED=0` is the rollback; the inspected
+cluster has no retention unit installed, and because the lock is host-local only
+one node per store may run the pruner.
+
 Observed packaging defect (v1.0.28, fixed in v1.0.29): the Pi release archive did
 not stage `deploy/trading-operational-health.service`/`.timer`,
 `deploy/trading-alert-relay.service`, the two `deploy/*.env.example` templates,
@@ -349,16 +374,17 @@ independent from cluster services.
    inputs at HOLD.
 4. **P1: Make news backtest-safe.** Persist per-item published/fetched times,
    deduplicate items, validate structured veto output, and enforce final-stage
-   invocation; immutable per-item storage and point-in-time replay are
-   implemented, provider staging validation and a store retention policy remain.
+   invocation; immutable per-item storage, point-in-time replay and a bounded
+   store retention policy are implemented, provider staging validation remains.
 5. **P1: Establish paired model releases.** Build a single versioned artifact
    manifest and atomic deployment/rollback for CPU and Hailo artifacts; assign
    training/compilation to the future x86 worker only after it exists.
 6. **P2: Close operational visibility gaps.** Alert receivers, kill-switch,
    Hailo, research-feed, scorecard, portfolio-snapshot, data-staleness,
-   scheduled-task exit-status (daily review, weekly scorecard and weekly
-   tuning), disk-capacity, analytics-database, live-mode scorecard-gate,
-   fill-reconciliation and tuning-apply-refusal alerts are implemented; running
+   scheduled-task exit-status (daily review, weekly scorecard, weekly tuning and
+   JSONL store retention), disk-capacity, analytics-database, live-mode
+   scorecard-gate, fill-reconciliation, tuning-apply-refusal and JSONL
+   store-size alerts are implemented; running
    the weekly scorecard on the cluster profile and staging delivery evidence for
    the private webhook remain. Retain a tested standalone Pi
    dashboard/scorecard path.
