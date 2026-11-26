@@ -16,6 +16,10 @@ Environment=TRADING_BOT_LOG_FILE=/opt/trading_2/logs/bot.log
 Environment=TRADING_TASK_STATUS_FILES=daily_review=/opt/trading_2/results/daily_review/latest_status.env
 Environment=TRADING_DISK_PATHS=/opt/trading_2
 Environment=TRADING_HEALTH_METRICS_FILE=/opt/trading_2/results/scorecards/textfile/trading_health.prom
+# The live-mode scorecard gate gauge reads DRY_RUN from the bot deployment .env
+# and the verdict from results/scorecards/latest_status.(json|env) below
+# WorkingDirectory. Only the run mode is read - no credentials are exported.
+Environment=TRADING_DEPLOYMENT_ENV_FILE=/opt/trading_2/.env
 ExecStart=/opt/trading_2/.venv/bin/python -m scripts.export_operational_health
 NoNewPrivileges=true
 PrivateTmp=true

@@ -24,7 +24,10 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 from src.data_staleness import measure_staleness, resolve_log_timezone
+from src.env_file import env_bool
+from src.exporter_paths import ENV_PATH
 from src.pnl_prometheus_format import escape_label_value
+from src.scorecard_gate import ScorecardGateSettings, scorecard_gate_settings
 from src.task_status import (
     parse_task_status_files,
     read_task_status,
@@ -95,6 +98,45 @@ def _task_status_lines(
                 "# TYPE trading_task_last_run_age_seconds gauge",
                 f"trading_task_last_run_age_seconds{label} {age:.3f}",
             ])
+    return lines
+
+
+def _scorecard_gate_lines(
+    gate: ScorecardGateSettings, env_file: Path, now: datetime
+) -> list[str]:
+    """Gauges for the live-trading scorecard gate in :mod:`src.scorecard_gate`.
+
+    The gate refuses ``DRY_RUN=false`` without a fresh ``GO`` verdict, so the
+    combination that matters operationally is "live trading is configured but
+    the scorecard evidence is missing, stale, or not GO". ``DRY_RUN`` is read
+    from the deployment ``.env`` the bot service loads, which is the same
+    fail-closed ``.env`` reading the PnL exporters already use. A profile that
+    never trades live publishes ``live_enabled 0`` and can never match the
+    alert.
+    """
+    live_enabled = int(not env_bool("DRY_RUN", True, str(env_file), quiet=True))
+    status = gate.evaluate(now=now)
+    lines = [
+        ("# HELP trading_scorecard_gate_enabled Whether the scorecard gate is "
+         "enabled for this deployment."),
+        "# TYPE trading_scorecard_gate_enabled gauge",
+        f"trading_scorecard_gate_enabled {int(gate.enabled)}",
+        ("# HELP trading_scorecard_gate_live_enabled Whether the deployment "
+         "configuration places real orders (DRY_RUN=false)."),
+        "# TYPE trading_scorecard_gate_live_enabled gauge",
+        f"trading_scorecard_gate_live_enabled {live_enabled}",
+        ("# HELP trading_scorecard_gate_allowed Whether a fresh GO scorecard "
+         "verdict backs live trading right now."),
+        "# TYPE trading_scorecard_gate_allowed gauge",
+        f"trading_scorecard_gate_allowed {int(status.allowed)}",
+    ]
+    if status.age_seconds is not None:
+        lines.extend([
+            ("# HELP trading_scorecard_gate_age_seconds Age of the scorecard "
+             "verdict backing the gate."),
+            "# TYPE trading_scorecard_gate_age_seconds gauge",
+            f"trading_scorecard_gate_age_seconds {status.age_seconds:.3f}",
+        ])
     return lines
 
 
@@ -203,6 +245,8 @@ def render_metrics(
     disk_paths: Sequence[str] = (),
     analytics_db_url: str = "",
     database_probe: Callable[[str], int | None] = query_database_size,
+    scorecard_gate: ScorecardGateSettings | None = None,
+    deployment_env_file: Path | None = None,
 ) -> str:
     now = now or datetime.now(UTC)
     kill_switch_active = int(os.path.lexists(kill_switch_file))
@@ -275,6 +319,12 @@ def render_metrics(
     lines.extend(_task_status_lines(task_status_files or {}, now))
     lines.extend(_disk_lines(disk_paths))
     lines.extend(_database_lines(analytics_db_url, database_probe))
+    if scorecard_gate is not None:
+        lines.extend(
+            _scorecard_gate_lines(
+                scorecard_gate, deployment_env_file or Path(ENV_PATH), now,
+            )
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -316,6 +366,9 @@ def main() -> int:
             os.getenv("TRADING_TASK_STATUS_FILES", "")),
         disk_paths=[*disk_raw.split(",")],
         analytics_db_url=os.getenv("ANALYTICS_DB_URL", ""),
+        scorecard_gate=scorecard_gate_settings(),
+        deployment_env_file=Path(
+            os.getenv("TRADING_DEPLOYMENT_ENV_FILE", ENV_PATH)),
     )
     output = Path(os.getenv(
         "TRADING_HEALTH_METRICS_FILE",

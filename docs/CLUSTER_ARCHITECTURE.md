@@ -104,6 +104,15 @@ HA, or a trading-bot deployment. Docker and K3s containerd are separate runtimes
   the old checksums before activation. Copy or synchronize the completed
   immutable release to each node over a trusted channel; the promoter itself
   does not transfer files across the network.
+- Promotion is gated on a fresh `GO` scorecard verdict
+  (`src.scorecard_gate`): the CLI reads
+  `results/scorecards/latest_status.json`/`latest_status.env` relative to its
+  working directory and refuses without a recent `GO`. On the cluster that
+  marker comes from the `scorecard.timer`/`scorecard-status.timer` units, which
+  the inspected `.74`/`.75` topology does not currently run - install them on the
+  host that promotes, or promote with `--no-require-go-verdict` deliberately.
+  `rollback` is never gated, so reverting to a known-good release stays possible
+  after a `NO-GO`.
 - Keep the previous known-good release directory. Target-device HEF loading,
   simulation/shadow evaluation, and explicit operator approval are still
   required before live use.

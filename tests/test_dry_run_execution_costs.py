@@ -1,4 +1,5 @@
 import csv
+from datetime import UTC, datetime
 
 import ccxt
 import pytest
@@ -6,9 +7,30 @@ import pytest
 from src.trading_bot import BotConfig, CryptoTradingBot
 
 
+def allow_live(monkeypatch, path):
+    """Give the live-mode scorecard gate a fresh GO marker.
+
+    ``src.bot_bootstrap`` refuses ``DRY_RUN=false`` without a fresh GO verdict,
+    so a test that exercises real-order accounting has to supply the same
+    evidence the deployment supplies. The marker is written to a temporary file
+    and selected through the documented override variables, which keeps the
+    repository working tree untouched.
+    """
+    marker = path / "scorecard_status.env"
+    marker.write_text(
+        f"TIMESTAMP_UTC={datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
+        "RUN_MODE=standard\nVERDICT=GO\nUNDERLYING_EXIT_CODE=0\nFINAL_EXIT_CODE=0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SCORECARD_STATUS_ENV", str(marker))
+    monkeypatch.setenv("SCORECARD_STATUS_JSON", str(path / "absent_status.json"))
+
+
 def make_bot(monkeypatch, path, *, enabled=True, dry_run=True, journal=True):
     for name in ("DRY_RUN_FEE_RATE", "DRY_RUN_SLIPPAGE_RATE"):
         monkeypatch.delenv(name, raising=False)
+    if not dry_run:
+        allow_live(monkeypatch, path)
     monkeypatch.setenv("DRY_RUN", str(dry_run))
     monkeypatch.setenv("DRY_RUN_COSTS_ENABLED", str(enabled))
     monkeypatch.setenv("SIMULATE_DATA", "true")

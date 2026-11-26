@@ -4,6 +4,11 @@ Extracted from ``src.trading_bot`` so that startup validation, startup logging
 and optional model loading can be tested and reused without importing the full
 trading bot. All logic is copied verbatim from ``CryptoTradingBot.__init__``;
 the only change is that the logger is passed in explicitly.
+
+The live-mode scorecard gate is the one addition: enabling real orders
+(``DRY_RUN=false``) is only accepted while a fresh ``GO`` scorecard verdict is
+on disk, so the same evidence that gates model promotion also gates the
+decision to place real orders. See :mod:`src.scorecard_gate`.
 """
 
 from __future__ import annotations
@@ -11,12 +16,58 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from .scorecard_gate import (
+    ScorecardGateSettings,
+    ScorecardGateStatus,
+    scorecard_gate_refusal,
+    scorecard_gate_settings,
+)
 
-def validate_startup_config(config: Any) -> None:
+LIVE_MODE_ACTION = "Live trading (DRY_RUN=false)"
+
+
+def evaluate_live_scorecard_gate(
+    config: Any, settings: ScorecardGateSettings | None = None
+) -> ScorecardGateStatus | None:
+    """Evaluate the scorecard prerequisite for live execution.
+
+    Returns ``None`` when the configuration does not place real orders, or when
+    the operator switched the gate off deliberately. Otherwise returns the gate
+    verdict, which is ``allowed=False`` for a missing, stale, malformed,
+    ``HOLD``, ``NO-GO`` or ``ERROR`` scorecard marker.
+    """
+    if getattr(config, "dry_run", True):
+        return None
+    resolved = settings if settings is not None else scorecard_gate_settings()
+    if not resolved.enabled:
+        return None
+    return resolved.evaluate()
+
+
+def validate_live_scorecard_gate(
+    config: Any, settings: ScorecardGateSettings | None = None
+) -> ScorecardGateStatus | None:
+    """Refuse live execution unless a fresh ``GO`` scorecard verdict backs it.
+
+    Raises ``ValueError`` - the same failure mode as the other startup
+    contradictions - so the process exits before the exchange client or the
+    execution lock is created.
+    """
+    status = evaluate_live_scorecard_gate(config, settings)
+    if status is None or status.allowed:
+        return status
+    resolved = settings if settings is not None else scorecard_gate_settings()
+    raise ValueError(scorecard_gate_refusal(LIVE_MODE_ACTION, status, resolved))
+
+
+def validate_startup_config(
+    config: Any, settings: ScorecardGateSettings | None = None
+) -> None:
     """Rejects startup configurations that contradict each other.
 
     Raises ``ValueError`` with the original messages from the bot
-    constructor.
+    constructor, and refuses live execution without a fresh ``GO`` scorecard
+    verdict.
     """
     if config.simulation_initial_balance_from_kraken and (
         not config.dry_run or config.exchange_name != 'kraken'
@@ -31,6 +82,7 @@ def validate_startup_config(config: Any) -> None:
             "Public-market paper trading requires a previously initialized portfolio "
             "and no Kraken API credentials"
         )
+    validate_live_scorecard_gate(config, settings)
 
 
 def log_startup_details(

@@ -30,8 +30,8 @@ def read_env_value(env_key, env_path=ENV_PATH, *, quiet=False):
     return ''
 
 
-def env_bool(env_key, default=False, env_path=ENV_PATH):
-    value = read_env_value(env_key, env_path)
+def env_bool(env_key, default=False, env_path=ENV_PATH, *, quiet=False):
+    value = read_env_value(env_key, env_path, quiet=quiet)
     if value == '':
         return bool(default)
     return value.strip().lower() in {'1', 'true', 'yes', 'on'}

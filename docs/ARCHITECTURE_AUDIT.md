@@ -14,7 +14,7 @@ The live cluster workload inspected is paper/shadow only.
 | 4 | Hard risk and kill switch | **[⚠️ Partial]** A persistent file kill switch now blocks live orders; daily anchor/loss-streak state remains process-local. | **[⚠️ Partial]** The file switch is host-local; no cluster-wide shared switch or distributed ownership is implemented. |
 | 5 | Execution and costs | **[⚠️ Partial]** Fees and spread ceiling are accounted for; ambiguous order outcomes latch the stop marker instead of retrying. Maker/taker estimates and exchange-native idempotency remain absent. | **[⚠️ Partial]** Same controls, but live exchange use remains unvalidated on the cluster. |
 | 6 | Single-Pi vs cluster operations | **[⚠️ Partial]** Local process lock, persisted live snapshot, startup balance comparison, open-order refusal, and uncertain-order latch exist; fill reconstruction needs operator review. | **[⚠️ Partial]** Optional account-scoped PostgreSQL advisory lease supplements local locks; shared PostgreSQL config and cluster deployment are operator prerequisites, and fill reconstruction remains manual. |
-| 7 | Evaluation and scorecard | **[✅ Implemented]** GO/HOLD/NO-GO and HOLD for insufficient data are implemented, with Pi systemd automation. | **[⚠️ Partial]** Scorecard code and monitoring rules exist, but the inspected cluster deployment does not show scorecard automation as part of its active bot topology. |
+| 7 | Evaluation and scorecard | **[✅ Implemented]** GO/HOLD/NO-GO and HOLD for insufficient data are implemented, with Pi systemd automation. A fresh `GO` verdict is now a prerequisite for `DRY_RUN=false` and for `scripts/manage_model_release.py promote`. | **[⚠️ Partial]** Same gate code and monitoring rules; the inspected cluster deployment still does not show scorecard automation as part of its active bot topology, so the gate reads the marker produced by the Pi/cluster `scorecard-status` timer. |
 | 8 | Monitoring and alerting | **[⚠️ Partial]** Pi installer configures Alertmanager, a private HTTPS webhook relay, and kill-switch/Hailo/research health alerts plus bounded journal/bot-log/market-data staleness probes, scheduled-task exit-status markers, disk-capacity gauges, and an optional analytics-database probe; operator webhook configuration and staging delivery validation remain required. | **[⚠️ Partial]** Alert rules and relay are available in the repository, but cluster-specific installation/configuration and live receiver validation remain outstanding. |
 
 ## Findings and evidence
@@ -143,9 +143,37 @@ includes the scorecard timer. The active `.74`/`.75` service inspection did
 not show a cluster scorecard status unit; the Hailo shadow runbook does not
 make scorecard status a promotion gate.
 
-**Next:** Make a fresh GO an explicit prerequisite for model promotion and
-live-mode enablement; wire scorecard status into the cluster operational
-dashboard and test stale/missing metrics as HOLD.
+Since `src.scorecard_gate` the verdict is also an execution prerequisite
+rather than only a report. The gate reads the marker that
+`scripts/run_weekly_scorecard.sh` already writes - `results/scorecards/latest_status.env`
+with uppercase keys on every run, plus `results/scorecards/latest_status.json`
+when `STATUS_JSON_ENABLED=true` - and allows an action only when the verdict is
+`GO`, the timestamp parses, the age is within `SCORECARD_GATE_MAX_AGE_SECONDS`
+(default eight days, one weekly cycle plus slack), and the run was not a
+`maintenance_override`. A missing, empty, malformed, stale or non-`GO` marker
+fails closed, and every reader returns `None` instead of raising so a broken
+marker can never be read as approval. `src.bot_bootstrap.validate_startup_config`
+refuses `DRY_RUN=false` before the exchange client or the execution lock is
+created, `src.bot_runtime.run_bot` re-checks the same gate immediately before the
+trading loop, and `scripts/manage_model_release.py promote` refuses to swap the
+active model pair. `rollback` is deliberately not gated: reverting to a
+previously validated release must stay possible, especially after a `NO-GO`.
+The explicit operator overrides (`SCORECARD_GATE_ENABLED=false` for the bot,
+`--no-require-go-verdict` for promotion) are logged loudly because they remove
+the last pre-trade gate. The operational-health exporter publishes
+`trading_scorecard_gate_enabled`/`_live_enabled`/`_allowed`/`_age_seconds`, and
+`TradingLiveModeScorecardGateBlocked` (critical) plus
+`TradingLiveModeWithoutScorecardGate` (warning) alert when a deployment is
+configured for real orders without the evidence; a `DRY_RUN=true` profile
+publishes `live_enabled 0` and can never match either rule.
+`tests/test_scorecard_gate.py`, the gate cases in `tests/test_bot_bootstrap.py`,
+`tests/test_bot_runtime.py`, `tests/test_manage_model_release_gate.py` and
+`tests/test_alert_rules.py` cover missing, stale, `HOLD`/`NO-GO`/`ERROR`,
+maintenance-override and marker-precedence paths.
+
+**Next:** Run the weekly scorecard on the cluster profile itself (the inspected
+`.74`/`.75` topology has no scorecard unit) so the gate has local evidence there,
+and keep the Hailo shadow runbook aligned with the promotion gate.
 
 ### 8. Monitoring and alerting
 
@@ -216,7 +244,7 @@ independent from cluster services.
    training/compilation to the future x86 worker only after it exists.
 6. **P2: Close operational visibility gaps.** Alert receivers, kill-switch,
    Hailo, research-feed, scorecard, portfolio-snapshot, data-staleness,
-   scheduled-task exit-status, disk-capacity, and analytics-database alerts are
-   implemented; cluster scorecard promotion gating and staging delivery
-   evidence for the private webhook remain. Retain a tested standalone Pi
-   dashboard/scorecard path.
+   scheduled-task exit-status, disk-capacity, analytics-database and live-mode
+   scorecard-gate alerts are implemented; running the weekly scorecard on the
+   cluster profile and staging delivery evidence for the private webhook remain.
+   Retain a tested standalone Pi dashboard/scorecard path.

@@ -61,7 +61,9 @@ Dry run test:
 .venv/bin/python -m src.trading_bot
 ```
 
-If live mode is configured in .env, monitor logs carefully and keep trade size small.
+If live mode is configured in .env, monitor logs carefully and keep trade size
+small. Live mode (`DRY_RUN=false`) additionally requires a fresh `GO` scorecard
+verdict; without it the bot exits at startup with the reason. See section 4.
 
 ## 4. Weekly Go/No-Go Scorecard
 Run manually:
@@ -86,6 +88,15 @@ bash scripts/run_weekly_scorecard.sh
 Reports are written to:
 - results/scorecards/
 - results/scorecards/latest_scorecard.txt
+- results/scorecards/latest_status.env (and `latest_status.json` when
+  `STATUS_JSON_ENABLED=true`)
+
+The verdict is also a prerequisite, not only a report: with `DRY_RUN=false` the
+bot refuses to start unless `latest_status.json`/`latest_status.env` reports `GO`
+from a run no older than `SCORECARD_GATE_MAX_AGE_SECONDS`, and
+`scripts/manage_model_release.py promote` refuses to activate a new model pair
+for the same reason. `rollback` stays available without a verdict. See
+[scorecard and monitoring](docs/MONITORING.md#scorecard-gating-of-live-trading-and-model-promotion).
 
 ## Hailo-8 Remote Inference (Optional)
 

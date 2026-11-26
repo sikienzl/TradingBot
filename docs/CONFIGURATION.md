@@ -172,6 +172,28 @@ leaves this disabled and has no PostgreSQL requirement. Every cluster execution
 node must use the same reachable database; inability to acquire the lease blocks
 startup.
 
+### Scorecard prerequisite for live trading
+
+`DRY_RUN=false` is additionally gated on the weekly Go/No-Go verdict. The bot
+refuses to start, and `scripts/manage_model_release.py promote` refuses to
+activate a model pair, unless the scorecard marker reports `GO` from a run that
+is recent enough. A missing, unreadable, stale, `HOLD`, `NO-GO` or `ERROR`
+marker fails closed.
+
+| Variable | Default | Description |
+|---|---|---|
+| `SCORECARD_GATE_ENABLED` | `true` | Set `false` to trade live without scorecard evidence; the bot logs a warning and the monitoring alert `TradingLiveModeWithoutScorecardGate` fires |
+| `SCORECARD_GATE_MAX_AGE_SECONDS` | `691200` | Maximum accepted age of the verdict (eight days: one weekly cycle plus slack) |
+| `SCORECARD_STATUS_JSON` | `results/scorecards/latest_status.json` | JSON marker written when `STATUS_JSON_ENABLED=true`; preferred when readable |
+| `SCORECARD_STATUS_ENV` | `results/scorecards/latest_status.env` | Env marker the weekly script always writes; used as fallback |
+
+Paths are relative to the working directory, which is the deployment root under
+both release profiles, so the defaults need no configuration. Promotion-only
+overrides are the CLI flags `--scorecard-status-json`, `--scorecard-status-env`,
+`--scorecard-max-age-seconds`, `--allow-maintenance-override` and
+`--no-require-go-verdict`. `rollback` is never gated so a known-good release can
+always be restored. See [Monitoring](MONITORING.md).
+
 ## Operational health exporter
 
 `scripts/export_operational_health.py` runs from the 30-second
@@ -190,6 +212,7 @@ settings above.
 | `RESEARCH_SIGNAL_PATH` | `$TRADING_DATA_DIR/research_signal_latest.json` | Research/news feed probed for presence and age |
 | `HAILO_HEALTH_URL` | unset | Optional Hailo health endpoint; loopback or trusted private address only |
 | `TRADING_HEALTH_METRICS_FILE` | `results/scorecards/textfile/trading_health.prom` | Textfile-collector fragment written atomically |
+| `TRADING_DEPLOYMENT_ENV_FILE` | `/opt/trading_2/.env` | Deployment `.env` whose `DRY_RUN` drives `trading_scorecard_gate_live_enabled`; only the run mode is read |
 
 Each staleness probe reads only a bounded tail of its file and reports
 `*_present 0` with no age when the source is missing or unreadable, so a probe

@@ -10,10 +10,11 @@ and check the scheduled-task and capacity rules against the real output of
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from scripts.export_operational_health import render_metrics
+from src.scorecard_gate import scorecard_gate_settings
 
 ROOT = Path(__file__).resolve().parents[1]
 ALERTS_FILE = ROOT / "deploy" / "trading-alerts.yml"
@@ -39,12 +40,12 @@ def parse_alerts(path: Path = ALERTS_FILE) -> dict[str, str]:
     return alerts
 
 
-def exported_metric_names(tmp_path: Path) -> set[str]:
-    """Metric families the operational-health exporter really emits."""
+def render(tmp_path: Path, gate_env: dict[str, str], *, dry_run: bool) -> str:
+    """Operational-health exporter output for one deployment configuration."""
     marker = tmp_path / "latest_status.env"
     marker.write_text(
         "exit_code=0\nfinished_unixtime=1764000000\n", encoding="utf-8")
-    body = render_metrics(
+    return render_metrics(
         tmp_path / "STOP", "http://localhost:18001/health",
         tmp_path / "signal.json", tmp_path / "journal.csv", tmp_path / "bot.log",
         tmp_path / "market",
@@ -54,8 +55,48 @@ def exported_metric_names(tmp_path: Path) -> set[str]:
         database_probe=lambda _url: 1024,
         now=datetime(2026, 11, 25, 12, 0, tzinfo=UTC),
         health_probe=lambda *_args, **_kwargs: _Ok(),
+        scorecard_gate=scorecard_gate_settings(gate_env),
+        deployment_env_file=write_deployment_env(tmp_path, dry_run=dry_run),
+    )
+
+
+def exported_metric_names(tmp_path: Path) -> set[str]:
+    """Metric families the operational-health exporter really emits."""
+    body = render(
+        tmp_path,
+        {"SCORECARD_STATUS_JSON": str(tmp_path / "absent.json")},
+        dry_run=False,
     )
     return set(re.findall(r"^# TYPE (\S+) gauge$", body, re.MULTILINE))
+
+
+def gauge_values(body: str) -> dict[str, float]:
+    """Sample values emitted by the exporter, keyed by metric name."""
+    return {
+        match.group(1): float(match.group(2))
+        for match in re.finditer(
+            r"^(trading_\S+)(?: \S+)? ([0-9.eE+-]+)$", body, re.MULTILINE
+        )
+    }
+
+
+def write_deployment_env(tmp_path: Path, *, dry_run: bool) -> Path:
+    """The deployment ``.env`` the exporter reads ``DRY_RUN`` from."""
+    env_file = tmp_path / "deployment.env"
+    env_file.write_text(
+        f"DRY_RUN={'true' if dry_run else 'false'}\n", encoding="utf-8")
+    return env_file
+
+
+def write_scorecard_marker(tmp_path: Path, *, verdict: str, age: timedelta) -> Path:
+    """A weekly scorecard marker as ``scripts/run_weekly_scorecard.sh`` writes it."""
+    stamp = datetime(2026, 11, 25, 12, 0, tzinfo=UTC) - age
+    marker = tmp_path / "latest_scorecard.env"
+    marker.write_text(
+        f"TIMESTAMP_UTC={stamp.isoformat()}\nRUN_MODE=standard\nVERDICT={verdict}\n",
+        encoding="utf-8",
+    )
+    return marker
 
 
 class _Ok:
@@ -78,6 +119,15 @@ NEW_ALERTS = {
         "trading_analytics_database_enabled == 1 "
         "and trading_analytics_database_up == 0"
     ),
+    "TradingLiveModeScorecardGateBlocked": (
+        "trading_scorecard_gate_enabled == 1 "
+        "and trading_scorecard_gate_live_enabled == 1 "
+        "and trading_scorecard_gate_allowed == 0"
+    ),
+    "TradingLiveModeWithoutScorecardGate": (
+        "trading_scorecard_gate_enabled == 0 "
+        "and trading_scorecard_gate_live_enabled == 1"
+    ),
 }
 
 
@@ -95,6 +145,58 @@ def test_new_alerts_only_reference_exported_metrics(tmp_path) -> None:
         assert used, f"{name} references no trading metric"
         unknown = used - exported
         assert not unknown, f"{name} references unexported metrics: {sorted(unknown)}"
+
+
+def gate_env(tmp_path: Path, marker: Path | None) -> dict[str, str]:
+    """Gate settings pointing at the marker under test, nothing else."""
+    absent = str(tmp_path / "absent.json")
+    return {
+        "SCORECARD_STATUS_JSON": marker if marker is not None else absent,
+        "SCORECARD_STATUS_ENV": absent,
+    }
+
+
+def test_live_gate_gauges_report_blocked_when_marker_missing(tmp_path) -> None:
+    body = render(tmp_path, gate_env(tmp_path, None), dry_run=False)
+    values = gauge_values(body)
+    assert values["trading_scorecard_gate_enabled"] == 1
+    assert values["trading_scorecard_gate_live_enabled"] == 1
+    assert values["trading_scorecard_gate_allowed"] == 0
+    assert "trading_scorecard_gate_age_seconds" not in values
+
+
+def test_live_gate_gauges_report_blocked_for_stale_go(tmp_path) -> None:
+    marker = write_scorecard_marker(
+        tmp_path, verdict="GO", age=timedelta(days=10))
+    values = gauge_values(render(tmp_path, gate_env(tmp_path, str(marker)),
+                                 dry_run=False))
+    assert values["trading_scorecard_gate_allowed"] == 0
+    assert values["trading_scorecard_gate_age_seconds"] >= 864000
+
+
+def test_live_gate_gauges_report_allowed_for_fresh_go(tmp_path) -> None:
+    marker = write_scorecard_marker(
+        tmp_path, verdict="GO", age=timedelta(hours=2))
+    values = gauge_values(render(tmp_path, gate_env(tmp_path, str(marker)),
+                                 dry_run=False))
+    assert values["trading_scorecard_gate_allowed"] == 1
+    assert 7000 < values["trading_scorecard_gate_age_seconds"] < 7300
+
+
+def test_dry_run_profile_cannot_match_live_alerts(tmp_path) -> None:
+    """A simulated deployment publishes live_enabled 0, so both alerts stay off."""
+    body = render(tmp_path, gate_env(tmp_path, None), dry_run=True)
+    values = gauge_values(body)
+    assert values["trading_scorecard_gate_live_enabled"] == 0
+    assert values["trading_scorecard_gate_allowed"] == 0
+
+
+def test_disabled_gate_is_visible_as_gate_enabled_zero(tmp_path) -> None:
+    env = gate_env(tmp_path, None)
+    env["SCORECARD_GATE_ENABLED"] = "false"
+    values = gauge_values(render(tmp_path, env, dry_run=False))
+    assert values["trading_scorecard_gate_enabled"] == 0
+    assert values["trading_scorecard_gate_live_enabled"] == 1
 
 
 def test_alert_rules_stay_parsable_and_unique() -> None:
