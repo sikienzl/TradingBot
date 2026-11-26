@@ -39,7 +39,7 @@ environment overrides before starting the bot.
 | `TICKER_BATCH_SIZE` | `80` | Symbols per `fetch_tickers` request (smaller is more stable) |
 | `TICKER_FETCH_RETRIES` | `2` | Retries per ticker batch on exchange/network errors |
 | `USE_TABULAR_MODEL` | `false` | Enable tabular-model signal filter |
-| `TABULAR_MODEL_BACKEND` | `catboost` | Tabular backend: local `catboost` or remote `hailo` |
+| `TABULAR_MODEL_BACKEND` | `catboost` | Tabular backend: local `catboost` or remote `hailo`. With `hailo` the bot falls back to the local CatBoost predictor when the Hailo service, package or prediction is unusable, and to rules-only when the CPU model is also unavailable (`src.inference_backend`) |
 | `HAILO_SERVICE_URL` | `http://127.0.0.1:8001` | Hailo inference endpoint; set the host address when using a separate server |
 | `HAILO_API_TOKEN` | unset | Required bearer token when Hailo is enabled |
 | `HAILO_TIMEOUT_SECONDS` | `3` | Maximum remote inference request time |

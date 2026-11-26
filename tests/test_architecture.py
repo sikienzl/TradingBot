@@ -54,6 +54,7 @@ LAYERS: dict[int, tuple[str, ...]] = {
         "execution_service",
         "execution_owner",
         "bot_runtime",
+        "inference_backend",
         "inference_fallback",
         "kill_switch",
         "news_veto",

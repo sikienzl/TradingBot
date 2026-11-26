@@ -55,10 +55,19 @@ flowchart LR
 | Future x86 worker | Produces candidate models, runs chronological/Walk-Forward evaluation and AutoResearch, and compiles Hailo-compatible ONNX to `.hef` with DFC. | No x86 worker or automated promotion path was observed. It must not place orders or become a runtime dependency for a Pi. |
 
 The intended inference fallback is Hailo, then local CPU CatBoost/ONNX, then
-rules-only. The current bot configuration selects either the remote Hailo
-backend or CatBoost; it does not automatically fall back between those
-backends. A failed Hailo prediction currently suppresses that candidate
-(fail-closed), rather than switching to CPU inference.
+rules-only. `src.inference_backend.build_tabular_predictor` implements that
+order: with `TABULAR_MODEL_BACKEND=hailo` it wraps the remote Hailo predictor in
+`src.inference_fallback.TabularInferenceFallback`, which retries on the local CPU
+CatBoost predictor when the Hailo service is unreachable, returns an invalid
+prediction, or the Hailo package/device is missing, and finally returns a HOLD
+prediction with `backend=rules_only` when the CPU model is also unavailable. The
+selected backend and every fallback are logged. With
+`TABULAR_MODEL_BACKEND=catboost` only the CPU predictor is loaded and a missing
+model simply means rules-only. A rules-only result never turns into a BUY, and
+the hard risk guardrails are evaluated independently afterwards. The CI
+`Inference fallback matrix` job runs that matrix with no Hailo package, device or
+model files installed; continuous readiness probing of the target-cluster Hailo
+service is still an operator task.
 
 ## Network, services, and ports
 

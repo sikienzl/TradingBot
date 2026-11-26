@@ -5,6 +5,46 @@ a version heading is assigned when a release is prepared.
 
 ## Unreleased
 
+### Added
+
+- `src/inference_backend.py`, a layer-1 module that owns backend discovery and
+  selection for the optional tabular model. `build_tabular_predictor()` returns
+  `None` when `USE_TABULAR_MODEL=false`, a
+  `src.inference_fallback.TabularInferenceFallback` for
+  `TABULAR_MODEL_BACKEND=hailo`, and the plain CPU predictor for `catboost`. The
+  Hailo and CatBoost modules are imported only inside the default factories, so
+  importing the selection module pulls in no backend package, and both backends
+  are injectable - which is what makes the `hailo -> CPU -> rules_only` cascade
+  testable without a Hailo package, device or reachable endpoint. Construction
+  errors outside the documented fallback set still propagate.
+- `tests/test_inference_backend.py`, the backend-selection matrix the audit
+  asked for: Hailo available -> Hailo, a failing Hailo endpoint or an invalid
+  Hailo prediction -> CPU, no Hailo package/device -> CPU, and CPU unavailable
+  -> `rules_only`, including the log line for each transition and a subprocess
+  check that importing the selection module imports neither backend.
+- `tests/test_decision_pyramid_ordering.py`, a cross-stage ordering test over the
+  real collaborators. It records every stage and asserts the order
+  volume -> spread -> ATR -> inference -> pre-trade cost budget -> paid news veto
+  -> order, and that a candidate rejected by a technical or cost gate performs no
+  model call and no paid call.
+- A CI `Inference fallback matrix (no Hailo/CPU model)` job that installs only
+  `pytest numpy pandas ccxt`, asserts `hailo_platform`, `catboost` and `sklearn`
+  are not importable, and runs both new test files. It is the single-Raspberry-Pi
+  no-device profile in CI.
+
+### Changed
+
+- `src.bot_bootstrap.load_tabular_predictor` is now a one-line delegator to
+  `src.inference_backend.build_tabular_predictor`; the selection logic and its
+  log messages are unchanged.
+- The inference fallback paragraph in `docs/CLUSTER_ARCHITECTURE.md` now
+  describes the implemented cascade instead of the previous "no automatic
+  fallback between backends" state, and `docs/CONFIGURATION.md` documents the
+  fallback behaviour of `TABULAR_MODEL_BACKEND=hailo`. Audit row 2 is
+  **[✅ Implemented]** for the Pi profile; the cluster column stays
+  **[⚠️ Partial]** because continuous readiness probing of the target-cluster
+  Hailo service is still an operator task.
+
 ## v1.0.31 - 2026-11-26
 
 ### Added
