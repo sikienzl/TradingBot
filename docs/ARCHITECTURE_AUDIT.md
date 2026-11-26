@@ -12,7 +12,7 @@ stays **[⚠️ Partial]**.
 | # | Core area | Single Raspberry Pi | CM5 cluster |
 |---|---|---|---|
 | 1 | Data basis and model lifecycle | **[⚠️ Partial]** Paired contract/checksum manifest and atomic activation/rollback are implemented; candidate training and DFC compilation remain separate operator steps. | **[⚠️ Partial]** Same paired release tooling; DFC and target-device validation remain external, and no x86 worker is deployed. |
-| 2 | Decision pyramid and hardware fallback | **[⚠️ Partial]** Volume, spread, and ATR gates now precede optional inference; Hailo→CPU→rules fallback is tested. | **[⚠️ Partial]** Same cascade and gates; target-cluster service/device availability is not continuously exercised by CI. |
+| 2 | Decision pyramid and hardware fallback | **[✅ Implemented]** Volume, spread, and ATR gates run before any model or paid call, and the paid news veto runs after the pre-trade cost budget; the order is asserted end to end. Backend selection sits behind `src.inference_backend` with injected backends, and a dedicated CI job runs the Hailo→CPU→rules-only matrix with no Hailo package, device or model files installed. | **[⚠️ Partial]** Same cascade and gates; target-cluster service/device availability is not continuously exercised by CI, and a cluster fallback is only visible in the bot log. |
 | 3 | News integration | **[⚠️ Partial]** RSS items now retain `published_at`/`fetched_at`, are deduplicated, and can drive an opt-in structured final veto with a daily call limit; persistent historical item storage is not implemented. | **[⚠️ Partial]** Same code is available, but the inspected cluster has no configured paid provider/credentials; Hailo features do not consume news. |
 | 4 | Hard risk and kill switch | **[✅ Implemented]** The daily anchor, loss-streak pause, hourly BUY budget and re-entry cooldowns are persisted in `TRADING_RISK_STATE_FILE` and restored at startup; unreadable or unwritable risk state blocks new entries and latches the persistent kill switch in live mode. | **[⚠️ Partial]** Same persisted state per node, but the file and the stop marker are host-local; no cluster-wide shared switch or distributed state store is implemented. |
 | 5 | Execution and costs | **[✅ Implemented]** Exchange fill/fee records, a pre-trade taker-fee + spread + slippage cost budget (`MAX_ENTRY_COST_BPS`), and a Kraken `cl_ord_id` per submission are in place; a submission timeout is reconciled instead of resubmitted and an unknown outcome latches the stop marker. Partial fills keep their requested amount in the journal. | **[⚠️ Partial]** Same controls, but live exchange use remains unvalidated on the cluster. |
@@ -52,19 +52,35 @@ the configured threshold. The Mammouth integration
 in `src.ai_copilot_service.py` remains a bounded parameter copilot, separate
 from the opt-in structured news veto.
 
-`src.bot_bootstrap.load_tabular_predictor` wraps remote Hailo with lazy CPU
-CatBoost fallback, then emits a HOLD result that preserves the existing rules
-signal if CPU loading/prediction also fails. Invalid predictions are rejected.
-`tests/test_hailo_inference.py` covers inference/service contracts, while the
-CI Hailo export job is separate from the slim CPU test job. There is no tested
-backend-selection matrix proving Hailo available -> Hailo, Hailo unavailable ->
-CPU, then CPU unavailable -> rules-only in one abstraction.
+`src.inference_backend.build_tabular_predictor` is the single selection point
+for the optional tabular model. It receives the logger and config and, for the
+Hailo backend, builds `src.inference_fallback.TabularInferenceFallback`, which
+tries the remote Hailo predictor, falls back to a lazily constructed CPU
+CatBoost predictor, and finally emits a HOLD result with `backend=rules_only`
+that preserves the existing rules signal. Invalid predictions are rejected at
+every stage. The Hailo and CatBoost modules are imported only inside the default
+factories, so importing the selection module pulls in no backend package, and
+both backends are injectable, which is what makes the cascade testable without a
+Hailo package, device or reachable endpoint.
 
-**Next:** Move backend discovery/selection behind an injected inference
-interface; add a CI matrix with no Hailo package/device, a failing Hailo
-endpoint, CPU fallback, and rules-only fallback. Put ATR, spread, and volume
-checks before any model/API call and test that rejected candidates incur no
-paid call.
+`tests/test_inference_backend.py` covers the matrix: Hailo available -> Hailo, a
+failing Hailo endpoint or invalid Hailo prediction -> CPU, no Hailo
+package/device -> CPU, and CPU unavailable -> rules-only, including the log line
+for each transition and that a construction error outside the documented
+fallback set still propagates. `tests/test_decision_pyramid_ordering.py` walks
+the real collaborators and asserts the recorded stage order
+volume -> spread -> ATR -> inference -> cost budget -> paid news veto -> order,
+so a candidate rejected by a technical gate performs no model call and no paid
+call. The CI `Inference fallback matrix` job runs both files with only
+pytest/numpy/pandas/ccxt installed and asserts that `hailo_platform`, `catboost`
+and `sklearn` are not importable, i.e. it is the single-Pi no-device profile.
+`tests/test_hailo_inference.py` still covers the inference/service contracts and
+the CI Hailo export job is separate.
+
+**Next:** Exercise the target-cluster Hailo service and device availability
+continuously (readiness probe plus alert on the cluster profile) and record the
+selected backend per decision, so a silent cluster fallback to CPU or
+rules-only is visible in monitoring rather than only in the bot log.
 
 ### 3. News feed and veto schema
 

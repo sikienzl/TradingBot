@@ -16,7 +16,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .scorecard_gate import (
+from src.inference_backend import build_tabular_predictor
+from src.scorecard_gate import (
     ScorecardGateSettings,
     ScorecardGateStatus,
     scorecard_gate_refusal,
@@ -132,53 +133,10 @@ def load_ml_predictor(logger: logging.Logger, config: Any) -> Any:
 
 
 def load_tabular_predictor(logger: logging.Logger, config: Any) -> Any:
-    """Loads the optional tabular model (Hailo remote or CatBoost)."""
-    tabular_predictor: Any = None
-    if config.use_tabular_model:
-        if config.tabular_model_backend == 'hailo':
-            from src.inference_fallback import TabularInferenceFallback
+    """Loads the optional tabular model (Hailo remote or CatBoost).
 
-            try:
-                from src.predict_hailo_remote import HailoRemotePredictor
-                hailo_predictor = HailoRemotePredictor(
-                    service_url=config.hailo_service_url,
-                    api_token=config.hailo_api_token,
-                    timeout_seconds=config.hailo_timeout_seconds,
-                )
-                logger.info(
-                    "Tabular inference selected backend=hailo at %s",
-                    config.hailo_service_url,
-                )
-            except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
-                hailo_predictor = None
-                logger.warning("Hailo backend unavailable; falling back to CPU: %s", exc)
-
-            def load_cpu_predictor() -> Any:
-                from src.predict_catboost import CatBoostTradingPredictor
-                return CatBoostTradingPredictor(
-                    config.tabular_model_path,
-                    research_signal_path=config.tabular_research_signal_path,
-                )
-
-            tabular_predictor = TabularInferenceFallback(
-                hailo_predictor, load_cpu_predictor, logger)
-        else:
-            try:
-                from src.predict_catboost import CatBoostTradingPredictor
-                tabular_predictor = CatBoostTradingPredictor(
-                    config.tabular_model_path,
-                    research_signal_path=config.tabular_research_signal_path,
-                )
-                logger.info(
-                    f"📊 CatBoost model loaded from '{config.tabular_model_path}'.")
-            except (
-                ImportError,
-                OSError,
-                RuntimeError,
-                TypeError,
-                ValueError,
-                KeyError,
-            ) as e:
-                logger.warning(
-                    f"CatBoost model could not be loaded: {e}.")
-    return tabular_predictor
+    The backend cascade lives in :mod:`src.inference_backend`, where the Hailo
+    and CPU backends are injected and the ``hailo -> CPU -> rules_only`` order is
+    unit-testable without a Hailo package, device or endpoint.
+    """
+    return build_tabular_predictor(logger, config)
