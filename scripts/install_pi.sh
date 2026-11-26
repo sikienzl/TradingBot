@@ -296,6 +296,15 @@ if [[ -f "${SYSTEMD_DIR}/fill-reconciliation.timer" ]]; then
   ok "Fill reconciliation timer enabled (runs every hour)."
 fi
 
+# The weekly scorecard appends its verdict history here and the weekly tuning
+# cycle writes its scheduled-task marker here. Both wrappers create the files
+# themselves, but the directories must belong to the service user before the
+# first timer fires, and the tuning cycle reads the verdict history the
+# scorecard wrote 20 minutes earlier.
+mkdir -p "${INSTALL_DIR}/results/scorecards" "${INSTALL_DIR}/results/tuning"
+chown "${SERVICE_USER}:${SERVICE_USER}" \
+  "${INSTALL_DIR}/results/scorecards" "${INSTALL_DIR}/results/tuning"
+
 # Enable trading-bot service but do NOT start automatically
 # (user must configure .env first)
 if [[ -f "${SYSTEMD_DIR}/trading-bot.service" ]]; then

@@ -172,6 +172,15 @@ groups:
           summary: "Scheduled trading task has not run recently"
           description: "The last {{ $labels.task }} run finished over 48 hours ago; the systemd timer is stopped, masked, or failing to start."
 
+      - alert: TradingTuningCycleApplyBlocked
+        expr: trading_task_last_exit_code{task="weekly_tuning"} == 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Weekly tuning cycle refused to change parameters"
+          description: "weekly_tuning exited 3: the safety guard found no scorecard verdict evidence, a verdict older than TUNING_MAX_VERDICT_AGE_SECONDS, or a recent NO-GO. results/scorecards/latest_tuning_cycle_summary.json records the reason; the tuning policy and .env are unchanged."
+
       - alert: TradingDiskSpaceLow
         expr: trading_disk_free_bytes < 1073741824
         for: 15m

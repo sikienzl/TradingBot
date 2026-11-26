@@ -91,6 +91,7 @@ LAYERS: dict[int, tuple[str, ...]] = {
         "risk_guardrails",
         "risk_state",
         "scorecard_gate",
+        "scorecard_verdict_history",
         "simulation",
         "state_store",
         "task_status",
@@ -132,6 +133,7 @@ LINE_CEILINGS: dict[str, int] = {
     "ai_copilot_service.py": 584,
     "export_pnl_metrics.py": 366,
     "fill_reconciliation.py": 581,
+    "scorecard_verdict_history.py": 500,
 }
 
 

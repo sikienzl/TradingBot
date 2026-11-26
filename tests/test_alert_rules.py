@@ -131,6 +131,9 @@ NEW_ALERTS = {
     "TradingScheduledTaskFailed": "trading_task_last_exit_code != 0",
     "TradingScheduledTaskMarkerMissing": "trading_task_status_present == 0",
     "TradingScheduledTaskStale": "trading_task_last_run_age_seconds > 172800",
+    "TradingTuningCycleApplyBlocked": (
+        'trading_task_last_exit_code{task="weekly_tuning"} == 3'
+    ),
     "TradingDiskSpaceLow": "trading_disk_free_bytes < 1073741824",
     "TradingDiskUsedPercentHigh": "trading_disk_used_percent > 90",
     "TradingAnalyticsDatabaseUnavailable": (

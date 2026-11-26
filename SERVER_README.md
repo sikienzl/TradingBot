@@ -799,8 +799,24 @@ Default mode is dry-run. To allow actual `.env` updates, set in `/opt/trading_2/
 TUNING_APPLY_CHANGES=true
 ```
 
+Even then the apply is refused when the scorecard evidence does not support it.
+The cycle reads the verdict from `results/scorecards/latest_status.json`, then
+`results/scorecards/latest_status.env`, then the newest record of
+`results/scorecards/verdict_history.jsonl` - so a default Pi install, which
+keeps `STATUS_JSON_ENABLED=false`, still has usable evidence. It refuses when no
+source is readable, when the verdict is not `GO`, when the newest verdict is
+older than `TUNING_MAX_VERDICT_AGE_SECONDS` (nine days by default), or when a
+recent verdict was `NO-GO`. A refusal exits `3`, leaves `.env` untouched, and
+records the reason in `results/scorecards/latest_tuning_cycle_summary.json`.
+
+Every attempt - success, refusal, or crash - writes
+`results/tuning/latest_status.env` with `exit_code`, `started_unixtime`,
+`finished_unixtime` and `reason`, which the operational-health exporter publishes
+as the `weekly_tuning` task gauges. `TUNING_CYCLE_TIMEOUT_SECONDS` (default
+`1800`) bounds the cycle so a hung run still leaves its marker.
+
 Systemd units:
-- `tuning-cycle.service`
+- `tuning-cycle.service` (accepts exit `0` and `3` as clean unit exits)
 - `tuning-cycle.timer` (Sunday 09:20, after scorecard)
 
 Useful commands:
@@ -809,6 +825,8 @@ Useful commands:
 sudo systemctl status tuning-cycle.timer
 sudo systemctl start tuning-cycle.service
 sudo journalctl -u tuning-cycle.service -f
+cat results/tuning/latest_status.env
+.venv/bin/python -m scripts.scorecard_verdict_history show --limit 5
 ```
 
 ## 5. Updating From New Package

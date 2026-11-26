@@ -10,9 +10,25 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
+
+# The script runs from the repository root (systemd sets PYTHONPATH and the Pi
+# package ships src/ next to scripts/), but make the import work when the
+# script is invoked directly as well.
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from src.scorecard_gate import read_scorecard_status
+from src.scorecard_verdict_history import (
+    VERDICT_ERROR,
+    latest_verdict_record,
+    resolve_verdict_history_path,
+)
 
 
 @dataclass
@@ -32,6 +48,78 @@ def _utc_now() -> str:
 def _load_json(path: str) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _marker_as_status(marker: Path) -> dict[str, Any] | None:
+    """Convert an uppercase ``KEY=value`` scorecard marker to the JSON shape."""
+    fields = read_scorecard_status(marker)
+    if not fields:
+        return None
+    status: dict[str, Any] = {
+        "verdict": str(fields.get("VERDICT", "")).strip().upper() or VERDICT_ERROR,
+        "metrics": {},
+    }
+    for marker_key, status_key in (
+        ("TIMESTAMP_UTC", "timestamp_utc"),
+        ("RUN_MODE", "run_mode"),
+        ("PRIMARY_REASON", "primary_reason"),
+        ("PROFILE", "profile"),
+    ):
+        value = str(fields.get(marker_key, "")).strip()
+        if value:
+            status[status_key] = value
+    return status
+
+
+def load_status(
+    status_json: str,
+    *,
+    status_env: str = "",
+    verdict_history: str | None = None,
+) -> tuple[dict[str, Any], str]:
+    """Latest scorecard evidence plus the source it came from.
+
+    The single-Pi release profile only publishes the ``KEY=value`` marker - the
+    JSON marker is opt-in through ``STATUS_JSON_ENABLED`` - so reading one fixed
+    file used to abort the whole tuning cycle with a ``FileNotFoundError``. Every
+    source here is optional and the result is always a usable dict: with no
+    evidence at all the verdict is ``ERROR``, which :func:`recommend` treats as
+    "do not tune" rather than as permission.
+    """
+    for candidate in (status_json, status_env):
+        path = str(candidate or "").strip()
+        if not path:
+            continue
+        try:
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if not text.strip():
+            continue
+        if not text.lstrip().startswith("{"):
+            marker = _marker_as_status(Path(path))
+            if marker is not None:
+                return marker, "env"
+            continue
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            continue
+        if isinstance(payload, dict):
+            return payload, "json"
+
+    history = (
+        resolve_verdict_history_path()
+        if verdict_history is None
+        else str(verdict_history).strip()
+    )
+    record = latest_verdict_record(history) if history else None
+    if record is not None:
+        status = dict(record)
+        status.setdefault("metrics", {})
+        return status, "verdict_history"
+
+    return {"verdict": VERDICT_ERROR, "metrics": {}}, "missing"
 
 
 def _parse_env(path: str) -> dict[str, str]:
@@ -384,6 +472,22 @@ def main() -> None:
     parser.add_argument("--policy", default="tuning_policy.json")
     parser.add_argument(
         "--status-json", default="results/scorecards/latest_status.json")
+    parser.add_argument(
+        "--status-env",
+        default="results/scorecards/latest_status.env",
+        help=(
+            "Uppercase KEY=value scorecard marker, used when the JSON marker is "
+            "absent or unreadable (the Pi profile keeps STATUS_JSON_ENABLED off)."
+        ),
+    )
+    parser.add_argument(
+        "--verdict-history",
+        default=None,
+        help=(
+            "Scorecard verdict history JSONL used as the last fallback. Defaults "
+            "to $SCORECARD_VERDICT_HISTORY_FILE."
+        ),
+    )
     parser.add_argument("--env-file", default=".env")
     parser.add_argument(
         "--state-file", default="results/scorecards/tuning_recommender_state.json"
@@ -392,7 +496,11 @@ def main() -> None:
     args = parser.parse_args()
 
     policy = _load_json(args.policy)
-    status = _load_json(args.status_json)
+    status, status_source = load_status(
+        args.status_json,
+        status_env=args.status_env,
+        verdict_history=args.verdict_history,
+    )
     env_values = _parse_env(args.env_file)
     state = _state_load(args.state_file)
 
@@ -406,6 +514,9 @@ def main() -> None:
         "generated_at_utc": _utc_now(),
         "policy": args.policy,
         "status_json": args.status_json,
+        "status_env": args.status_env,
+        "status_source": status_source,
+        "status_verdict": str(status.get("verdict", "")),
         "env_file": args.env_file,
         "state_file": args.state_file,
         "phase": rec.phase,
@@ -424,6 +535,7 @@ def main() -> None:
         "=== Tuning Recommendation ===",
         f"generated_at_utc: {result['generated_at_utc']}",
         f"phase: {rec.phase}",
+        f"status_source: {status_source}",
         f"action: {rec.action}",
         f"reason: {rec.reason}",
     ]

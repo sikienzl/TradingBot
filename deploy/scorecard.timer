@@ -6,6 +6,10 @@ Requires=scorecard.service
 # Run every Sunday at 09:00 local time
 OnCalendar=Sun *-*-* 09:00:00
 Persistent=true
+# Explicit target: tuning-cycle.timer depends on this unit having produced a
+# fresh verdict marker and verdict history 20 minutes later.
+Unit=scorecard.service
+AccuracySec=30s
 
 [Install]
 WantedBy=timers.target

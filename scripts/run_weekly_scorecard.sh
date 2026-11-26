@@ -116,17 +116,170 @@ AR_FALLBACK_EFFECTIVE="${AUTORESEARCH_WRITE_NEUTRAL_FALLBACK,,}"
 AR_MAINTENANCE_OVERRIDE_USED="false"
 
 TS="$(date +%Y%m%d_%H%M%S)"
+# One report per attempt, not per second. The verdict-history record identity is
+# the report file name, so two attempts started in the same second must not share
+# a name: they would overwrite each other's report and collapse into one record.
+ATTEMPT_TAG="${TS}-$$"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/results/scorecards}"
-OUT_FILE="$OUT_DIR/scorecard_${TS}.txt"
+OUT_FILE="$OUT_DIR/scorecard_${ATTEMPT_TAG}.txt"
 LATEST_LINK="$OUT_DIR/latest_scorecard.txt"
 STATUS_FILE="${STATUS_FILE:-$OUT_DIR/latest_status.env}"
 STATUS_JSON_ENABLED="${STATUS_JSON_ENABLED:-false}"
 STATUS_JSON_FILE="${STATUS_JSON_FILE:-$OUT_DIR/latest_status.json}"
 STATUS_PROM_ENABLED="${STATUS_PROM_ENABLED:-false}"
 STATUS_PROM_FILE="${STATUS_PROM_FILE:-$OUT_DIR/latest_status.prom}"
-METRICS_JSON_FILE="$OUT_DIR/scorecard_metrics_${TS}.json"
+METRICS_JSON_FILE="$OUT_DIR/scorecard_metrics_${ATTEMPT_TAG}.json"
+
+# Append-only verdict history (src/scorecard_verdict_history.py). Enabled by
+# default; SCORECARD_VERDICT_HISTORY_FILE=off disables it for a throwaway run.
+VERDICT_HISTORY_SETTING="${SCORECARD_VERDICT_HISTORY_FILE-$ROOT_DIR/results/scorecards/verdict_history.jsonl}"
+case "${VERDICT_HISTORY_SETTING,,}" in
+  ""|off|none|false|no|disabled) VERDICT_HISTORY_FILE="" ;;
+  /*) VERDICT_HISTORY_FILE="$VERDICT_HISTORY_SETTING" ;;
+  *) VERDICT_HISTORY_FILE="$ROOT_DIR/$VERDICT_HISTORY_SETTING" ;;
+esac
 
 mkdir -p "$OUT_DIR"
+
+STARTED_UNIXTIME="$(date -u +%s)"
+STATUS_PUBLISHED="false"
+STATUS_JSON_WRITTEN="false"
+ABORT_REASON=""
+
+# One marker per attempt, success or failure. The uppercase keys are the gate
+# contract read by src/scorecard_gate.py, the lowercase keys are the
+# scheduled-task contract read by src/task_status.py, so the existing
+# TradingScheduledTaskFailed/Stale/MarkerMissing alerts also cover this unit.
+write_status_marker() {
+  local timestamp_utc finished_unixtime temporary_path
+  timestamp_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  finished_unixtime="$(date -u +%s)"
+  temporary_path="${STATUS_FILE}.tmp.$$"
+  mkdir -p "$(dirname "$STATUS_FILE")"
+  {
+    printf 'TIMESTAMP_UTC=%s\n' "$timestamp_utc"
+    printf 'RUN_MODE=%s\n' "$RUN_MODE"
+    printf 'VERDICT=%s\n' "$VERDICT"
+    printf 'UNDERLYING_EXIT_CODE=%s\n' "$RC"
+    printf 'FINAL_EXIT_CODE=%s\n' "$FINAL_RC"
+    printf 'PRIMARY_REASON=%s\n' "$PRIMARY_REASON"
+    printf 'PROFILE=%s\n' "${SCORECARD_PROFILE,,}"
+    printf 'REPORT_FILE=%s\n' "$OUT_FILE"
+    printf 'LATEST_REPORT_LINK=%s\n' "$LATEST_LINK"
+    printf 'exit_code=%s\n' "$FINAL_RC"
+    printf 'started_unixtime=%s\n' "$STARTED_UNIXTIME"
+    printf 'finished_unixtime=%s\n' "$finished_unixtime"
+  } > "$temporary_path"
+  chmod 0644 "$temporary_path" 2>/dev/null || true
+  mv -f "$temporary_path" "$STATUS_FILE"
+  STATUS_TIMESTAMP_UTC="$timestamp_utc"
+}
+
+write_status_json() {
+  local status_json_tmp_file status_json_dir
+  status_json_tmp_file="${STATUS_JSON_FILE}.tmp.$$"
+  status_json_dir="$(dirname "$STATUS_JSON_FILE")"
+  mkdir -p "$status_json_dir"
+  TIMESTAMP_UTC="${STATUS_TIMESTAMP_UTC:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" \
+  RUN_MODE="$RUN_MODE" \
+  VERDICT="$VERDICT" \
+  PRIMARY_REASON="$PRIMARY_REASON" \
+  PROFILE="${SCORECARD_PROFILE,,}" \
+  UNDERLYING_EXIT_CODE="$RC" \
+  FINAL_EXIT_CODE="$FINAL_RC" \
+  REPORT_FILE="$OUT_FILE" \
+  LATEST_REPORT_LINK="$LATEST_LINK" \
+  METRICS_CLOSED_TRADES="${METRICS_CLOSED_TRADES:-0}" \
+  METRICS_WIN_RATE="${METRICS_WIN_RATE:-0}" \
+  METRICS_REALIZED_PNL="${METRICS_REALIZED_PNL:-0}" \
+  METRICS_AVG_PNL="${METRICS_AVG_PNL:-0}" \
+  METRICS_PROFIT_FACTOR="${METRICS_PROFIT_FACTOR:-0}" \
+  METRICS_MAX_DRAWDOWN_BASE="${METRICS_MAX_DRAWDOWN_BASE:-0}" \
+  METRICS_MAX_DRAWDOWN_PCT="${METRICS_MAX_DRAWDOWN_PCT:-0}" \
+  STATUS_JSON_TMP_FILE="$status_json_tmp_file" \
+    "$PYTHON_CMD" - <<'PY'
+import json
+import os
+
+payload = {
+    "timestamp_utc": os.environ["TIMESTAMP_UTC"],
+    "run_mode": os.environ["RUN_MODE"],
+    "verdict": os.environ["VERDICT"],
+    "primary_reason": os.environ["PRIMARY_REASON"],
+    "profile": os.environ["PROFILE"],
+    "underlying_exit_code": int(os.environ["UNDERLYING_EXIT_CODE"]),
+    "final_exit_code": int(os.environ["FINAL_EXIT_CODE"]),
+    "report_file": os.environ["REPORT_FILE"],
+    "latest_report_link": os.environ["LATEST_REPORT_LINK"],
+    "metrics": {
+        "closed_trades": int(os.environ["METRICS_CLOSED_TRADES"]),
+        "win_rate": float(os.environ["METRICS_WIN_RATE"]),
+        "realized_pnl": float(os.environ["METRICS_REALIZED_PNL"]),
+        "avg_pnl": float(os.environ["METRICS_AVG_PNL"]),
+        "profit_factor": float(os.environ["METRICS_PROFIT_FACTOR"]),
+        "max_drawdown_base": float(os.environ["METRICS_MAX_DRAWDOWN_BASE"]),
+        "max_drawdown_pct": float(os.environ["METRICS_MAX_DRAWDOWN_PCT"]),
+    },
+}
+
+with open(os.environ["STATUS_JSON_TMP_FILE"], "w", encoding="utf-8") as f:
+    json.dump(payload, f, ensure_ascii=True, indent=2)
+PY
+  chmod 0644 "$status_json_tmp_file" 2>/dev/null || true
+  mv -f "$status_json_tmp_file" "$STATUS_JSON_FILE"
+  STATUS_JSON_WRITTEN="true"
+}
+
+# Only a marker written by this attempt may feed the history: a JSON marker left
+# over from an earlier run must never be recorded as today's verdict.
+append_verdict_history() {
+  if [[ -z "$VERDICT_HISTORY_FILE" ]]; then
+    return 0
+  fi
+  local history_json_argument=""
+  if [[ "$STATUS_JSON_WRITTEN" == "true" ]]; then
+    history_json_argument="$STATUS_JSON_FILE"
+  fi
+  SCORECARD_HISTORY_PROFILE="${SCORECARD_PROFILE,,}" \
+  SCORECARD_HISTORY_PRIMARY_REASON="$PRIMARY_REASON" \
+    PYTHONPATH="$ROOT_DIR" "$PYTHON_CMD" -m scripts.scorecard_verdict_history append \
+    --history-file "$VERDICT_HISTORY_FILE" \
+    --status-json "$history_json_argument" \
+    --status-env "$STATUS_FILE" \
+    --metrics-json "$METRICS_JSON_FILE" >> "$OUT_FILE" 2>&1 || true
+}
+
+# A run that dies before the verdict is known still has to replace the marker:
+# otherwise last week's GO keeps the live gate open after a hard failure.
+on_exit() {
+  local code="$1"
+  if [[ "$STATUS_PUBLISHED" == "true" ]]; then
+    return 0
+  fi
+  RC="$code"
+  FINAL_RC="$code"
+  VERDICT="ERROR"
+  RUN_MODE="standard"
+  if [[ "${AR_MAINTENANCE_OVERRIDE_USED:-false}" == "true" ]]; then
+    RUN_MODE="maintenance_override"
+    FINAL_RC="$AUTORESEARCH_MAINTENANCE_EXIT_CODE"
+  fi
+  PRIMARY_REASON="${ABORT_REASON:-script_aborted}"
+  write_status_marker || true
+  if [[ "${STATUS_JSON_ENABLED,,}" == "true" ]]; then
+    write_status_json || true
+  fi
+  append_verdict_history || true
+  echo "Scorecard aborted with exit code $code: $STATUS_FILE records $VERDICT" >&2
+}
+
+trap 'on_exit $?' EXIT
+
+VERDICT="ERROR"
+RUN_MODE="standard"
+RC=1
+FINAL_RC=1
+PRIMARY_REASON="not_started"
 
 echo "=== Weekly Go/No-Go Scorecard ===" | tee "$OUT_FILE"
 echo "Timestamp: $(date -Iseconds)" | tee -a "$OUT_FILE"
@@ -162,6 +315,7 @@ if [[ "${AUTORESEARCH_ENABLED,,}" == "true" ]]; then
           AR_FALLBACK_EFFECTIVE="true"
           AR_MAINTENANCE_OVERRIDE_USED="true"
         else
+          ABORT_REASON="autoresearch_precheck_failed"
           echo "ERROR: AutoResearch precheck failed (required)." | tee -a "$OUT_FILE"
           exit 1
         fi
@@ -200,6 +354,7 @@ if [[ "${AUTORESEARCH_ENABLED,,}" == "true" ]]; then
 
   if [[ $AR_RC -ne 0 ]]; then
     if [[ "$AR_REQUIRED_EFFECTIVE" == "true" ]]; then
+      ABORT_REASON="autoresearch_bridge_failed"
       echo "ERROR: AutoResearch bridge failed (required)." | tee -a "$OUT_FILE"
       exit 1
     fi
@@ -321,73 +476,16 @@ else
   echo "FINAL_EXIT_CODE=$FINAL_RC" | tee -a "$OUT_FILE"
 fi
 
-STATUS_TMP_FILE="${STATUS_FILE}.tmp"
-{
-  echo "TIMESTAMP_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  echo "RUN_MODE=$RUN_MODE"
-  echo "VERDICT=$VERDICT"
-  echo "UNDERLYING_EXIT_CODE=$RC"
-  echo "FINAL_EXIT_CODE=$FINAL_RC"
-  echo "REPORT_FILE=$OUT_FILE"
-  echo "LATEST_REPORT_LINK=$LATEST_LINK"
-} > "$STATUS_TMP_FILE"
-mv "$STATUS_TMP_FILE" "$STATUS_FILE"
+write_status_marker
+STATUS_PUBLISHED="true"
 echo "Status file: $STATUS_FILE" | tee -a "$OUT_FILE"
 
 if [[ "${STATUS_JSON_ENABLED,,}" == "true" ]]; then
-  STATUS_JSON_TMP_FILE="${STATUS_JSON_FILE}.tmp"
-  STATUS_JSON_DIR="$(dirname "$STATUS_JSON_FILE")"
-  mkdir -p "$STATUS_JSON_DIR"
-
-  TIMESTAMP_UTC_VALUE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-  TIMESTAMP_UTC="$TIMESTAMP_UTC_VALUE" \
-  RUN_MODE="$RUN_MODE" \
-  VERDICT="$VERDICT" \
-  PRIMARY_REASON="$PRIMARY_REASON" \
-  UNDERLYING_EXIT_CODE="$RC" \
-  FINAL_EXIT_CODE="$FINAL_RC" \
-  REPORT_FILE="$OUT_FILE" \
-  LATEST_REPORT_LINK="$LATEST_LINK" \
-  METRICS_CLOSED_TRADES="$METRICS_CLOSED_TRADES" \
-  METRICS_WIN_RATE="$METRICS_WIN_RATE" \
-  METRICS_REALIZED_PNL="$METRICS_REALIZED_PNL" \
-  METRICS_AVG_PNL="$METRICS_AVG_PNL" \
-  METRICS_PROFIT_FACTOR="$METRICS_PROFIT_FACTOR" \
-  METRICS_MAX_DRAWDOWN_BASE="$METRICS_MAX_DRAWDOWN_BASE" \
-  METRICS_MAX_DRAWDOWN_PCT="$METRICS_MAX_DRAWDOWN_PCT" \
-  STATUS_JSON_TMP_FILE="$STATUS_JSON_TMP_FILE" \
-  "$PYTHON_CMD" - <<'PY'
-import json
-import os
-
-payload = {
-    "timestamp_utc": os.environ["TIMESTAMP_UTC"],
-    "run_mode": os.environ["RUN_MODE"],
-    "verdict": os.environ["VERDICT"],
-    "primary_reason": os.environ["PRIMARY_REASON"],
-    "underlying_exit_code": int(os.environ["UNDERLYING_EXIT_CODE"]),
-    "final_exit_code": int(os.environ["FINAL_EXIT_CODE"]),
-    "report_file": os.environ["REPORT_FILE"],
-    "latest_report_link": os.environ["LATEST_REPORT_LINK"],
-    "metrics": {
-        "closed_trades": int(os.environ["METRICS_CLOSED_TRADES"]),
-        "win_rate": float(os.environ["METRICS_WIN_RATE"]),
-        "realized_pnl": float(os.environ["METRICS_REALIZED_PNL"]),
-        "avg_pnl": float(os.environ["METRICS_AVG_PNL"]),
-        "profit_factor": float(os.environ["METRICS_PROFIT_FACTOR"]),
-        "max_drawdown_base": float(os.environ["METRICS_MAX_DRAWDOWN_BASE"]),
-        "max_drawdown_pct": float(os.environ["METRICS_MAX_DRAWDOWN_PCT"]),
-    },
-}
-
-with open(os.environ["STATUS_JSON_TMP_FILE"], "w", encoding="utf-8") as f:
-    json.dump(payload, f, ensure_ascii=True, indent=2)
-PY
-
-  mv "$STATUS_JSON_TMP_FILE" "$STATUS_JSON_FILE"
+  write_status_json
   echo "Status JSON file: $STATUS_JSON_FILE" | tee -a "$OUT_FILE"
 fi
+
+append_verdict_history
 
 if [[ "${STATUS_PROM_ENABLED,,}" == "true" ]]; then
   STATUS_PROM_TMP_FILE="${STATUS_PROM_FILE}.tmp"

@@ -12,12 +12,12 @@ Optionally writes `results/scorecards/latest_status.json` when `STATUS_JSON_ENAB
 Optionally writes `results/scorecards/latest_status.prom` when `STATUS_PROM_ENABLED=true`.
 Exit codes: `0` = GO, `2` = HOLD, `3` = NO-GO.
 Exit code `1` can indicate an early failure, including a required AutoResearch
-precheck or bridge failure. Such failures occur before status export and can
-leave the previous `latest_status.*` files and `latest_scorecard.txt` link
-untouched. Check the current run's console output and, if created, its
-timestamped report rather than treating those status files as fresh. A
-scorecard process that returns an unexpected code after it has run is instead
-exported with `VERDICT=ERROR`.
+precheck or bridge failure. Since v1.0.31 such failures are published: the
+script installs an `EXIT` trap, so an abort replaces `latest_status.env` with an
+`ERROR`/`HOLD` marker for the current run and appends a verdict-history record
+instead of leaving the previous verdict standing. The timestamped report of the
+aborted run is still the place to read the cause. A scorecard process that
+returns an unexpected code after it has run is exported with `VERDICT=ERROR`.
 Missing, invalid, or empty journal inputs are treated as `HOLD` because they indicate insufficient usable data rather than a scorecard execution failure.
 When strict maintenance override is used (`AUTORESEARCH_STRICT_ALLOW_MAINTENANCE_FALLBACK=true`),
 weekly automation returns a dedicated degraded-mode code (default `4`) for the run.
@@ -37,6 +37,20 @@ Machine-readable report markers are included for log parsers:
 - `FINAL_EXIT_CODE`
 - `REPORT_FILE`
 - `LATEST_REPORT_LINK`
+- `exit_code`, `started_unixtime`, `finished_unixtime` (lowercase:
+  the scheduled-task contract read by `src.task_status`, which is what lets the
+  `TradingScheduledTask*` alerts cover `scorecard.timer`)
+
+`results/scorecards/verdict_history.jsonl` (append-only, one record per run;
+`SCORECARD_VERDICT_HISTORY_FILE` relocates it, `off` disables it):
+- `schema_version`, `timestamp_utc`, `verdict`, `run_mode`
+- `underlying_exit_code`, `final_exit_code`, `primary_reason`, `profile`
+- `report_file`, and the scorecard `metrics` object
+
+The history is the last evidence fallback for the live gate, the tuning chain
+and the health exporter when both markers are missing, and it is the source the
+tuning cycle's recent-`NO-GO` guard reads. Read it with
+`python -m scripts.scorecard_verdict_history show --limit 5` or `... stats`.
 
 `latest_status.json` fields (when enabled):
 - `timestamp_utc`
@@ -258,6 +272,11 @@ Scheduled-task, capacity, and analytics gauges come from the same timer:
   no parseable code, so garbage cannot raise a failure alert), and
   `trading_task_last_run_age_seconds{task="..."}`. Only listed tasks are
   published, so a profile that does not run a timer exports nothing for it.
+  The Pi unit lists `daily_review`, `scorecard`
+  (`results/scorecards/latest_status.env`) and `weekly_tuning`
+  (`results/tuning/latest_status.env`): both weekly wrappers write a marker on
+  every attempt, including a crash before their main step, so a stopped timer is
+  visible as a stale or failed task instead of as silence.
 - `TRADING_DISK_PATHS` (comma-separated) exports `trading_disk_total_bytes`,
   `trading_disk_free_bytes`, and `trading_disk_used_percent` per path using
   `shutil.disk_usage`, so no extra exporter is needed on the Pi. It defaults to
@@ -312,7 +331,11 @@ missing/stale research inputs, a missing or stale bot log, a stale trade
 journal, missing or stale market recorder data, missing operational
 metrics, a failed / never-reported / overdue scheduled task
 (`TradingScheduledTaskFailed`, `TradingScheduledTaskMarkerMissing`,
-`TradingScheduledTaskStale`), low or nearly full disk
+`TradingScheduledTaskStale`), a weekly tuning cycle that ran but was refused by
+its safety guard (`TradingTuningCycleApplyBlocked`, warning - the verdict was
+missing, older than `TUNING_MAX_VERDICT_AGE_SECONDS`, or preceded by a `NO-GO`,
+and `results/scorecards/latest_tuning_cycle_summary.json` records the reason),
+low or nearly full disk
 (`TradingDiskSpaceLow`, `TradingDiskUsedPercentHigh`), and an unreachable
 analytics database (`TradingAnalyticsDatabaseUnavailable`), live trading that is
 configured without a fresh `GO` verdict (`TradingLiveModeScorecardGateBlocked`,

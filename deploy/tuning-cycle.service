@@ -10,5 +10,14 @@ Group=trading
 WorkingDirectory=/opt/trading_2
 EnvironmentFile=/opt/trading_2/.env
 ExecStart=/bin/bash /opt/trading_2/scripts/run_weekly_tuning_cycle.sh
+# The wrapper always exits with the cycle's code: 0 ran, 3 the safety guard
+# blocked the apply (no scorecard evidence, stale verdict, or a recent NO-GO),
+# anything else a failed step. A blocked apply is an expected operational state,
+# not a broken unit - results/tuning/latest_status.env carries the code and
+# TradingScheduledTaskFailed alerts on it.
+SuccessExitStatus=0 3
+# Backstop above the wrapper's own TUNING_CYCLE_TIMEOUT_SECONDS (1800s default):
+# a hung cycle must still leave its status marker and release the timer.
+TimeoutStartSec=2100
 StandardOutput=append:/opt/trading_2/logs/tuning_cycle.log
 StandardError=append:/opt/trading_2/logs/tuning_cycle.log
