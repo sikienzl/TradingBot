@@ -27,6 +27,10 @@ PROSE_RE = re.compile(r"\b(deploy|scripts)/([A-Za-z0-9_.-]+)")
 # Staged package paths inside the staging step, including "${PKG}/deploy/name".
 STAGED_RE = re.compile(r"(?:\$\{PKG\}/|^)(deploy|scripts)/([A-Za-z0-9_.-]+)$")
 EXEC_START_RE = re.compile(r"^(ExecStart|ExecStartPre|ExecStartPost|ExecStop)=(.*)$", re.MULTILINE)
+# A staged wrapper invokes its Python helpers as "${ROOT_DIR}/scripts/name" or
+# "-m scripts.module", so those files have to ship with the wrapper.
+WRAPPER_CALL_RE = re.compile(r"\$\{?ROOT_DIR\}?/scripts/([A-Za-z0-9_.-]+)")
+WRAPPER_MODULE_RE = re.compile(r"-m\s+scripts\.([A-Za-z0-9_]+)")
 
 
 def _staging_step() -> str:
@@ -153,6 +157,32 @@ class PiPackageManifestTest(unittest.TestCase):
                         staged,
                         f"{path} runs -m scripts.{module}, which is not staged",
                     )
+
+    def test_staged_wrappers_invoke_staged_scripts(self) -> None:
+        """A staged wrapper must not call a helper that the package omits.
+
+        ``scripts/run_weekly_tuning_cycle.sh`` runs ``scripts/run_tuning_cycle.py``
+        and ``scripts/run_weekly_scorecard.sh`` appends through
+        ``-m scripts.scorecard_verdict_history``; neither appears in a unit's
+        ExecStart, so the ExecStart check above cannot see them.
+        """
+        staged = staged_paths()
+        for path in sorted(staged):
+            if not path.endswith(".sh"):
+                continue
+            text = (ROOT / path).read_text(encoding="utf-8")
+            for script in WRAPPER_CALL_RE.findall(text):
+                self.assertIn(
+                    f"scripts/{script}",
+                    staged,
+                    f"{path} runs scripts/{script}, which is not staged",
+                )
+            for module in WRAPPER_MODULE_RE.findall(text):
+                self.assertIn(
+                    f"scripts/{module}.py",
+                    staged,
+                    f"{path} runs -m scripts.{module}, which is not staged",
+                )
 
 
 if __name__ == "__main__":

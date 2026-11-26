@@ -95,6 +95,34 @@ a version heading is assigned when a release is prepared.
   marker and JSON output) and five reconciliation tests in
   `tests/test_bot_runtime.py` (skipped in dry-run, skipped when disabled, reuses
   the bot exchange, never raises, and runs before the loop).
+- `src/scorecard_verdict_history.py`, a layer-1 append-only JSONL history of
+  every scorecard verdict. `latest_status.(json|env)` only ever held the last
+  run, so a crashed cycle left the previous - often `GO` - marker in place and
+  nothing recorded how often the gate had recently said `NO-GO`. Each record
+  carries `schema_version`, `timestamp_utc`, `verdict`, `run_mode`, the exit
+  codes, `primary_reason`, `profile`, `report_file` and the scorecard metrics,
+  with a `(timestamp_utc, verdict, report_file)` identity so a rerun of the same
+  report is a duplicate rather than a second entry. `append_verdict_record()`
+  repairs a torn final line inside an exclusive lock, `read_verdict_history()`
+  reads only a bounded tail (line limit **and** byte cap), and
+  `resolve_scorecard_status()` returns the newest usable evidence from JSON
+  marker, env marker, or history - in that order - tagged with its `source`.
+  Every reader fails closed to `None`/empty rather than raising.
+- `scripts/scorecard_verdict_history.py`, the operator CLI (`append`, `show`,
+  `stats`) used by the scorecard wrapper and readable by hand. `append` always
+  exits `0`: recording history must never change the scorecard's own verdict
+  or exit code.
+- `tests/test_scorecard_verdict_history.py` (27 tests: schema and identity,
+  idempotent append, torn-line repair, tail reads across chunk boundaries, the
+  byte cap, streak/stats/age helpers, and the JSON -> env -> history precedence
+  of `resolve_scorecard_status()` including a malformed marker that must not
+  hide a usable history entry).
+- `tests/test_run_tuning_cycle.py` (26 tests: `load_status()` evidence
+  precedence for every verdict and for empty/malformed markers, the safety
+  guard's verdict-age and history-based recent-`NO-GO` checks, the orchestrator
+  exiting `3` with a readable summary instead of a traceback when no evidence
+  exists, and the real wrapper run end-to-end - including a missing interpreter
+  - with its task marker parsed back through `src.task_status`).
 
 ### Changed
 
@@ -129,6 +157,76 @@ a version heading is assigned when a release is prepared.
   `enabled 0` and can never match them.
 - `tests/test_architecture.py` layers the four new modules (layer 1) and caps
   `src/fill_reconciliation.py` at 581 lines in the size ratchet.
+- `scripts/run_weekly_scorecard.sh` appends one verdict-history record per run
+  and writes its status marker from an `EXIT` trap, so an AutoResearch precheck
+  abort, a missing interpreter, or any other early failure now replaces the
+  stale marker instead of leaving the previous verdict in place. The marker
+  gained the lowercase `exit_code` / `started_unixtime` / `finished_unixtime`
+  keys, which is what lets the existing `TradingScheduledTask*` alerts cover
+  `scorecard.timer` without a new exporter. `SCORECARD_VERDICT_HISTORY_FILE`
+  selects the file; `off` disables it.
+- The tuning chain now reads scorecard evidence the same way the live gate
+  does. `scripts/recommend_tuning_change.py` gained `load_status()` plus
+  `--status-env` and `--verdict-history`, and reports the `status_source` it
+  used; `scripts/run_tuning_cycle.py` gained `--status-env`,
+  `--verdict-history` and `--max-verdict-age-seconds` (default 777600 s) and
+  resolves JSON -> env -> history through
+  `src.scorecard_verdict_history.resolve_scorecard_status()`. The recent-`NO-GO`
+  guard prefers the verdict history and only falls back to scraping report
+  filenames when the history is disabled.
+- `scripts/run_weekly_tuning_cycle.sh` writes a scheduled-task marker to
+  `results/tuning/latest_status.env` for every attempt through an `EXIT` trap,
+  resolves the interpreter after the trap is installed, and bounds the cycle
+  with `timeout` (`TUNING_CYCLE_TIMEOUT_SECONDS=1800`, `0` disables). New
+  settings: `TUNING_STATUS_ENV`, `TUNING_VERDICT_HISTORY_FILE`,
+  `TUNING_MAX_VERDICT_AGE_SECONDS`, `TUNING_STATUS_FILE`,
+  `TUNING_CYCLE_TIMEOUT_SECONDS`.
+- `deploy/tuning-cycle.service` documents the cycle's exit codes and accepts
+  `3` (safety guard refused the apply) as a clean unit exit; the code stays
+  visible in the task marker. Both weekly timers set `Unit=` and
+  `AccuracySec=30s`, and `TimeoutStartSec=2100` backstops a hung cycle.
+- `deploy/trading-operational-health.service` lists `scorecard` and
+  `weekly_tuning` in `TRADING_TASK_STATUS_FILES`, and a new
+  `TradingTuningCycleApplyBlocked` rule fires when `weekly_tuning` exits `3`.
+  `scripts/install_pi.sh` creates and owns `results/scorecards` and
+  `results/tuning` before the first timer fires.
+- `.github/workflows/release.yml` stages `scripts/run_tuning_cycle.py` and
+  `scripts/scorecard_verdict_history.py`, which the Pi wrappers invoke but the
+  package never copied. `.github/scripts/tests/test_pi_package_manifest.py`
+  now also scans staged `.sh` wrappers for `${ROOT_DIR}/scripts/...` and
+  `-m scripts....` calls, so a wrapper cannot ship without its helper.
+- `tests/test_architecture.py` layers `src/scorecard_verdict_history.py`
+  (layer 1) and caps it at 500 lines in the size ratchet.
+
+### Fixed
+
+- The weekly tuning cycle aborted with `FileNotFoundError` on a default single
+  node Raspberry Pi install: `scripts/run_tuning_cycle.py` opened
+  `results/scorecards/latest_status.json` unconditionally, and that JSON marker
+  only exists when `STATUS_JSON_ENABLED=true`, which the Pi profile keeps off.
+  The cycle now treats every evidence source as optional and, when none is
+  usable, writes a `status: blocked` cycle summary and exits `3` instead of
+  raising - with `--apply` the deployment `.env` is left untouched and no
+  backup directory is created.
+- `scripts/recommend_tuning_change.py` reported `verdict: UNKNOWN` on the same
+  Pi profile, so its recommendation silently degraded to `no_change` without
+  saying why. It now reads the uppercase env marker and the verdict history and
+  records which source answered.
+- A scorecard or tuning cycle that died before writing its marker left the
+  previous verdict and the previous task marker in place, which made a dead
+  timer look healthy: `TradingScheduledTaskStale` could not fire because the
+  marker still looked fresh. Both wrappers now publish a marker on every exit
+  path.
+- `scripts/run_weekly_tuning_cycle.sh` exited with the cycle's code but wrote
+  no marker, so `TradingScheduledTaskFailed` never covered it; and a
+  `PYTHON_BIN` override pointing at a non-existent file was accepted and only
+  failed later with exit `127`. The override is now validated up front and
+  recorded as `reason=python_not_found`.
+- `scripts/run_weekly_scorecard.sh` named its report after the start second, so
+  two attempts within the same second overwrote one report file and - because the
+  verdict-history record identity is the report name - collapsed into a single
+  history record, hiding one attempted run from the tuning `NO-GO` brake. Report
+  and metrics names now carry the process id as well.
 
 ## v1.0.31 - 2026-11-26
 

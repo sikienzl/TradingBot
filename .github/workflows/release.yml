@@ -66,6 +66,8 @@ jobs:
           cp scripts/run_weekly_scorecard.sh \
              scripts/run_node_exporter_textfile_example.sh \
              scripts/run_weekly_tuning_cycle.sh \
+             scripts/run_tuning_cycle.py \
+             scripts/scorecard_verdict_history.py \
              scripts/apply_tuning_recommendation.py \
              scripts/recommend_tuning_change.py \
              scripts/postgresql-analytics-backup \
@@ -144,6 +146,10 @@ jobs:
             "${PKG}/scripts/install_pi.sh"
             "${PKG}/scripts/install_monitoring_pi.sh"
             "${PKG}/scripts/run_weekly_tuning_cycle.sh"
+            "${PKG}/scripts/run_tuning_cycle.py"
+            "${PKG}/scripts/scorecard_verdict_history.py"
+            "${PKG}/scripts/recommend_tuning_change.py"
+            "${PKG}/scripts/apply_tuning_recommendation.py"
             "${PKG}/deploy/tuning-cycle.service"
             "${PKG}/deploy/tuning-cycle.timer"
             "${PKG}/scripts/postgresql-analytics-backup"

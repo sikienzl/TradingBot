@@ -202,6 +202,62 @@ overrides are the CLI flags `--scorecard-status-json`, `--scorecard-status-env`,
 `--no-require-go-verdict`. `rollback` is never gated so a known-good release can
 always be restored. See [Monitoring](MONITORING.md).
 
+### Scorecard verdict history
+
+`latest_status.json` and `latest_status.env` only ever hold the *last* run, so a
+scorecard cycle that aborts early leaves the previous verdict standing, and
+nothing records how often the gate recently said `NO-GO`.
+`src.scorecard_verdict_history` keeps that history: `scripts/run_weekly_scorecard.sh`
+appends one JSONL record per run - verdict, run mode, exit codes, reason,
+profile, report file and the scorecard metrics - to an append-only file. The
+`(timestamp_utc, verdict, report_file)` triple is the record identity, so
+re-running the same report appends nothing. A torn final line is repaired inside
+an exclusive lock, and every reader only reads a bounded tail (line limit and
+byte cap) and fails closed to "no evidence" instead of raising.
+
+| Variable | Default | Description |
+|---|---|---|
+| `SCORECARD_VERDICT_HISTORY_FILE` | `results/scorecards/verdict_history.jsonl` | Append-only verdict history. A relative path is resolved against the deployment root; `off`, `none`, `false`, `no` or `disabled` turns it off |
+
+```bash
+# Newest verdicts, oldest first
+.venv/bin/python -m scripts.scorecard_verdict_history show --limit 5
+# Streaks, verdict counts and the age of the newest record
+.venv/bin/python -m scripts.scorecard_verdict_history stats
+```
+
+`resolve_scorecard_status()` is the shared reader used by both tuning scripts: it
+prefers the JSON marker, falls back to the env marker, and falls back again to
+the newest history record, tagging the result with the `source` it used. A
+deployment that only has the env marker - the default Raspberry Pi profile - is
+therefore no longer treated as having no evidence. The live-trading gate in
+`src/scorecard_gate.py` deliberately keeps reading only the two markers: after a
+scorecard cycle aborts early, the stale `GO` marker is not evidence about the
+current record, so the gate fails closed instead of falling back to history.
+
+### Weekly tuning cycle evidence chain
+
+The tuning cycle may only change parameters when the scorecard evidence supports
+it, so it reads the same three sources in the same order. `--apply` is refused
+(`exit 3`, `apply_effective: false`, the deployment `.env` untouched) when no
+source is usable, when the verdict is not `GO`, when the newest verdict is older
+than the age limit, or when a recent verdict was `NO-GO`.
+
+| Variable | Default | Description |
+|---|---|---|
+| `TUNING_STATUS_JSON` | `results/scorecards/latest_status.json` | JSON verdict marker; absent on the default Pi profile |
+| `TUNING_STATUS_ENV` | `results/scorecards/latest_status.env` | Env verdict marker the scorecard always writes |
+| `TUNING_VERDICT_HISTORY_FILE` | `$SCORECARD_VERDICT_HISTORY_FILE`, else `results/scorecards/verdict_history.jsonl` | History fallback and the source of the recent `NO-GO` guard; `off` disables it and reverts the guard to scraping report filenames |
+| `TUNING_MAX_VERDICT_AGE_SECONDS` | `777600` | Nine days: one missed weekly scorecard plus slack. `0` disables the age check |
+| `TUNING_STATUS_FILE` | `results/tuning/latest_status.env` | Scheduled-task marker for this unit, exported by the health exporter |
+| `TUNING_CYCLE_TIMEOUT_SECONDS` | `1800` | `timeout` wrapper around the cycle so a hung run still leaves its marker; `0` disables |
+
+The wrapper exits with the cycle's code: `0` ran, `3` the safety guard refused
+the apply, anything else a failed step. `deploy/tuning-cycle.service` accepts
+`0` and `3` as clean unit exits and records the code in the task marker, which
+is what `TradingScheduledTaskFailed` and the new `TradingTuningCycleApplyBlocked`
+alert read. See [Monitoring](MONITORING.md).
+
 ## Fill reconciliation against the exchange
 
 The journal records what the bot *submitted*. Reconciliation asks what the

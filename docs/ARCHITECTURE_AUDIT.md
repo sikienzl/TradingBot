@@ -17,8 +17,8 @@ stays **[⚠️ Partial]**.
 | 4 | Hard risk and kill switch | **[✅ Implemented]** The daily anchor, loss-streak pause, hourly BUY budget and re-entry cooldowns are persisted in `TRADING_RISK_STATE_FILE` and restored at startup; unreadable or unwritable risk state blocks new entries and latches the persistent kill switch in live mode. | **[⚠️ Partial]** Same persisted state per node, but the file and the stop marker are host-local; no cluster-wide shared switch or distributed state store is implemented. |
 | 5 | Execution and costs | **[✅ Implemented]** Exchange fill/fee records, a pre-trade taker-fee + spread + slippage cost budget (`MAX_ENTRY_COST_BPS`), and a Kraken `cl_ord_id` per submission are in place; a submission timeout is reconciled instead of resubmitted and an unknown outcome latches the stop marker. Partial fills keep their requested amount in the journal, and `src.fill_reconciliation` now compares every journalled live order against the Kraken order history automatically (bot startup plus an hourly timer) and reports unmatched orders and quantity/fee differences. | **[⚠️ Partial]** Same controls and the same reconciliation code, but live exchange use remains unvalidated on the cluster. |
 | 6 | Single-Pi vs cluster operations | **[⚠️ Partial]** Local process lock, persisted live snapshot, startup balance comparison, open-order refusal, uncertain-order latch, and automatic journal-to-exchange fill reconciliation with alerting exist; deriving a trusted position snapshot from Kraken fills still needs operator review. | **[⚠️ Partial]** Optional account-scoped PostgreSQL advisory lease supplements local locks; shared PostgreSQL config and cluster deployment are operator prerequisites, the reconciliation marker is host-local, and fill-to-position reconstruction remains manual. |
-| 7 | Evaluation and scorecard | **[✅ Implemented]** GO/HOLD/NO-GO and HOLD for insufficient data are implemented, with Pi systemd automation. A fresh `GO` verdict is now a prerequisite for `DRY_RUN=false` and for `scripts/manage_model_release.py promote`. | **[⚠️ Partial]** Same gate code and monitoring rules; the inspected cluster deployment still does not show scorecard automation as part of its active bot topology, so the gate reads the marker produced by the Pi/cluster `scorecard-status` timer. |
-| 8 | Monitoring and alerting | **[⚠️ Partial]** Pi installer configures Alertmanager, a private HTTPS webhook relay, and kill-switch/Hailo/research health alerts plus bounded journal/bot-log/market-data staleness probes, scheduled-task exit-status markers, disk-capacity gauges, fill-reconciliation presence/completeness/mismatch/staleness gauges, and an optional analytics-database probe; operator webhook configuration and staging delivery validation remain required. | **[⚠️ Partial]** Alert rules and relay are available in the repository, but cluster-specific installation/configuration and live receiver validation remain outstanding. |
+| 7 | Evaluation and scorecard | **[✅ Implemented]** GO/HOLD/NO-GO and HOLD for insufficient data are implemented, with Pi systemd automation. A fresh `GO` verdict is a prerequisite for `DRY_RUN=false` and for `scripts/manage_model_release.py promote`, and every run is additionally appended to an immutable per-run verdict history (`src.scorecard_verdict_history.py`) that the weekly tuning cycle reads as its evidence chain. | **[⚠️ Partial]** Same gate code and monitoring rules; the inspected cluster deployment still does not show scorecard automation as part of its active bot topology, so the gate reads the marker produced by the Pi/cluster `scorecard-status` timer. |
+| 8 | Monitoring and alerting | **[⚠️ Partial]** Pi installer configures Alertmanager, a private HTTPS webhook relay, and kill-switch/Hailo/research health alerts plus bounded journal/bot-log/market-data staleness probes, scheduled-task exit-status markers for the daily review, weekly scorecard and weekly tuning units, disk-capacity gauges, fill-reconciliation presence/completeness/mismatch/staleness gauges, and an optional analytics-database probe; operator webhook configuration and staging delivery validation remain required. | **[⚠️ Partial]** Alert rules and relay are available in the repository, but cluster-specific installation/configuration and live receiver validation remain outstanding. |
 
 ## Findings and evidence
 
@@ -232,9 +232,32 @@ publishes `live_enabled 0` and can never match either rule.
 `tests/test_alert_rules.py` cover missing, stale, `HOLD`/`NO-GO`/`ERROR`,
 maintenance-override and marker-precedence paths.
 
+Since `src.scorecard_verdict_history` the verdict is also durable history rather
+than only the last snapshot. `scripts/run_weekly_scorecard.sh` appends one JSONL
+record per run (verdict, run mode, exit codes, reason, profile, report file and
+the scorecard metrics) to `results/scorecards/verdict_history.jsonl`, and the
+same wrapper installs an `EXIT` trap so an early abort publishes an
+`ERROR`/`HOLD` marker for the current run instead of leaving the previous
+verdict standing. The `(timestamp_utc, verdict, report_file)` triple is the
+record identity, a torn final line is repaired inside an exclusive lock, and
+every reader only reads a bounded tail (line limit plus byte cap) and fails
+closed to "no evidence" instead of raising. `resolve_scorecard_status()` prefers
+the JSON marker, then the env marker, then the newest history record and tags
+the result with the `source` used; the weekly tuning chain reads through it, so
+the default Pi profile - where `STATUS_JSON_ENABLED=false` and only the env
+marker exists - is no longer treated as having no evidence. The live-trading
+gate deliberately keeps reading only the two markers: after an aborted cycle the
+stale `GO` marker is not evidence about the current record, so it fails closed
+rather than falling back to history. `tests/test_scorecard_verdict_history.py`
+and `tests/test_run_tuning_cycle.py` cover append/dedupe, torn-tail recovery,
+the three-source precedence, the age limit, the recent `NO-GO` guard and the
+wrapper marker.
+
 **Next:** Run the weekly scorecard on the cluster profile itself (the inspected
 `.74`/`.75` topology has no scorecard unit) so the gate has local evidence there,
-and keep the Hailo shadow runbook aligned with the promotion gate.
+and keep the Hailo shadow runbook aligned with the promotion gate. Verdict
+history retention is an operator step on both profiles: the file is append-only
+and grows once per run.
 
 ### 8. Monitoring and alerting
 
@@ -271,6 +294,22 @@ the same 30 s timer, and the analytics probe stays optional there. No
 organization-specific webhook credential or staging delivery evidence is
 included in Git.
 
+The scheduled-task probe covered only the two daily report wrappers, so the
+weekly scorecard and weekly tuning units could fail - or never start - without
+any signal, and `scorecard.timer`/`tuning-cycle.timer` did not name their
+`Unit=`. Both weekly wrappers now write the same lowercase `exit_code` marker
+through an `EXIT` trap, the Pi health unit lists `daily_review`, `scorecard` and
+`weekly_tuning` in `TRADING_TASK_STATUS_FILES`, both timers declare `Unit=` with
+`AccuracySec=30s`, and `deploy/tuning-cycle.service` accepts exit `3` (the safety
+guard refused to change parameters) as a clean unit exit under a
+`TimeoutStartSec=2100` backstop above the wrapper's own cycle timeout. The
+matching `TradingTuningCycleApplyBlocked` rule names the refusal explicitly;
+`TradingScheduledTaskFailed` still fires for exit `3` as well, which is
+deliberate - the task marker and the tuning cycle summary distinguish the cause.
+`tests/test_run_tuning_cycle.py` drives the wrapper itself and asserts the marker
+contents, including the missing-interpreter case that previously exited `127`
+with no marker at all.
+
 Observed packaging defect (v1.0.28, fixed in v1.0.29): the Pi release archive did
 not stage `deploy/trading-operational-health.service`/`.timer`,
 `deploy/trading-alert-relay.service`, the two `deploy/*.env.example` templates,
@@ -281,6 +320,14 @@ the published package. The staging list now carries them, and
 `.github/scripts/tests/test_pi_package_manifest.py` compares the release.yml
 staging list against the paths both Pi installers read, so the two profiles stay
 independently installable.
+
+Observed packaging defect (found while wiring the verdict history): the release
+staging list carried `scripts/run_weekly_tuning_cycle.sh` but not the
+`scripts/run_tuning_cycle.py` it execs, so a packaged Pi install would have
+failed the tuning timer with a missing file. The list now carries that script and
+the verdict-history helper, and the manifest test additionally scans every
+staged wrapper for `${ROOT_DIR}/scripts/...` calls and `-m scripts.<name>`
+modules, so a wrapper whose helper is unstaged now fails the packaging test.
 
 **Next:** Configure the private receiver on each deployment and validate
 delivery in staging. Keep the dashboard read-only and the Pi monitoring path
@@ -309,7 +356,9 @@ independent from cluster services.
    training/compilation to the future x86 worker only after it exists.
 6. **P2: Close operational visibility gaps.** Alert receivers, kill-switch,
    Hailo, research-feed, scorecard, portfolio-snapshot, data-staleness,
-   scheduled-task exit-status, disk-capacity, analytics-database, live-mode
-   scorecard-gate and fill-reconciliation alerts are implemented; running the
-   weekly scorecard on the cluster profile and staging delivery evidence for the
-   private webhook remain. Retain a tested standalone Pi dashboard/scorecard path.
+   scheduled-task exit-status (daily review, weekly scorecard and weekly
+   tuning), disk-capacity, analytics-database, live-mode scorecard-gate,
+   fill-reconciliation and tuning-apply-refusal alerts are implemented; running
+   the weekly scorecard on the cluster profile and staging delivery evidence for
+   the private webhook remain. Retain a tested standalone Pi
+   dashboard/scorecard path.

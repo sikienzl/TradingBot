@@ -6,6 +6,10 @@ Requires=tuning-cycle.service
 # Run every Sunday at 09:20 local time (after weekly scorecard at 09:00)
 OnCalendar=Sun *-*-* 09:20:00
 Persistent=true
+# Explicit target and a tight accuracy: the cycle reads the scorecard verdict
+# written the same morning, so a late fire must not slip into the next slot.
+Unit=tuning-cycle.service
+AccuracySec=30s
 
 [Install]
 WantedBy=timers.target
