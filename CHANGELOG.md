@@ -47,11 +47,70 @@ a version heading is assigned when a release is prepared.
   in `tests/test_bot_bootstrap.py`, `tests/test_bot_runtime.py`,
   `tests/test_manage_model_release_gate.py` (promotion refusal, override flags,
   ungated rollback) and gauge-level cases in `tests/test_alert_rules.py`.
+- `src/risk_state.py`, a durable store for the hard risk guardrails. The daily
+  portfolio-value anchor, the consecutive-loss counter and BUY pause, the hourly
+  BUY budget and the per-coin re-entry timestamps are written atomically to
+  `TRADING_RISK_STATE_FILE` (default `.trading_risk_state.json`) after every
+  close, BUY and daily anchor, and restored at startup. A missing file starts
+  neutral; an unreadable or invalid file marks the state `unreadable`, and
+  `src/risk_guardrails.can_open_new_positions` then refuses every new entry with
+  an explicit reason instead of guessing.
+- `src/risk_guardrails.py`, the guardrail evaluation that used to be inline:
+  daily-loss budget, loss-streak pause, hourly BUY budget (pruned before the
+  comparison) and `resolve_reentry_cooldown_seconds`, which scales the re-entry
+  cooldown with the ATR regime and falls back to the configured base when ATR is
+  missing or not positive.
+- `src/execution_costs.py`, a pre-trade cost estimate. The taker fee comes from
+  the parsed market (`taker`, falling back to `LIVE_TAKER_FEE_RATE`), the spread
+  from the quote that already passed the spread gate, and slippage from
+  `LIVE_SLIPPAGE_RATE` (default `0.001`). `execution_cost_block_reason` rejects
+  an entry whose total exceeds `MAX_ENTRY_COST_BPS` (default `120`, below `1`
+  disables the gate) after the spread gate and before any paid news or LLM call,
+  and the estimate is journaled in the new `est_*` columns. A quote that cannot
+  be matched to the reference price contributes no spread rather than an invented
+  one.
+- `src/order_submission.py`, idempotent market-order submission. Every live
+  order carries a deterministic Kraken `cl_ord_id` derived from the run id, the
+  config hash, the iteration, the coin and the action. On `ccxt.NetworkError`
+  the order is looked up in the open and closed order lists and accounted for
+  instead of being resubmitted; only an outcome that stays unknown latches the
+  kill switch and stops the bot, so a retry can never duplicate an order.
+- `src/kill_switch.py`, extracted from the bot so both the uncertain-order path
+  and the risk-state write path share one persistent marker
+  (`TRADING_KILL_SWITCH_FILE`). The marker is created with `O_NOFOLLOW` and never
+  written through a symlink.
+- Live mode now treats an unwritable risk-state file as live execution
+  uncertainty: it latches the kill switch and stops, matching the existing
+  ambiguous-order behaviour. Dry-run mode keeps new entries blocked instead.
+- Tests: `tests/test_risk_state.py`, `tests/test_risk_guardrails.py`,
+  `tests/test_execution_costs.py`, `tests/test_order_submission.py`,
+  `tests/test_kill_switch.py`, restart/unreadable/unwritable cases in
+  `tests/test_trading_bot_risk.py`, and cost-budget, idempotency, partial-fill
+  and journal cases in `tests/test_execution_service.py` and
+  `tests/test_trade_journal.py`.
 
 ### Changed
 
 - `src/env_file.env_bool()` accepts `quiet=True` so the 30-second health timer
   cannot spam stderr when the deployment `.env` is unreadable.
+- The trade journal gained `client_order_id`, `requested_amount_coin`,
+  `partial_fill` and the eight `est_*` cost columns. `init_journal` appends
+  missing columns to an existing file instead of reordering it, so old rows stay
+  valid; the analytics database schema is unchanged.
+- `src/execution_service.execute_real_trade` checks the kill switch before any
+  other work, applies the cost budget, and threads the client order id through
+  submission and journaling.
+- `tests/conftest.py` redirects `TRADING_RISK_STATE_FILE` into each test's own
+  temporary directory so durable risk state cannot leak between tests.
+- The environment parsers `_env_bool`, `_env_str`, `_env_symbol_int_map`,
+  `_env_symbol_float_map`, `_env_threshold_float_pairs` and
+  `_env_threshold_int_pairs` moved out of `src/bot_config.py` into the new
+  dependency-free `src/env_parsing.py` (layer 0), where they are public as
+  `env_bool`, `env_str`, `symbol_int_map`, `symbol_float_map`,
+  `threshold_float_pairs` and `threshold_int_pairs`. `src/bot_config` imports
+  them under the previous private names, so parsing behaviour is unchanged; the
+  move keeps `bot_config.py` inside its architecture line ceiling and adds
+  `tests/test_env_parsing.py`.
 
 ## v1.0.30 - 2026-11-26
 

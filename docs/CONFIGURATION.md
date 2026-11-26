@@ -33,6 +33,9 @@ environment overrides before starting the bot.
 | `PORTFOLIO_MAX_OPEN_TRADES_TIERS` | `100:3,200:4,500:5,1000:6` | Raises the concurrent slot count in later portfolio stages without changing the early small-account regime |
 | `OHLCV_TIMEFRAME` | `1h` | Candle interval |
 | `MAX_ENTRY_SPREAD_BPS` | `100` | Maximum bid/ask spread for new entries; missing or wider quotes are skipped before OHLCV/model analysis and checked again at the final candidate gate |
+| `MAX_ENTRY_COST_BPS` | `120` | Pre-trade cost budget in basis points: estimated taker fee + spread + slippage. Values below `1` disable the gate; a blocked candidate never reaches a paid news/LLM check |
+| `LIVE_TAKER_FEE_RATE` | market `taker` | Fallback taker fee as a fraction (e.g. `0.0026`) when the parsed market does not report one |
+| `LIVE_SLIPPAGE_RATE` | `0.001` | Assumed slippage as a fraction of the entry price, used only for the cost estimate |
 | `TICKER_BATCH_SIZE` | `80` | Symbols per `fetch_tickers` request (smaller is more stable) |
 | `TICKER_FETCH_RETRIES` | `2` | Retries per ticker batch on exchange/network errors |
 | `USE_TABULAR_MODEL` | `false` | Enable tabular-model signal filter |
@@ -156,13 +159,17 @@ Optional hard limits — set to `0` to disable:
 | `MAX_BUYS_PER_HOUR` | Maximum BUY trades in the last 60 minutes |
 | `LOSS_STREAK_PAUSE_THRESHOLD` | Consecutive losses before pausing entries |
 | `LOSS_STREAK_PAUSE_SECONDS` | Pause duration after a loss streak |
+| `TRADING_RISK_STATE_FILE` | `.trading_risk_state.json` | Durable store for the daily anchor, loss streak, BUY pause, hourly BUY timestamps, and re-entry cooldowns. Restored at startup, rewritten after every close, BUY, and daily anchor. A missing file starts neutral; an unreadable or invalid file blocks new entries, and a file that cannot be written blocks entries in dry-run mode and latches the kill switch in live mode |
 
 Live execution also uses `TRADING_KILL_SWITCH_FILE` (default
 `.trading_kill_switch`), `TRADING_EXECUTION_LOCK_FILE` (default
 `.trading_execution.lock`), and `LIVE_PORTFOLIO_STATE_FILE` (default
 `.live_portfolio_state.json`). An ambiguous order submission/fill outcome
 automatically creates the kill-switch marker; inspect Kraken orders, balances,
-and local state before an operator removes it.
+and local state before an operator removes it. Every live order carries a
+deterministic Kraken `cl_ord_id`; after a network timeout the bot looks the
+order up instead of resubmitting it, and only an outcome that stays unknown
+latches the switch.
 
 For multi-node execution only, set `TRADING_CLUSTER_EXECUTION_LEASE_ENABLED=true`,
 `TRADING_CLUSTER_EXECUTION_LEASE_DATABASE_URL`, and a stable
