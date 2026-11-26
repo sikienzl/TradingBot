@@ -11,6 +11,7 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from src.api_models import NewsVetoPayload
+from src.news_item_store import read_news_items, resolve_store_path
 from src.research_signal import load_research_signal_payload
 
 
@@ -26,7 +27,7 @@ def evaluate_news_veto(
 
     try:
         signal = load_research_signal_payload(config.tabular_research_signal_path)
-        items = signal.source_details.get("news_items", [])
+        items = _candidate_news_items(signal)
         now = datetime.now(UTC)
         fresh_items = [item for item in items if _item_is_fresh(item, now)]
         if not fresh_items:
@@ -42,6 +43,24 @@ def evaluate_news_veto(
         return payload.veto_buy, payload.reason
     except (AttributeError, KeyError, OSError, TypeError, ValueError, URLError) as exc:
         return True, f"provider_error:{type(exc).__name__}"
+
+
+def _candidate_news_items(signal: Any) -> list[Any]:
+    """News items for one decision, preferring the durable per-item store.
+
+    The aggregate signal file only keeps the items of the latest fetch. When
+    the fetcher maintains a store (``src.news_item_store``), the veto reads
+    that instead so the fresh-item check sees the same records a replay would.
+    A configured but empty/unreadable store yields no items and therefore a
+    veto, exactly like stale data in the aggregate file.
+    """
+    store_path = resolve_store_path({
+        "integration": getattr(signal, "integration", {}) or {},
+        "source_details": getattr(signal, "source_details", {}) or {},
+    })
+    if store_path:
+        return read_news_items(store_path)
+    return list(signal.source_details.get("news_items", []))
 
 
 def _item_is_fresh(item: Any, now: datetime) -> bool:

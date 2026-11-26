@@ -49,6 +49,7 @@ environment overrides before starting the bot.
 | `UPTREND_ENTRY_MAX_SELL_PROBA_BY_COIN` | `ONDO:0.445` | Coin-specific CatBoost sell-probability override for uptrend entry gating |
 | `UPTREND_ENTRY_MIN_PROBA_EDGE_BY_COIN` | `TRX:-0.13,ONDO:-0.055` | Coin-specific probability-edge override for uptrend entry gating |
 | `TABULAR_RESEARCH_SIGNAL_PATH` | `./data/research_signal_latest.json` | Latest AutoResearch JSON used as model input features |
+| `RESEARCH_NEWS_STORE_PATH` | `./data/research_news_items.jsonl` | Append-only per-item news store written by `scripts/fetch_research_signal.py` (`none` disables it). The bot reads it back through `integration.news_store_path` in the signal file, so no bot restart is needed to change it |
 | `AUTO_TUNE_TABULAR_CONFIDENCE` | `false` | Auto-adjust CatBoost threshold |
 | `USE_ML_MODEL` | `false` | Enable LLM signal (GPU recommended) |
 

@@ -13,7 +13,7 @@ stays **[⚠️ Partial]**.
 |---|---|---|---|
 | 1 | Data basis and model lifecycle | **[⚠️ Partial]** Paired contract/checksum manifest and atomic activation/rollback are implemented; candidate training and DFC compilation remain separate operator steps. | **[⚠️ Partial]** Same paired release tooling; DFC and target-device validation remain external, and no x86 worker is deployed. |
 | 2 | Decision pyramid and hardware fallback | **[✅ Implemented]** Volume, spread, and ATR gates run before any model or paid call, and the paid news veto runs after the pre-trade cost budget; the order is asserted end to end. Backend selection sits behind `src.inference_backend` with injected backends, and a dedicated CI job runs the Hailo→CPU→rules-only matrix with no Hailo package, device or model files installed. | **[⚠️ Partial]** Same cascade and gates; target-cluster service/device availability is not continuously exercised by CI, and a cluster fallback is only visible in the bot log. |
-| 3 | News integration | **[⚠️ Partial]** RSS items now retain `published_at`/`fetched_at`, are deduplicated, and can drive an opt-in structured final veto with a daily call limit; persistent historical item storage is not implemented. | **[⚠️ Partial]** Same code is available, but the inspected cluster has no configured paid provider/credentials; Hailo features do not consume news. |
+| 3 | News integration | **[✅ Implemented]** RSS items retain `published_at`/`fetched_at`, are deduplicated, and are additionally appended to an immutable per-item JSONL store (`src/news_item_store.py`) with a point-in-time replay helper; the opt-in structured final veto reads that store and fails closed when it has no fresh item. | **[⚠️ Partial]** Same code is available, but the inspected cluster has no configured paid provider/credentials and no store retention policy; Hailo features do not consume news. |
 | 4 | Hard risk and kill switch | **[✅ Implemented]** The daily anchor, loss-streak pause, hourly BUY budget and re-entry cooldowns are persisted in `TRADING_RISK_STATE_FILE` and restored at startup; unreadable or unwritable risk state blocks new entries and latches the persistent kill switch in live mode. | **[⚠️ Partial]** Same persisted state per node, but the file and the stop marker are host-local; no cluster-wide shared switch or distributed state store is implemented. |
 | 5 | Execution and costs | **[✅ Implemented]** Exchange fill/fee records, a pre-trade taker-fee + spread + slippage cost budget (`MAX_ENTRY_COST_BPS`), and a Kraken `cl_ord_id` per submission are in place; a submission timeout is reconciled instead of resubmitted and an unknown outcome latches the stop marker. Partial fills keep their requested amount in the journal. | **[⚠️ Partial]** Same controls, but live exchange use remains unvalidated on the cluster. |
 | 6 | Single-Pi vs cluster operations | **[⚠️ Partial]** Local process lock, persisted live snapshot, startup balance comparison, open-order refusal, and uncertain-order latch exist; fill reconstruction needs operator review. | **[⚠️ Partial]** Optional account-scoped PostgreSQL advisory lease supplements local locks; shared PostgreSQL config and cluster deployment are operator prerequisites, and fill reconstruction remains manual. |
@@ -87,15 +87,24 @@ rules-only is visible in monitoring rather than only in the bot log.
 `scripts/fetch_research_signal.py` supports RSS/Atom and Fear & Greed. RSS
 records now require a valid, non-future publication timestamp, retain per-item
 `published_at` and `fetched_at`, and deduplicate by link or content/time hash.
+Every scored item is additionally appended to an immutable per-item store
+(`src/news_item_store.py`, default `data/research_news_items.jsonl`). Each line
+is a canonical JSON record with both timestamps, the provider, a content hash
+and a stable `record_id`, so re-running the hourly fetch never duplicates an
+item and never rewrites history; `replay_news_items()` returns the point-in-time
+view a simulated decision would have seen.
 `src.api_models.NewsVetoPayload` validates `sentiment_score`, `event_risk`,
 `veto_buy`, and `reason`. `src.news_veto.evaluate_news_veto` can run only after
 momentum and cooldown checks, is disabled by default, uses a persisted daily
 call budget, and fails closed on stale/missing data or malformed/provider
-errors. Item storage is still only in the latest aggregate signal file.
+errors. When the signal file points at a store (`integration.news_store_path`,
+or `RESEARCH_NEWS_STORE_PATH`), the veto reads the durable per-item records
+instead of the aggregate file and fails closed if that store has no fresh item.
+A store failure never fails the research signal itself.
 
-**Next:** Persist immutable per-item news records for historical replay and
-validate the selected provider's structured-output support and pricing in
-staging before enabling the paid veto.
+**Next:** Validate the selected provider's structured-output support and pricing
+in staging before enabling the paid veto, and agree a retention/rotation policy
+for the per-item store on both profiles.
 
 ### 4. Hard risk and kill switch
 
@@ -273,7 +282,8 @@ independent from cluster services.
    inputs at HOLD.
 4. **P1: Make news backtest-safe.** Persist per-item published/fetched times,
    deduplicate items, validate structured veto output, and enforce final-stage
-   invocation.
+   invocation; immutable per-item storage and point-in-time replay are
+   implemented, provider staging validation and a store retention policy remain.
 5. **P1: Establish paired model releases.** Build a single versioned artifact
    manifest and atomic deployment/rollback for CPU and Hailo artifacts; assign
    training/compilation to the future x86 worker only after it exists.
