@@ -5,6 +5,8 @@ a version heading is assigned when a release is prepared.
 
 ## Unreleased
 
+## v1.0.32 - 2026-11-26
+
 ### Added
 
 - `src/inference_backend.py`, a layer-1 module that owns backend discovery and

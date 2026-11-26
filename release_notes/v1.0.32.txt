@@ -1,0 +1,261 @@
+v1.0.32 - Inference fallback proof, durable news and verdict history, fill reconciliation
+
+Date: 2026-11-26
+
+Summary
+
+This release closes audit points 2, 3, 5 and 7 for the single-node Raspberry Pi
+profile and makes the weekly evaluation chain auditable over time. Backend
+selection now sits behind one module so the hailo -> CPU -> rules_only cascade is
+provable in CI without a Hailo package, device or model file. Individual news
+items and every scorecard verdict are kept as append-only JSONL history, so a
+decision can be replayed at a point in time and a crashed cycle can no longer
+hide behind the previous marker. Every journalled live order is now compared
+against the Kraken order history, and the weekly tuning cycle reads the same
+evidence chain as the live gate. No signal, entry rule or strategy parameter
+changed.
+
+Changes
+
+Inference backend selection and pyramid ordering (audit point 2)
+- New `src/inference_backend.py` (layer 1) owns backend discovery and selection.
+  `build_tabular_predictor()` returns `None` when `USE_TABULAR_MODEL=false`, a
+  `src.inference_fallback.TabularInferenceFallback` for
+  `TABULAR_MODEL_BACKEND=hailo`, and the plain CPU predictor for `catboost`. The
+  Hailo and CatBoost modules are imported only inside the default factories, so
+  importing the selection module pulls in no backend package, and both backends
+  are injectable. Construction errors outside the documented fallback set still
+  propagate.
+- `src.bot_bootstrap.load_tabular_predictor` is now a one-line delegator; the
+  selection logic and its log messages are unchanged.
+- New CI job `Inference fallback matrix (no Hailo/CPU model)`: installs only
+  `pytest numpy pandas ccxt`, asserts `hailo_platform`, `catboost` and `sklearn`
+  are not importable, and runs the selection matrix plus the ordering test. It is
+  the single-Raspberry-Pi no-device profile in CI.
+- `tests/test_decision_pyramid_ordering.py` asserts the order volume -> spread ->
+  ATR -> inference -> pre-trade cost budget -> paid news veto -> order over the
+  real collaborators, and that a candidate rejected by a technical or cost gate
+  performs no model call and no paid call.
+
+Durable per-item news store (audit point 3)
+- New `src/news_item_store.py` (layer 1), an append-only JSONL store for the
+  individual news items behind each research signal. Every record is a canonical
+  JSON line carrying the source `published_at` and local `fetched_at` timestamps,
+  the provider, a content hash and a stable `record_id` derived from the link (or
+  the title plus publication time), so the hourly fetch is idempotent and history
+  is never rewritten. `replay_news_items(path, as_of)` returns the point-in-time
+  view a simulated decision would have seen, `read_news_items()` reads a bounded
+  tail without loading the whole file, and a torn final line is repaired inside
+  the exclusive file lock. Retention and rotation stay operator policy.
+- `scripts/fetch_research_signal.py` gained `--news-store` (default
+  `RESEARCH_NEWS_STORE_PATH`, `data/research_news_items.jsonl`, `none` disables
+  it) and publishes the path back into the signal file as
+  `integration.news_store_path` with the append counters, so the bot needs no new
+  configuration and no restart. A store failure is recorded as
+  `integration.news_store_error` and never fails the signal itself.
+- `src.news_veto.evaluate_news_veto` prefers the durable store when the signal
+  file points at one, so the paid veto sees the records the fetcher persisted
+  rather than the aggregate snapshot; a configured store with no fresh item still
+  fails closed to a veto.
+- `deploy/research-signal.service` passes `--news-store` explicitly, so the unit
+  owns the store path instead of relying on the default.
+
+Journal-to-exchange fill reconciliation (audit point 5)
+- New `src/fill_reconciliation.py`, `src/journal_order_reader.py`,
+  `src/exchange_order_history.py` and `src/fill_reconciliation_report.py` (all
+  layer 1). The journal only records what the bot submitted; reconciliation asks
+  what the exchange did. `read_journal_orders()` reads a bounded tail and
+  considers only rows written by a live execution path (`dry_run=false`),
+  `collect_exchange_orders()` pages the account order history once per symbol
+  scope with a hard scope cap and resolves an individual `cl_ord_id` with an
+  explicit server-side filter, and `_compare()` classifies every row as `matched`,
+  `partial_fill`, `unmatched` or `not_checkable` and reports quantity and fee
+  differences. Nothing is raised to the caller: missing credentials, an unreadable
+  journal or a failing exchange call make the pass `incomplete`, which is reported
+  as "nothing verified" rather than as a match. The module never places or
+  cancels an order, rewrites the journal, or touches portfolio state.
+- `run_fill_reconciliation()` in `src.bot_runtime` runs inside the execution-owner
+  lock after the live scorecard gate and before the trading loop. It is skipped
+  for a paper deployment, reuses the bot's own exchange client, logs one summary
+  line plus one line per finding, and is wrapped so a reconciliation error can
+  never stop the bot. A finding never vetoes a trade: the operator decides.
+- New `scripts/reconcile_fills.py` operator command with stable exit codes (`0`
+  clean, `1` mismatch to review, `2` incomplete pass) and `--journal`,
+  `--lookback-days`, `--page-limit`, `--symbol`, `--report`, `--json`,
+  `--findings` and `--allow-dry-run`. It refuses a `DRY_RUN=true` deployment by
+  default because a paper journal has no exchange side.
+- New `deploy/fill-reconciliation.service` / `.timer`: an hourly read-only oneshot
+  under `User=trading` with `ProtectSystem=strict` and a single `ReadWritePaths`
+  for the report directory. `SuccessExitStatus=0 1 2` keeps a finding
+  distinguishable from a broken timer. `scripts/install_pi.sh` copies both units
+  and enables the timer.
+- The operational health exporter publishes `trading_fill_reconciliation_enabled`,
+  `_present`, `_complete`, `_mismatches` and `_age_seconds` from the reconciliation
+  marker, and `deploy/trading-operational-health.service` points
+  `TRADING_FILL_RECONCILIATION_REPORT` at that marker. The exporter only reads the
+  marker, so it needs no credentials and never calls the exchange.
+
+Scorecard verdict history and the tuning evidence chain (audit point 7)
+- New `src/scorecard_verdict_history.py` (layer 1), an append-only JSONL history of
+  every scorecard verdict. `latest_status.(json|env)` only ever held the last run,
+  so a crashed cycle left the previous - often `GO` - marker in place and nothing
+  recorded how often the gate had recently said `NO-GO`. Each record carries
+  `schema_version`, `timestamp_utc`, `verdict`, `run_mode`, the exit codes,
+  `primary_reason`, `profile`, `report_file` and the scorecard metrics, with a
+  `(timestamp_utc, verdict, report_file)` identity so a rerun of the same report is
+  a duplicate rather than a second entry. `append_verdict_record()` repairs a torn
+  final line inside an exclusive lock, `read_verdict_history()` reads only a
+  bounded tail (line limit and byte cap), and `resolve_scorecard_status()` returns
+  the newest usable evidence from JSON marker, env marker, or history - in that
+  order - tagged with its `source`. Every reader fails closed to `None`/empty
+  rather than raising.
+- New `scripts/scorecard_verdict_history.py` operator CLI (`append`, `show`,
+  `stats`). `append` always exits `0`: recording history must never change the
+  scorecard's own verdict or exit code.
+- `scripts/run_weekly_scorecard.sh` appends one verdict-history record per run and
+  writes its status marker from an `EXIT` trap, so an AutoResearch precheck abort,
+  a missing interpreter, or any other early failure now replaces the stale marker
+  instead of leaving the previous verdict in place. The marker gained the lowercase
+  `exit_code` / `started_unixtime` / `finished_unixtime` keys, which is what lets
+  the existing `TradingScheduledTask*` alerts cover `scorecard.timer` without a new
+  exporter. `SCORECARD_VERDICT_HISTORY_FILE` selects the file; `off` disables it.
+- The tuning chain now reads scorecard evidence the same way the live gate does.
+  `scripts/recommend_tuning_change.py` gained `load_status()` plus `--status-env`
+  and `--verdict-history` and reports the `status_source` it used;
+  `scripts/run_tuning_cycle.py` gained `--status-env`, `--verdict-history` and
+  `--max-verdict-age-seconds` (default 777600 s) and resolves JSON -> env ->
+  history through `src.scorecard_verdict_history.resolve_scorecard_status()`. The
+  recent-`NO-GO` guard prefers the verdict history and only falls back to scraping
+  report filenames when the history is disabled.
+- `scripts/run_weekly_tuning_cycle.sh` writes a scheduled-task marker to
+  `results/tuning/latest_status.env` for every attempt through an `EXIT` trap,
+  resolves the interpreter after the trap is installed, and bounds the cycle with
+  `timeout` (`TUNING_CYCLE_TIMEOUT_SECONDS=1800`, `0` disables).
+- `deploy/tuning-cycle.service` documents the cycle's exit codes and accepts `3`
+  (safety guard refused the apply) as a clean unit exit; the code stays visible in
+  the task marker. Both weekly timers set `Unit=` and `AccuracySec=30s`, and
+  `TimeoutStartSec=2100` backstops a hung cycle.
+- `deploy/trading-operational-health.service` lists `scorecard` and `weekly_tuning`
+  in `TRADING_TASK_STATUS_FILES`, and a new `TradingTuningCycleApplyBlocked` rule
+  fires when `weekly_tuning` exits `3`. `scripts/install_pi.sh` creates and owns
+  `results/scorecards` and `results/tuning` before the first timer fires.
+
+Fixed
+- The weekly tuning cycle aborted with `FileNotFoundError` on a default single-node
+  Raspberry Pi install: `scripts/run_tuning_cycle.py` opened
+  `results/scorecards/latest_status.json` unconditionally, and that JSON marker only
+  exists when `STATUS_JSON_ENABLED=true`, which the Pi profile keeps off. Every
+  evidence source is now optional and, when none is usable, the cycle writes a
+  `status: blocked` summary and exits `3` instead of raising - with `--apply` the
+  deployment `.env` is left untouched and no backup directory is created.
+- `scripts/recommend_tuning_change.py` reported `verdict: UNKNOWN` on the same Pi
+  profile, so its recommendation silently degraded to `no_change` without saying
+  why. It now reads the uppercase env marker and the verdict history and records
+  which source answered.
+- A scorecard or tuning cycle that died before writing its marker left the previous
+  verdict and task marker in place, which made a dead timer look healthy:
+  `TradingScheduledTaskStale` could not fire because the marker still looked fresh.
+  Both wrappers now publish a marker on every exit path.
+- `scripts/run_weekly_tuning_cycle.sh` exited with the cycle's code but wrote no
+  marker, so `TradingScheduledTaskFailed` never covered it; and a `PYTHON_BIN`
+  override pointing at a non-existent file was accepted and only failed later with
+  exit `127`. The override is now validated up front and recorded as
+  `reason=python_not_found`.
+- `scripts/run_weekly_scorecard.sh` named its report after the start second, so two
+  attempts within the same second overwrote one report file and - because the
+  verdict-history record identity is the report name - collapsed into a single
+  history record, hiding one attempted run from the tuning `NO-GO` brake. Report
+  and metrics names now carry the process id as well.
+
+Packaging
+- `.github/workflows/release.yml` stages `scripts/run_tuning_cycle.py`,
+  `scripts/scorecard_verdict_history.py` and `scripts/reconcile_fills.py`, which the
+  Pi wrappers invoke but the package never copied, and lists them plus
+  `src/fill_reconciliation.py` in `required_files`.
+- `.github/scripts/tests/test_pi_package_manifest.py` now also scans staged `.sh`
+  wrappers for `${ROOT_DIR}/scripts/...` and `-m scripts....` calls, so a wrapper
+  cannot ship without its helper.
+
+Tests
+- New suites: `tests/test_inference_backend.py` (23),
+  `tests/test_decision_pyramid_ordering.py` (10),
+  `tests/test_news_item_store.py` (27), `tests/test_fill_reconciliation.py` (48),
+  `tests/test_reconcile_fills_cli.py` (9),
+  `tests/test_scorecard_verdict_history.py` (27) and
+  `tests/test_run_tuning_cycle.py` (26).
+- Extended: store-backed cases in `tests/test_news_veto.py` and
+  `tests/test_fetch_research_signal.py`; five reconciliation cases in
+  `tests/test_bot_runtime.py` (skipped in dry-run, skipped when disabled, reuses
+  the bot exchange, never raises, runs before the loop); the new alert rules and
+  gauges in `tests/test_alert_rules.py`; the seven new modules layered at level 1
+  and size-capped in `tests/test_architecture.py`.
+- Gate results on this release: `pytest tests/` 1758 passed; the slim CI
+  environment simulation 1732 passed and 2 skipped; ruff clean; mypy 0 errors
+  across 76 source files; deployment config check exit 0; release tooling tests 22
+  passed; cluster-starter tests 5 passed.
+
+Documentation
+- `docs/ARCHITECTURE_AUDIT.md` marks audit points 2, 3, 5 and 7 as implemented for
+  the single-node Raspberry Pi profile; the cluster column stays partial because
+  continuous readiness probing of the target-cluster Hailo service, a configured
+  paid news provider, live exchange validation and cluster scorecard automation
+  remain operator tasks.
+- `docs/CONFIGURATION.md` documents `RESEARCH_NEWS_STORE_PATH`,
+  `SCORECARD_VERDICT_HISTORY_FILE`, the `TRADING_FILL_RECONCILIATION_*` keys and the
+  tuning evidence chain (`TUNING_STATUS_ENV`, `TUNING_VERDICT_HISTORY_FILE`,
+  `TUNING_MAX_VERDICT_AGE_SECONDS`, `TUNING_STATUS_FILE`,
+  `TUNING_CYCLE_TIMEOUT_SECONDS`), and states explicitly that
+  `src/scorecard_gate.py` still reads only the two markers.
+- `docs/MONITORING.md` covers the reconciliation gauges, the new alert rules and the
+  scorecard and tuning task markers; `SERVER_README.md` describes the verdict
+  history and the reconciliation report; `docs/CLUSTER_ARCHITECTURE.md` describes
+  the implemented inference cascade.
+- `.env.example` and `.env.live.example` carry the new keys. `.gitignore` excludes
+  `results/` and `data/research_news_items.jsonl`.
+
+Notes
+- Release profiles: both are built, but this release changes the single-node
+  Raspberry Pi profile. The Pi stays autonomous - no Hailo-8, no second node, no
+  K3s, no PostgreSQL, no tunnel. The CM5 cluster profile is unchanged in behaviour;
+  it gains the same modules and alert rules but keeps its partial audit columns.
+- Behaviour change to expect: the weekly tuning cycle now refuses to apply when the
+  newest scorecard evidence is older than `TUNING_MAX_VERDICT_AGE_SECONDS` (default
+  777600 s, nine days) or when the verdict history holds a recent `NO-GO`. That
+  refusal exits `3`, which the unit treats as a clean exit and the new
+  `TradingTuningCycleApplyBlocked` rule reports as a warning.
+- Behaviour change to expect: on a live deployment the bot now performs a read-only
+  fill reconciliation at startup and an hourly timer pass. A mismatch never blocks
+  trading; it publishes `trading_fill_reconciliation_mismatches` and fires
+  `TradingFillReconciliationMismatch` (critical). A `DRY_RUN=true` profile publishes
+  `enabled 0` and can never match those rules.
+- Operational changes for an existing install: extract this package, re-run
+  `scripts/install_pi.sh` so the new `fill-reconciliation.timer` is enabled and
+  `results/scorecards` and `results/tuning` are created and owned, then re-run
+  `scripts/install_monitoring_pi.sh` to re-copy the alert rules, then
+  `systemctl daemon-reload`. Add the new keys to the deployment `.env` only if the
+  defaults are wrong for you. Nothing in this release requires touching a running
+  container or a cluster service.
+- New files on disk: `data/research_news_items.jsonl`,
+  `results/scorecards/verdict_history.jsonl`,
+  `results/fill_reconciliation/latest_status.env` and
+  `results/tuning/latest_status.env`. All are git-ignored runtime state under the
+  deployment directory.
+- Migration and rollback: every new store is additive and append-only, so no
+  existing file is rewritten and no migration step is required. Reverting this
+  release leaves the new JSONL files and markers inert; the tuning cycle falls back
+  to its previous report-filename heuristic and the reconciliation timer simply
+  stops running. Retention for the two JSONL stores is an operator step: they grow
+  once per run and are read through a bounded tail, so an unbounded file costs disk
+  but never memory.
+- Verification: `sha256sum -c trading-bot-pi-v1.0.32.tar.gz.sha256`, then confirm
+  that the Pi archive contains the seven new modules - `inference_backend`,
+  `news_item_store`, `fill_reconciliation`, `journal_order_reader`,
+  `exchange_order_history`, `fill_reconciliation_report` and
+  `scorecard_verdict_history` - plus `scripts/reconcile_fills.py`,
+  `scripts/scorecard_verdict_history.py`, `scripts/run_tuning_cycle.py`,
+  `deploy/fill-reconciliation.service` / `.timer` and the 27 alert rules.
+- Still open, deliberately not in this release: a cluster-wide shared kill switch
+  and distributed risk-state store, a retention policy for the news and verdict
+  JSONL stores, deriving a trusted position snapshot from Kraken fills, running the
+  weekly scorecard on the cluster profile itself, staging delivery evidence for the
+  private alert webhook, and the x86 training/compilation worker.
