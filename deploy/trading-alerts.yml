@@ -28,6 +28,24 @@ groups:
           summary: "Trading scorecard metrics are stale"
           description: "No fresh textfile metric update for over 20 minutes."
 
+      - alert: TradingLiveModeScorecardGateBlocked
+        expr: trading_scorecard_gate_enabled == 1 and trading_scorecard_gate_live_enabled == 1 and trading_scorecard_gate_allowed == 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Live trading is configured without a fresh GO scorecard verdict"
+          description: "DRY_RUN=false is configured but the scorecard gate refuses: the verdict is missing, stale, HOLD, NO-GO or ERROR. The bot refuses to start; fix the scorecard or return to DRY_RUN=true."
+
+      - alert: TradingLiveModeWithoutScorecardGate
+        expr: trading_scorecard_gate_enabled == 0 and trading_scorecard_gate_live_enabled == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Live trading runs with the scorecard gate disabled"
+          description: "SCORECARD_GATE_ENABLED=false overrides the GO prerequisite while DRY_RUN=false is configured."
+
       - alert: TradingPortfolioSnapshotStale
         expr: trading_portfolio_snapshot_age_seconds > 120
         for: 5m

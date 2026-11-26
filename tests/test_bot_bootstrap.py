@@ -10,12 +10,15 @@ from dataclasses import dataclass, field
 import pytest
 
 from src.bot_bootstrap import (
+    evaluate_live_scorecard_gate,
     load_ml_predictor,
     load_tabular_predictor,
     log_startup_details,
+    validate_live_scorecard_gate,
     validate_startup_config,
 )
 from src.inference_fallback import TabularInferenceFallback
+from src.scorecard_gate import scorecard_gate_settings
 
 
 @dataclass
@@ -121,6 +124,92 @@ def test_validate_allows_public_paper_without_credentials() -> None:
     validate_startup_config(
         _Config(simulation_initial_balance_from_kraken=True, simulate_data=False)
     )
+
+
+# ---------------------------------------------------------------------------
+# live-mode scorecard gate
+# ---------------------------------------------------------------------------
+
+def _gate_settings(tmp_path, verdict: str = "GO", *, seconds_ago: float = 60.0):
+    from datetime import UTC, datetime, timedelta
+
+    marker = tmp_path / "latest_status.env"
+    stamp = (datetime.now(UTC) - timedelta(seconds=seconds_ago)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    marker.write_text(
+        f"TIMESTAMP_UTC={stamp}\nRUN_MODE=standard\nVERDICT={verdict}\n"
+        "FINAL_EXIT_CODE=0\n",
+        encoding="utf-8",
+    )
+    return scorecard_gate_settings({
+        "SCORECARD_STATUS_JSON": str(tmp_path / "absent.json"),
+        "SCORECARD_STATUS_ENV": str(marker),
+    })
+
+
+def test_live_gate_is_skipped_in_dry_run(tmp_path) -> None:
+    settings = _gate_settings(tmp_path)
+    assert evaluate_live_scorecard_gate(_Config(), settings) is None
+    assert validate_live_scorecard_gate(_Config(), settings) is None
+
+
+def test_live_gate_accepts_fresh_go(tmp_path) -> None:
+    status = validate_live_scorecard_gate(
+        _Config(dry_run=False), _gate_settings(tmp_path))
+    assert status is not None
+    assert status.allowed is True
+
+
+def test_startup_config_accepts_live_with_fresh_go(tmp_path) -> None:
+    validate_startup_config(_Config(dry_run=False), _gate_settings(tmp_path))
+
+
+@pytest.mark.parametrize("verdict", ["HOLD", "NO-GO", "ERROR"])
+def test_live_gate_refuses_non_go_verdict(tmp_path, verdict) -> None:
+    settings = _gate_settings(tmp_path, verdict)
+    with pytest.raises(ValueError, match=f"scorecard verdict is {verdict}"):
+        validate_live_scorecard_gate(_Config(dry_run=False), settings)
+
+
+def test_live_gate_refuses_missing_marker(tmp_path) -> None:
+    settings = scorecard_gate_settings({
+        "SCORECARD_STATUS_JSON": str(tmp_path / "absent.json"),
+        "SCORECARD_STATUS_ENV": str(tmp_path / "absent.env"),
+    })
+    with pytest.raises(ValueError, match="no scorecard status marker was found"):
+        validate_live_scorecard_gate(_Config(dry_run=False), settings)
+
+
+def test_live_gate_refuses_stale_go(tmp_path) -> None:
+    settings = _gate_settings(tmp_path, seconds_ago=10 * 24 * 3600)
+    with pytest.raises(ValueError, match="stale"):
+        validate_live_scorecard_gate(_Config(dry_run=False), settings)
+
+
+def test_live_gate_operator_override(tmp_path) -> None:
+    settings = scorecard_gate_settings({
+        "SCORECARD_GATE_ENABLED": "false",
+        "SCORECARD_STATUS_JSON": str(tmp_path / "absent.json"),
+        "SCORECARD_STATUS_ENV": str(tmp_path / "absent.env"),
+    })
+    assert evaluate_live_scorecard_gate(_Config(dry_run=False), settings) is None
+    assert validate_live_scorecard_gate(_Config(dry_run=False), settings) is None
+
+
+def test_live_gate_reads_process_environment(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    marker = tmp_path / "results/scorecards/latest_status.env"
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        "TIMESTAMP_UTC=2020-01-01T00:00:00Z\nRUN_MODE=standard\nVERDICT=NO-GO\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="scorecard verdict is NO-GO"):
+        validate_live_scorecard_gate(_Config(dry_run=False))
+    # The startup validator is the production entry point and must agree.
+    with pytest.raises(ValueError, match="scorecard verdict is NO-GO"):
+        validate_startup_config(_Config(dry_run=False))
 
 
 # ---------------------------------------------------------------------------

@@ -78,6 +78,7 @@ LAYERS: dict[int, tuple[str, ...]] = {
         "predict_hailo_remote",
         "recent_pnl_guard",
         "research_signal",
+        "scorecard_gate",
         "simulation",
         "state_store",
         "task_status",

@@ -1,4 +1,12 @@
-"""Long-running bot loop and its process-lifetime execution lock."""
+"""Long-running bot loop and its process-lifetime execution lock.
+
+The loop is entered only after the live-mode scorecard gate has been checked
+again. ``src.bot_bootstrap.validate_startup_config`` already refuses a live
+configuration at construction time; repeating the check here covers a bot
+object that is built elsewhere (tests, tooling, a future cluster supervisor)
+and then started, and it records the accepted verdict in the log so an operator
+can see which scorecard run authorised real orders.
+"""
 
 from __future__ import annotations
 
@@ -7,9 +15,40 @@ import time
 from datetime import datetime
 from typing import Any
 
+from .bot_bootstrap import LIVE_MODE_ACTION, evaluate_live_scorecard_gate
+from .scorecard_gate import scorecard_gate_refusal, scorecard_gate_settings
+
+
+def assert_live_scorecard_gate(bot: Any, logger: logging.Logger) -> None:
+    """Refuse to start the loop in live mode without a fresh ``GO`` verdict."""
+    config = getattr(bot, "config", None)
+    if config is None or getattr(config, "dry_run", True):
+        # Simulated trading never reaches the exchange, so no health evidence
+        # is required and the scorecard markers are not read at all.
+        return
+    settings = scorecard_gate_settings()
+    status = evaluate_live_scorecard_gate(config, settings)
+    if status is None:
+        # Only the explicit operator override can get here now that live mode
+        # is established - say so loudly, it removes the last pre-trade gate.
+        logger.warning(
+            "Live trading started with the scorecard gate disabled by %s=false",
+            "SCORECARD_GATE_ENABLED",
+        )
+        return
+    if status.allowed:
+        logger.info(
+            "Live trading scorecard gate accepted: verdict=%s age=%.0fs",
+            status.verdict,
+            status.age_seconds or 0.0,
+        )
+        return
+    raise ValueError(scorecard_gate_refusal(LIVE_MODE_ACTION, status, settings))
+
 
 def run_bot(bot: Any, logger: logging.Logger) -> None:
     try:
+        assert_live_scorecard_gate(bot, logger)
         with bot._execution_owner_lock:
             _run_loop(bot, logger)
     finally:
