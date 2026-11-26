@@ -5,6 +5,55 @@ a version heading is assigned when a release is prepared.
 
 ## Unreleased
 
+### Added
+
+- `src/task_status.py`, a small layer-1 reader for the status markers written by
+  the scheduled task wrappers. It parses the shell-writable `key=value` format
+  (`exit_code`, `started_unixtime`, `finished_unixtime`), returns `None` for a
+  missing, empty or malformed marker, and exposes `task_exit_code()`,
+  `task_last_run_age_seconds()` and `parse_task_status_files()` for the env
+  syntax `name=path,name=path` used by the exporter.
+- `scripts/run_daily_dryrun_review.sh` and `scripts/run_public_paper_daily_report.sh`
+  now publish a `latest_status.env` marker for **every** attempt through an
+  `EXIT` trap, so a failed or timed-out run leaves evidence instead of a stale
+  file from the last success. The paths are overridable with
+  `DAILY_REVIEW_STATUS_FILE` and `PUBLIC_PAPER_STATUS_FILE`; the public-paper
+  marker keeps the wrapper's `0600` umask because it sits in a profile-owned
+  directory.
+- The operational health exporter publishes the scheduled-task markers as
+  `trading_task_status_present`, `trading_task_last_exit_code` and
+  `trading_task_last_run_age_seconds`, selected with the new
+  `TRADING_TASK_STATUS_FILES` variable.
+- Disk capacity gauges `trading_disk_total_bytes`, `trading_disk_free_bytes`
+  and `trading_disk_used_percent` for the paths in the new `TRADING_DISK_PATHS`
+  variable (default: `TRADING_DATA_DIR`). They use `shutil.disk_usage`, so no
+  second node exporter is required on a Pi.
+- Analytics database gauges `trading_analytics_database_enabled`,
+  `trading_analytics_database_up` and `trading_analytics_database_size_bytes`,
+  enabled by `ANALYTICS_DB_URL`. The `psycopg` import is lazy, so the
+  single-node Raspberry Pi release stays on the stdlib and reports nothing when
+  the URL is unset.
+- Six alert rules in `deploy/trading-alerts.yml` (14 to 20):
+  `TradingScheduledTaskFailed`, `TradingScheduledTaskMarkerMissing`,
+  `TradingScheduledTaskStale`, `TradingDiskSpaceLow`,
+  `TradingDiskUsedPercentHigh` and `TradingAnalyticsDatabaseUnavailable`.
+- `tests/test_task_status.py` covers the marker reader, and
+  `tests/test_alert_rules.py` is a stdlib-only guard that fails when an alert
+  expression references a metric the exporter does not emit or drifts from the
+  documented threshold.
+
+### Changed
+
+- Wrapper tests now assert the exit-status marker for a successful and a failing
+  run of both scheduled tasks, and the operational-health tests cover marker
+  export, disk capacity, the injected and unreachable database probes, and the
+  `main()` wiring of the three new environment variables.
+- `docs/MONITORING.md`, `docs/ARCHITECTURE_AUDIT.md` and `SERVER_README.md`
+  describe the marker files, the new gauges and the new rules; audit point 6
+  (daily-report exit status and disk/database capacity alerts) is marked
+  implemented, with staging delivery evidence and cluster scorecard gating left
+  open.
+
 ## v1.0.29 - 2026-11-25
 
 ### Added

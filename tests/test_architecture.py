@@ -80,6 +80,7 @@ LAYERS: dict[int, tuple[str, ...]] = {
         "research_signal",
         "simulation",
         "state_store",
+        "task_status",
         "trade_journal",
         "train_catboost_model",
         "train_hailo_model",

@@ -15,7 +15,7 @@ The live cluster workload inspected is paper/shadow only.
 | 5 | Execution and costs | **[⚠️ Partial]** Fees and spread ceiling are accounted for; ambiguous order outcomes latch the stop marker instead of retrying. Maker/taker estimates and exchange-native idempotency remain absent. | **[⚠️ Partial]** Same controls, but live exchange use remains unvalidated on the cluster. |
 | 6 | Single-Pi vs cluster operations | **[⚠️ Partial]** Local process lock, persisted live snapshot, startup balance comparison, open-order refusal, and uncertain-order latch exist; fill reconstruction needs operator review. | **[⚠️ Partial]** Optional account-scoped PostgreSQL advisory lease supplements local locks; shared PostgreSQL config and cluster deployment are operator prerequisites, and fill reconstruction remains manual. |
 | 7 | Evaluation and scorecard | **[✅ Implemented]** GO/HOLD/NO-GO and HOLD for insufficient data are implemented, with Pi systemd automation. | **[⚠️ Partial]** Scorecard code and monitoring rules exist, but the inspected cluster deployment does not show scorecard automation as part of its active bot topology. |
-| 8 | Monitoring and alerting | **[⚠️ Partial]** Pi installer configures Alertmanager, a private HTTPS webhook relay, and kill-switch/Hailo/research health alerts plus bounded journal/bot-log/market-data staleness probes; operator webhook configuration and staging delivery validation remain required. | **[⚠️ Partial]** Alert rules and relay are available in the repository, but cluster-specific installation/configuration and live receiver validation remain outstanding. |
+| 8 | Monitoring and alerting | **[⚠️ Partial]** Pi installer configures Alertmanager, a private HTTPS webhook relay, and kill-switch/Hailo/research health alerts plus bounded journal/bot-log/market-data staleness probes, scheduled-task exit-status markers, disk-capacity gauges, and an optional analytics-database probe; operator webhook configuration and staging delivery validation remain required. | **[⚠️ Partial]** Alert rules and relay are available in the repository, but cluster-specific installation/configuration and live receiver validation remain outstanding. |
 
 ## Findings and evidence
 
@@ -163,10 +163,24 @@ is observable instead of reading as zero everywhere; the matching
 `TradingBotLogMissing/Stale`, `TradingJournalStale`, and
 `TradingMarketDataMissing/Stale` rules close the 2026-11-16 class of outage
 where the collector died for days while the daily report still exited 0. Each
-probe reads a bounded tail and fails closed to "absent". No
+probe reads a bounded tail and fails closed to "absent". Since the
+`src.task_status` reader, the scheduled wrappers
+(`scripts/run_daily_dryrun_review.sh`, `scripts/run_public_paper_daily_report.sh`)
+rewrite a `exit_code`/`started_unixtime`/`finished_unixtime` marker after every
+attempt, and the same exporter publishes `trading_task_status_present`,
+`trading_task_last_exit_code`, and `trading_task_last_run_age_seconds` per
+configured task, plus `trading_disk_total_bytes`/`trading_disk_free_bytes`/
+`trading_disk_used_percent` capacity gauges from `shutil.disk_usage` and - only
+when `ANALYTICS_DB_URL` is set - `trading_analytics_database_enabled`/`_up`/
+`_size_bytes` through a lazily imported `psycopg` probe. The matching
+`TradingScheduledTaskFailed/MarkerMissing/Stale`, `TradingDiskSpaceLow`,
+`TradingDiskUsedPercentHigh`, and `TradingAnalyticsDatabaseUnavailable` rules
+make a failed or never-started timer and a full volume alertable;
+`tests/test_alert_rules.py` rejects a rule that references a metric no exporter
+emits. Disk capacity needs no extra exporter, so the Pi profile is covered by
+the same 30 s timer, and the analytics probe stays optional there. No
 organization-specific webhook credential or staging delivery evidence is
-included in Git; daily-report exit status and disk/database capacity remain
-uninstrumented.
+included in Git.
 
 Observed packaging defect (v1.0.28, fixed in v1.0.29): the Pi release archive did
 not stage `deploy/trading-operational-health.service`/`.timer`,
@@ -179,10 +193,9 @@ the published package. The staging list now carries them, and
 staging list against the paths both Pi installers read, so the two profiles stay
 independently installable.
 
-**Next:** Configure the private receiver on each deployment, validate delivery
-in staging, and add daily-report exit-status and disk/database capacity alerts.
-Keep the dashboard read-only and the Pi monitoring path independent from cluster
-services.
+**Next:** Configure the private receiver on each deployment and validate
+delivery in staging. Keep the dashboard read-only and the Pi monitoring path
+independent from cluster services.
 
 ## Prioritized implementation order
 
@@ -202,7 +215,8 @@ services.
    manifest and atomic deployment/rollback for CPU and Hailo artifacts; assign
    training/compilation to the future x86 worker only after it exists.
 6. **P2: Close operational visibility gaps.** Alert receivers, kill-switch,
-   Hailo, research-feed, scorecard, portfolio-snapshot, and data-staleness
-   alerts are implemented; cluster scorecard promotion gating, daily-report
-   exit status, and disk/database capacity alerts remain. Retain a tested
-   standalone Pi dashboard/scorecard path.
+   Hailo, research-feed, scorecard, portfolio-snapshot, data-staleness,
+   scheduled-task exit-status, disk-capacity, and analytics-database alerts are
+   implemented; cluster scorecard promotion gating and staging delivery
+   evidence for the private webhook remain. Retain a tested standalone Pi
+   dashboard/scorecard path.

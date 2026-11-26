@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from src.task_status import read_task_status, task_exit_code, task_last_run_age_seconds
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import public_paper_daily_report as report
@@ -211,6 +213,14 @@ def test_scheduled_wrapper_writes_private_report(tmp_path):
     assert result["current_day_to_now"]["observation"]["log"]["parsed_lines_in_window"] == 0
     assert latest.stat().st_mode & 0o077 == 0
 
+    # The wrapper also records a status marker so a non-zero exit or a timer
+    # that never starts becomes an alertable gauge.
+    status = read_task_status(paper / "reports" / "latest_status.env")
+    assert status is not None
+    assert task_exit_code(status) == 0
+    age = task_last_run_age_seconds(status)
+    assert age is not None and 0.0 <= age < 120.0
+
 
 def test_journal_and_log_report_newest_activity_outside_the_window(tmp_path):
     journal = tmp_path / "journal.csv"
@@ -371,3 +381,11 @@ def test_scheduled_wrapper_keeps_previous_report_when_data_is_stale(tmp_path):
     assert completed.returncode != 0
     assert "the collector is not running" in completed.stderr
     assert json.loads((reports / "latest.json").read_text(encoding="utf-8"))["marker"] == "previous"
+
+    # A failed attempt still records its exit code, so the failure is alertable
+    # even though the previous report is deliberately kept in place.
+    status = read_task_status(reports / "latest_status.env")
+    assert status is not None
+    assert task_exit_code(status) == completed.returncode
+    assert completed.returncode != 0
+    assert (reports / "latest_status.env").stat().st_mode & 0o077 == 0
