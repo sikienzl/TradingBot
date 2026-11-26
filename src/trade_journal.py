@@ -37,6 +37,12 @@ TRADE_JOURNAL_FIELDS = [
     'run_id', 'config_hash', 'mfe_pct', 'mae_pct',
     'execution_cost_mode', 'entry_cost_mode', 'reference_price', 'fee_base',
     'slippage_base', 'gross_pnl_base', 'net_pnl_base', 'exchange_fees',
+    # Pre-trade cost estimate (fee/slippage/spread) and partial-fill bookkeeping.
+    'client_order_id',
+    'requested_amount_coin', 'partial_fill',
+    'est_fee_base', 'est_slippage_base', 'est_spread_base',
+    'est_total_cost_base', 'est_cost_pct', 'est_taker_fee_rate',
+    'est_slippage_rate', 'est_spread_bps',
 ]
 
 

@@ -9,7 +9,6 @@ journal, the performance counters and the cooldown bookkeeping.
 """
 from __future__ import annotations
 
-import json
 import logging
 import math
 import os
@@ -18,6 +17,18 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 import ccxt
+
+from src.execution_costs import (
+    build_cost_estimate,
+    execution_cost_block_reason,
+    execution_cost_journal_fields,
+    fee_amount_in_quote,
+    format_execution_cost_estimate,
+    partial_fill_journal_fields,
+    quote_from_record,
+)
+from src.kill_switch import activate_kill_switch, kill_switch_active
+from src.order_submission import submit_market_order
 
 logger = logging.getLogger(__name__)
 
@@ -196,75 +207,6 @@ def _confirm_fill(
     return filled, average, cost, order
 
 
-def _fee_amount_in_quote(
-    order: dict[str, Any],
-    quote_currency: str,
-    traded_asset: str,
-    average_price: float,
-) -> tuple[float | None, str]:
-    fees = order.get('fees')
-    if fees is None:
-        fee = order.get('fee')
-        fees = [fee] if isinstance(fee, dict) else []
-    if not isinstance(fees, list) or not fees:
-        return None, ''
-
-    total = 0.0
-    for fee in fees:
-        if not isinstance(fee, dict):
-            return None, json.dumps(fees, sort_keys=True, default=str)
-        try:
-            amount = float(fee['cost'])
-        except (KeyError, TypeError, ValueError):
-            return None, json.dumps(fees, sort_keys=True, default=str)
-        currency = str(fee.get('currency') or '').upper()
-        if not math.isfinite(amount) or amount < 0 or not currency:
-            return None, json.dumps(fees, sort_keys=True, default=str)
-        if currency == quote_currency.upper():
-            total += amount
-        elif currency == traded_asset.upper():
-            total += amount * average_price
-        else:
-            return None, json.dumps(fees, sort_keys=True, default=str)
-    return total, json.dumps(fees, sort_keys=True, default=str)
-
-
-def _activate_kill_switch(config: Any, reason: str, logger: logging.Logger) -> None:
-    path = os.fspath(getattr(config, 'kill_switch_file', '.trading_kill_switch'))
-    try:
-        descriptor = os.open(
-            path,
-            os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, 'O_NOFOLLOW', 0),
-            0o600,
-        )
-    except FileExistsError:
-        return
-    except OSError as exc:
-        logger.critical(
-            "Cannot persist kill switch after uncertain order outcome at %s: %s",
-            path,
-            exc,
-        )
-        raise RuntimeError(
-            "Cannot persist live execution uncertainty; stopping the bot"
-        ) from exc
-    try:
-        os.write(descriptor, f"uncertain_order_outcome: {reason}\n".encode())
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-    directory_descriptor = os.open(
-        os.path.dirname(os.path.abspath(path)) or ".", os.O_RDONLY)
-    try:
-        os.fsync(directory_descriptor)
-    finally:
-        os.close(directory_descriptor)
-    logger.critical(
-        "Persistent kill switch activated after uncertain order outcome at %s",
-        path,
-    )
-
-
 def execute_real_trade(
     exchange: Any,
     config: Any,
@@ -280,14 +222,20 @@ def execute_real_trade(
     signal_confidence: float | None = None,
     recommendation: str = 'HOLD',
     reason: str = '',
+    client_order_id: str | None = None,
     logger: logging.Logger = logger,
 ) -> bool:
-    """Live exchange trade execution (ccxt market orders)."""
-    kill_switch_file = getattr(config, 'kill_switch_file', '.trading_kill_switch')
-    if os.path.lexists(kill_switch_file):
+    """Live exchange trade execution (ccxt market orders).
+
+    ``client_order_id`` is the idempotency key of this attempt. It is optional so
+    an older caller keeps the previous behaviour, but without it an ambiguous
+    submission cannot be recovered and only the kill-switch latch keeps the bot
+    from trading on an unknown position.
+    """
+    if kill_switch_active(config):
         logger.critical(
             "Trading kill switch is active at %s; refusing %s order for %s.",
-            kill_switch_file,
+            os.fspath(getattr(config, 'kill_switch_file', '.trading_kill_switch')),
             action,
             coin,
         )
@@ -333,6 +281,8 @@ def execute_real_trade(
                 signal_confidence=signal_confidence,
                 recommendation=recommendation,
                 reason=reason,
+                market_info=market,
+                client_order_id=client_order_id,
                 logger=logger,
             )
             if not bought:
@@ -344,6 +294,8 @@ def execute_real_trade(
                 signal_source=signal_source,
                 recommendation=recommendation,
                 reason=reason,
+                market_info=market,
+                client_order_id=client_order_id,
                 logger=logger,
             )
             if not sold:
@@ -381,6 +333,8 @@ def _execute_real_buy(
     signal_confidence: float | None,
     recommendation: str,
     reason: str,
+    market_info: Any = None,
+    client_order_id: str | None = None,
     logger: logging.Logger,
 ) -> bool:
     """Market buy, fill confirmation and the accounting that follows it.
@@ -388,23 +342,33 @@ def _execute_real_buy(
     Returns ``False`` when the fill cannot be confirmed, which makes the caller
     stop before touching the balance.
     """
+    requested_amount_coin = amount_in_base_currency / price
+    estimate = build_cost_estimate(
+        config, coin, price, amount_in_base_currency, market_info=market_info)
+    logger.info(
+        "Pre-trade BUY estimate for %s [client order id: %s]: %s",
+        coin,
+        client_order_id or 'none',
+        format_execution_cost_estimate(estimate),
+    )
     try:
-        order = exchange.create_market_buy_order(
-            symbol, amount_in_base_currency / price)
+        order = submit_market_order(
+            exchange, "buy", symbol, requested_amount_coin, client_order_id,
+            logger=logger)
     except ccxt.NetworkError as exc:
-        _activate_kill_switch(config, f"BUY {coin}: {exc}", logger)
+        activate_kill_switch(config, f"BUY {coin}: {exc}", logger)
         raise
     try:
         filled, average, cost, confirmed_order = _confirm_fill(
-            hooks, order, symbol, amount_in_base_currency / price, price
+            hooks, order, symbol, requested_amount_coin, price
         )
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
-        _activate_kill_switch(config, f"BUY {coin}: {exc}", logger)
+        activate_kill_switch(config, f"BUY {coin}: {exc}", logger)
         logger.error("Unable to confirm BUY fill for %s: %s", coin, exc)
         return False
     logger.info(
         f"✅ REAL TRADE (BUY): {filled:.4f} {coin} @ {average:.4f} {config.base_currency} (cost: {cost:.2f} {config.base_currency}, ID: {order.get('id', 'n/a')})")
-    fee_base, exchange_fees = _fee_amount_in_quote(
+    fee_base, exchange_fees = fee_amount_in_quote(
         confirmed_order, config.base_currency, coin, average)
     entry_cost = cost + fee_base if fee_base is not None else cost
     portfolio.add_trade(
@@ -430,6 +394,9 @@ def _execute_real_buy(
         'exchange_fees': exchange_fees,
         'entry_cost_mode': 'live_exchange' if fee_base is not None else 'live_fee_unknown',
         'execution_cost_mode': 'live_exchange' if fee_base is not None else 'live_fee_unknown',
+        'client_order_id': client_order_id or '',
+        **partial_fill_journal_fields(requested_amount_coin, filled),
+        **execution_cost_journal_fields(estimate),
         'signal_source': signal_source,
         'signal_confidence': signal_confidence,
         'recommendation': recommendation,
@@ -453,6 +420,8 @@ def _execute_real_sell(
     signal_source: str,
     recommendation: str,
     reason: str,
+    market_info: Any = None,
+    client_order_id: str | None = None,
     logger: logging.Logger,
 ) -> bool:
     """Market sell, fill confirmation and the accounting that follows it.
@@ -460,33 +429,43 @@ def _execute_real_sell(
     Returns ``False`` when the portfolio cannot cover the sell, which makes the
     caller stop before touching the balance.
     """
-    if coin not in portfolio.holdings or portfolio.holdings[coin] < amount_in_base_currency / price:
+    requested_amount_coin = amount_in_base_currency / price
+    if coin not in portfolio.holdings or portfolio.holdings[coin] < requested_amount_coin:
         logger.warning(
-            f"Insufficient {coin} ({portfolio.holdings.get(coin, 0):.4f}) in portfolio to sell {amount_in_base_currency / price:.4f} {coin}.")
+            f"Insufficient {coin} ({portfolio.holdings.get(coin, 0):.4f}) in portfolio to sell {requested_amount_coin:.4f} {coin}.")
         return False
+    estimate = build_cost_estimate(
+        config, coin, price, amount_in_base_currency, market_info=market_info)
+    logger.info(
+        "Pre-trade SELL estimate for %s [client order id: %s]: %s",
+        coin,
+        client_order_id or 'none',
+        format_execution_cost_estimate(estimate),
+    )
     try:
-        order = exchange.create_market_sell_order(
-            symbol, amount_in_base_currency / price)
+        order = submit_market_order(
+            exchange, "sell", symbol, requested_amount_coin, client_order_id,
+            logger=logger)
     except ccxt.NetworkError as exc:
-        _activate_kill_switch(config, f"SELL {coin}: {exc}", logger)
+        activate_kill_switch(config, f"SELL {coin}: {exc}", logger)
         raise
     try:
         sold_amount_coin, average, cost, confirmed_order = _confirm_fill(
-            hooks, order, symbol, amount_in_base_currency / price, price
+            hooks, order, symbol, requested_amount_coin, price
         )
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
-        _activate_kill_switch(config, f"SELL {coin}: {exc}", logger)
+        activate_kill_switch(config, f"SELL {coin}: {exc}", logger)
         logger.error("Unable to confirm SELL fill for %s: %s", coin, exc)
         return False
     logger.info(
         f"✅ REAL TRADE (SELL): {sold_amount_coin:.4f} {coin} @ {average:.4f} {config.base_currency} (proceeds: {cost:.2f} {config.base_currency}, ID: {order.get('id', 'n/a')})")
 
     entry_trade = portfolio.open_trades.get(coin, {})
-    fee_base, exchange_fees = _fee_amount_in_quote(
+    fee_base, exchange_fees = fee_amount_in_quote(
         confirmed_order, config.base_currency, coin, average)
     entry_fee_known = entry_trade.get('entry_fee_known', False)
     original_amount_coin = float(
-        entry_trade.get('amount_coin', amount_in_base_currency / price))
+        entry_trade.get('amount_coin', requested_amount_coin))
     remaining_open_amount = max(
         0.0, original_amount_coin - sold_amount_coin)
     remaining_ratio = (
@@ -517,9 +496,12 @@ def _execute_real_sell(
         'fee_base': fee_base if fee_base is not None else '',
         'exchange_fees': exchange_fees,
         'execution_cost_mode': 'live_exchange' if net_accounting_known else 'live_fee_unknown',
+        'client_order_id': client_order_id or '',
         'hold_seconds': hold_seconds,
         'mfe_pct': mfe_pct,
         'mae_pct': mae_pct,
+        **partial_fill_journal_fields(requested_amount_coin, sold_amount_coin),
+        **execution_cost_journal_fields(estimate),
         'signal_source': entry_trade.get('signal_source', 'rules'),
         'signal_confidence': entry_trade.get('signal_confidence', ''),
         'recommendation': entry_trade.get('recommendation', ''),
@@ -739,6 +721,15 @@ def _attempt_candidate_buy(
             spread_bps = float('nan')
         if not math.isfinite(spread_bps) or spread_bps > max_spread_bps:
             return {**attempt_meta, 'reason': 'spread_unavailable_or_above_limit'}
+    estimate = build_cost_estimate(
+        config, coin, current_price, position_size,
+        quote=quote_from_record(coin_data, current_price, coin=coin))
+    cost_block = execution_cost_block_reason(config, estimate)
+    if cost_block is not None:
+        logger.info(
+            "\u26d4 Estimated execution cost blocked entry for %s: %s | %s",
+            coin, cost_block, format_execution_cost_estimate(estimate))
+        return {**attempt_meta, 'reason': cost_block}
     if hooks.news_veto is not None:
         vetoed, veto_reason = hooks.news_veto(coin, coin_data)
         if vetoed:

@@ -33,6 +33,10 @@ class _Config:
     allow_partial_trades: bool = True
     reentry_cooldown_seconds: int = 3600
     max_entry_spread_bps: float = 0.0
+    max_entry_cost_bps: float = 0.0
+    live_taker_fee_rate: float | None = None
+    live_slippage_rate: float | None = None
+    kill_switch_file: str = ".trading_kill_switch"
 
 
 class _ExchangeStub:
@@ -45,12 +49,14 @@ class _ExchangeStub:
         buy_order: dict[str, Any] | None = None,
         sell_order: dict[str, Any] | None = None,
         open_orders: list[dict[str, Any]] | None = None,
+        closed_orders: list[dict[str, Any]] | None = None,
         order_error: Exception | None = None,
     ) -> None:
         self.min_amount = min_amount
         self.buy_order = {"id": "buy-1", "status": "closed"} if buy_order is None else buy_order
         self.sell_order = {"id": "sell-1", "status": "closed"} if sell_order is None else sell_order
         self.open_orders = open_orders or []
+        self.closed_orders = closed_orders
         self.order_error = order_error
         self.calls: list[tuple[Any, ...]] = []
 
@@ -62,14 +68,26 @@ class _ExchangeStub:
         self.calls.append(("open_orders", symbol))
         return self.open_orders
 
-    def create_market_buy_order(self, symbol: str, amount: float) -> dict[str, Any]:
-        self.calls.append(("buy", symbol, amount))
+    def fetch_closed_orders(self, symbol: str) -> list[dict[str, Any]]:
+        self.calls.append(("closed_orders", symbol))
+        if self.closed_orders is None:
+            raise ccxt.NotSupported("closed orders unavailable")
+        return self.closed_orders
+
+    def create_market_buy_order(
+        self, symbol: str, amount: float, params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append(("buy", symbol, amount)
+                          if not params else ("buy", symbol, amount, params))
         if self.order_error:
             raise self.order_error
         return self.buy_order
 
-    def create_market_sell_order(self, symbol: str, amount: float) -> dict[str, Any]:
-        self.calls.append(("sell", symbol, amount))
+    def create_market_sell_order(
+        self, symbol: str, amount: float, params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append(("sell", symbol, amount)
+                          if not params else ("sell", symbol, amount, params))
         if self.order_error:
             raise self.order_error
         return self.sell_order
@@ -519,6 +537,216 @@ def test_kill_switch_blocks_live_orders_before_exchange_call(tmp_path, action):
     assert executed is False
     assert exchange.calls == []
     assert recorder.events == []
+
+
+# ---------------------------------------------------------------------------
+# Idempotent submission (audit point 5)
+# ---------------------------------------------------------------------------
+def test_client_order_id_is_sent_with_the_live_order(tmp_path):
+    config = _Config()
+    config.kill_switch_file = str(tmp_path / "STOP")
+    exchange = _ExchangeStub()
+    recorder = _Recorder(fill=(0.5, 100.0, 50.0))
+
+    executed = execute_real_trade(
+        exchange, config, _portfolio(), _performance(), recorder.real_hooks(),
+        "BTC", "buy", 100.0, 50.0, client_order_id="tb-abcd1234-run0001-7-BTC-buy",
+    )
+
+    assert executed is True
+    assert exchange.calls == [
+        ("market", "BTC/EUR"), ("open_orders", "BTC/EUR"),
+        ("buy", "BTC/EUR", 0.5, {"clientOrderId": "tb-abcd1234-run0001-7-BTC-buy"}),
+    ]
+    row = recorder.journal_rows[0]
+    assert row["client_order_id"] == "tb-abcd1234-run0001-7-BTC-buy"
+
+
+def test_submission_timeout_recovers_the_original_order_without_resubmitting(tmp_path, caplog):
+    """A visible order after a network error is accounted, never sent twice."""
+    config = _Config()
+    config.kill_switch_file = str(tmp_path / "STOP")
+    exchange = _ExchangeStub(
+        order_error=ccxt.NetworkError("submission timeout"),
+        closed_orders=[{
+            "id": "filled-1", "clientOrderId": "tb-1-buy", "status": "closed",
+            "amount": 0.5, "filled": 0.5, "average": 100.0, "cost": 50.0,
+        }],
+    )
+    recorder = _Recorder(fill=(0.5, 100.0, 50.0))
+    portfolio = _portfolio()
+
+    with caplog.at_level(logging.WARNING, logger="src.order_submission"):
+        executed = execute_real_trade(
+            exchange, config, portfolio, _performance(), recorder.real_hooks(),
+            "BTC", "buy", 100.0, 50.0, client_order_id="tb-1-buy",
+        )
+
+    assert executed is True
+    assert not (tmp_path / "STOP").exists()
+    assert [call for call in exchange.calls if call[0] == "buy"] == [
+        ("buy", "BTC/EUR", 0.5, {"clientOrderId": "tb-1-buy"})]
+    assert portfolio.open_trades["BTC"]["amount_coin"] == 0.5
+    assert "accounting for the original order instead of resubmitting" in caplog.text
+
+
+def test_unrecoverable_submission_timeout_latches_kill_switch_and_stops(tmp_path, caplog):
+    config = _Config()
+    config.kill_switch_file = str(tmp_path / "STOP")
+    exchange = _ExchangeStub(
+        order_error=ccxt.NetworkError("submission timeout"), closed_orders=[])
+    recorder = _Recorder(fill=(0.5, 100.0, 50.0))
+
+    with caplog.at_level(logging.ERROR, logger="src.execution_service"):
+        executed = execute_real_trade(
+            exchange, config, _portfolio(), _performance(), recorder.real_hooks(),
+            "BTC", "buy", 100.0, 50.0, client_order_id="tb-1-buy",
+        )
+
+    assert executed is False
+    assert "it is not resubmitted" in caplog.text
+    assert "uncertain_order_outcome: BUY BTC" in (tmp_path / "STOP").read_text()
+    assert [call for call in exchange.calls if call[0] == "buy"] == [
+        ("buy", "BTC/EUR", 0.5, {"clientOrderId": "tb-1-buy"})]
+    assert recorder.events == []
+
+
+def test_live_journal_keeps_requested_amount_and_partial_fill(tmp_path):
+    config = _Config()
+    config.kill_switch_file = str(tmp_path / "STOP")
+    recorder = _Recorder(fill=(0.4, 101.0, 40.4))
+    exchange = _ExchangeStub()
+
+    executed = execute_real_trade(
+        exchange, config, _portfolio(), _performance(), recorder.real_hooks(),
+        "BTC", "buy", 100.0, 50.0, client_order_id="tb-1-buy",
+    )
+
+    assert executed is True
+    row = recorder.journal_rows[0]
+    assert row["requested_amount_coin"] == pytest.approx(0.5)
+    assert row["partial_fill"] == 1
+
+
+def test_live_journal_records_the_pre_trade_cost_estimate():
+    config = _Config(live_taker_fee_rate=0.004, live_slippage_rate=0.001)
+    recorder = _Recorder(fill=(0.5, 100.0, 50.0))
+
+    executed = execute_real_trade(
+        _ExchangeStub(), config, _portfolio(), _performance(),
+        recorder.real_hooks(), "BTC", "buy", 100.0, 50.0,
+    )
+
+    assert executed is True
+    row = recorder.journal_rows[0]
+    assert row["est_taker_fee_rate"] == pytest.approx(0.004)
+    assert row["est_slippage_rate"] == pytest.approx(0.001)
+    assert row["est_fee_base"] == pytest.approx(0.2)
+    assert row["est_slippage_base"] == pytest.approx(0.05)
+    assert row["est_total_cost_base"] == pytest.approx(0.25)
+    assert row["est_cost_pct"] == pytest.approx(0.5)
+    # No order book is available for a live order, so the spread stays blank.
+    assert row["est_spread_base"] == ""
+    assert row["est_spread_bps"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Pre-trade cost budget (audit point 4)
+# ---------------------------------------------------------------------------
+def _cost_gate_hooks(recorder: _EntryRecorder) -> tuple[EntryHooks, list[str]]:
+    base = recorder.hooks()
+    news_calls: list[str] = []
+    return EntryHooks(
+        get_atr=base.get_atr,
+        compute_position_size=base.compute_position_size,
+        passes_momentum_filter=base.passes_momentum_filter,
+        resolve_cooldown_seconds=base.resolve_cooldown_seconds,
+        in_reentry_cooldown=base.in_reentry_cooldown,
+        execute_trade=base.execute_trade,
+        log_blocked_attempts=base.log_blocked_attempts,
+        news_veto=lambda coin, candidate: news_calls.append(coin) or (False, "clear"),
+    ), news_calls
+
+
+def test_cost_budget_blocks_before_the_news_veto(caplog):
+    recorder = _EntryRecorder()
+    hooks, news_calls = _cost_gate_hooks(recorder)
+    config = _Config(max_entry_cost_bps=40.0, live_taker_fee_rate=0.0026,
+                     live_slippage_rate=0.001)
+
+    with caplog.at_level(logging.INFO, logger="src.execution_service"):
+        open_new_positions(
+            config, _portfolio(), hooks,
+            {"BTC": {"price": 100.0}},
+            {"BTC": {"score": 80, "recommendation": "BUY",
+                     "bid": 99.5, "ask": 100.5}},
+            ["BTC"], 1000.0,
+            effective_trade_amount=100.0, effective_max_open_trades=3,
+            can_open_positions=True, block_reason="",
+        )
+
+    assert news_calls == []
+    assert recorder.executed == []
+    assert recorder.blocked[0]["reason"].startswith("estimated_cost_above_limit")
+    assert "Estimated execution cost blocked entry" in caplog.text
+
+
+def test_cost_budget_allows_an_order_inside_the_budget():
+    recorder = _EntryRecorder()
+    hooks, news_calls = _cost_gate_hooks(recorder)
+    config = _Config(max_entry_cost_bps=500.0, live_taker_fee_rate=0.0026,
+                     live_slippage_rate=0.001)
+
+    open_new_positions(
+        config, _portfolio(), hooks,
+        {"BTC": {"price": 100.0}},
+        {"BTC": {"score": 80, "recommendation": "BUY",
+                 "bid": 99.9, "ask": 100.1}},
+        ["BTC"], 1000.0,
+        effective_trade_amount=100.0, effective_max_open_trades=3,
+        can_open_positions=True, block_reason="",
+    )
+
+    assert news_calls == ["BTC"]
+    assert recorder.executed == ["BTC"]
+
+
+def test_cost_budget_is_disabled_below_one_basis_point():
+    recorder = _EntryRecorder()
+    hooks, _news_calls = _cost_gate_hooks(recorder)
+    config = _Config(max_entry_cost_bps=0.5, live_taker_fee_rate=0.5,
+                     live_slippage_rate=0.5)
+
+    open_new_positions(
+        config, _portfolio(), hooks,
+        {"BTC": {"price": 100.0}},
+        {"BTC": {"score": 80, "recommendation": "BUY"}},
+        ["BTC"], 1000.0,
+        effective_trade_amount=100.0, effective_max_open_trades=3,
+        can_open_positions=True, block_reason="",
+    )
+
+    assert recorder.executed == ["BTC"]
+
+
+def test_unmatchable_quote_does_not_add_a_spread_cost():
+    recorder = _EntryRecorder()
+    hooks, _news_calls = _cost_gate_hooks(recorder)
+    config = _Config(max_entry_cost_bps=40.0, live_taker_fee_rate=0.0026,
+                     live_slippage_rate=0.001)
+
+    open_new_positions(
+        config, _portfolio(), hooks,
+        {"BTC": {"price": 100.0}},
+        {"BTC": {"score": 80, "recommendation": "BUY",
+                 "bid": 80.0, "ask": 82.0, "spread_bps": 250.0}},
+        ["BTC"], 1000.0,
+        effective_trade_amount=100.0, effective_max_open_trades=3,
+        can_open_positions=True, block_reason="",
+    )
+
+    assert recorder.executed == ["BTC"]
+    assert recorder.blocked == []
 
 
 # ---------------------------------------------------------------------------
