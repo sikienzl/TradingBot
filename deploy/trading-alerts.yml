@@ -243,3 +243,21 @@ groups:
         annotations:
           summary: "Fill reconciliation never reported"
           description: "No parseable reconciliation marker on a live deployment, so the journal has never been verified since the exporter was configured."
+
+      - alert: TradingJsonlStoreOverRetentionGuard
+        expr: trading_jsonl_store_bytes > 268435456
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "An append-only JSONL store passed the retention size guard"
+          description: "The store is larger than MAX_STORE_BYTES, so scripts/prune_jsonl_stores.py refuses to load it and it keeps growing. Prune it by hand and check TRADING_JSONL_RETENTION_*."
+
+      - alert: TradingJsonlStoreGrowing
+        expr: trading_jsonl_store_bytes > 16777216
+        for: 24h
+        labels:
+          severity: warning
+        annotations:
+          summary: "An append-only JSONL store stayed far above its retention budget"
+          description: "More than 16 MiB for a whole day: jsonl-retention.timer is not running, retention is disabled, or TRADING_JSONL_RETENTION_* keeps too much history on the Pi volume."

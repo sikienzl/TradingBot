@@ -73,6 +73,7 @@ LAYERS: dict[int, tuple[str, ...]] = {
         "indicator_service",
         "journal_guards",
         "journal_order_reader",
+        "jsonl_retention",
         "market_analysis",
         "market_data",
         "market_observations",

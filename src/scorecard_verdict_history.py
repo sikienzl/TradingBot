@@ -10,14 +10,14 @@ operators questions cannot be answered with a single marker:
 * was the last week's verdict also ``NO-GO``, i.e. is the tuning brake in
   ``tuning_policy.json`` (``if_verdict_no_go``) reacting to a streak or to a
   one-off?
-* what did the gate see at the time it refused, after the marker has already
-  been replaced?
+* what did the gate see at the time it refused, after the marker was replaced?
 
 This module keeps every verdict as an immutable JSONL record, following the same
-storage contract as :mod:`src.news_item_store`: one record per line, canonical
-key order, a stable ``record_id`` used to skip duplicates, an exclusive
-``flock`` around the append, ``fsync`` before the lock is released, and a bounded
-tail read so a live process never loads the whole file.
+storage contract as :mod:`src.news_item_store`: one record per line, canonical key
+order, a stable ``record_id`` used to skip duplicates, an exclusive ``flock`` around
+the append, ``fsync`` before the lock is released, and a bounded tail read. Nothing
+here removes a record: pruning is :mod:`src.jsonl_retention` via
+``scripts/prune_jsonl_stores.py``.
 
 Readers fail closed like the rest of the repository: a missing, unreadable,
 empty or malformed file yields an empty history rather than raising, and

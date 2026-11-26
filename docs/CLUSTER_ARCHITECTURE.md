@@ -148,6 +148,20 @@ host-local file: it is written only by the node that runs
 directory read-only is enough for another node to replay the same per-item
 history; there is no cross-node write coordination for the store.
 
+Retention for that store and for the verdict history
+(`results/scorecards/verdict_history.jsonl`) is repository code
+(`src/jsonl_retention.py`, applied by `scripts/prune_jsonl_stores.py`) and is
+installed as `jsonl-retention.timer` on the single-Pi profile. The inspected
+cluster has no such unit, so both files still grow there until an operator
+installs it. The pruner rewrites a store in place under the same host-local
+`flock` its writer uses and keeps the file inode, which protects a concurrent
+appender on that host but coordinates nothing across nodes. Therefore exactly one
+node per store may run the timer - the node that owns the file - and a second node
+pruning the same store can only duplicate work or race the lock. Nothing in the
+cluster path requires retention: `TRADING_JSONL_RETENTION_ENABLED=0` keeps the
+previous append-only behaviour, and each pass keeps a rotating
+`<store>.bak-<UTC stamp>` copy for rollback.
+
 The durable risk-state file (`TRADING_RISK_STATE_FILE`) and the kill-switch
 marker are host-local files, not cluster services. Each node therefore keeps its
 own daily-loss budget, loss-streak pause, hourly BUY budget and re-entry

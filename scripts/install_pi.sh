@@ -237,7 +237,7 @@ install_or_update_monitoring() {
 SYSTEMD_DIR="/etc/systemd/system"
 info "Installing systemd services..."
 
-for svc_file in trading-bot.service pnl-exporter.service scorecard.service scorecard.timer research-signal.service research-signal.timer tuning-cycle.service tuning-cycle.timer fill-reconciliation.service fill-reconciliation.timer; do
+for svc_file in trading-bot.service pnl-exporter.service scorecard.service scorecard.timer research-signal.service research-signal.timer tuning-cycle.service tuning-cycle.timer fill-reconciliation.service fill-reconciliation.timer jsonl-retention.service jsonl-retention.timer; do
   SRC="${INSTALL_DIR}/deploy/${svc_file}"
   DEST="${SYSTEMD_DIR}/${svc_file}"
   if [[ -f "$SRC" ]]; then
@@ -294,6 +294,19 @@ chown "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}/results/fill_reconciliat
 if [[ -f "${SYSTEMD_DIR}/fill-reconciliation.timer" ]]; then
   systemctl enable --now fill-reconciliation.timer
   ok "Fill reconciliation timer enabled (runs every hour)."
+fi
+
+# Daily retention pass over the append-only JSONL stores. Without it the news
+# store and the verdict history only ever grow, and the unit refuses to load a
+# store past its size guard rather than exhausting Pi RAM. Rewriting the two
+# files in place needs the directories to exist and to belong to the service
+# user, including the data directory the news fetcher appends to.
+mkdir -p "${INSTALL_DIR}/data" "${INSTALL_DIR}/results/jsonl_retention"
+chown "${SERVICE_USER}:${SERVICE_USER}" \
+  "${INSTALL_DIR}/data" "${INSTALL_DIR}/results/jsonl_retention"
+if [[ -f "${SYSTEMD_DIR}/jsonl-retention.timer" ]]; then
+  systemctl enable --now jsonl-retention.timer
+  ok "JSONL retention timer enabled (runs every day at 03:30)."
 fi
 
 # The weekly scorecard appends its verdict history here and the weekly tuning

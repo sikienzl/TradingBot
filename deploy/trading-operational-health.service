@@ -16,13 +16,18 @@ Environment=TRADING_BOT_LOG_FILE=/opt/trading_2/logs/bot.log
 # scorecard and weekly_tuning are listed too: both wrappers now write a
 # lowercase exit_code/finished_unixtime marker on every attempt, including a
 # crash or a blocked apply, so a dead timer is visible without journal-reading.
-Environment=TRADING_TASK_STATUS_FILES=daily_review=/opt/trading_2/results/daily_review/latest_status.env,scorecard=/opt/trading_2/results/scorecards/latest_status.env,weekly_tuning=/opt/trading_2/results/tuning/latest_status.env
+# jsonl_retention is the daily store retention pass; it writes the same marker
+# format, so the generic scheduled-task alerts cover it as well.
+Environment=TRADING_TASK_STATUS_FILES=daily_review=/opt/trading_2/results/daily_review/latest_status.env,scorecard=/opt/trading_2/results/scorecards/latest_status.env,weekly_tuning=/opt/trading_2/results/tuning/latest_status.env,jsonl_retention=/opt/trading_2/results/jsonl_retention/latest_status.env
 Environment=TRADING_DISK_PATHS=/opt/trading_2
 Environment=TRADING_HEALTH_METRICS_FILE=/opt/trading_2/results/scorecards/textfile/trading_health.prom
 # Fill reconciliation summary written by the bot at startup and by
 # fill-reconciliation.timer. Read-only here: the exporter never calls the
 # exchange and never reads a credential.
 Environment=TRADING_FILL_RECONCILIATION_REPORT=/opt/trading_2/results/fill_reconciliation/latest_status.env
+# Store retention summary written by jsonl-retention.timer. Read-only here: the
+# exporter only stats the two store files and reads that marker.
+Environment=TRADING_JSONL_RETENTION_REPORT=/opt/trading_2/results/jsonl_retention/latest_status.env
 # The live-mode scorecard gate gauge reads DRY_RUN from the bot deployment .env
 # and the verdict from results/scorecards/latest_status.(json|env) below
 # WorkingDirectory. Only the run mode is read - no credentials are exported.

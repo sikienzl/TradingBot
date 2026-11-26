@@ -5,6 +5,74 @@ a version heading is assigned when a release is prepared.
 
 ## Unreleased
 
+### Added
+
+- `src/jsonl_retention.py`, a layer-1 module that owns the retention policy for
+  the two append-only JSONL stores - the per-item news store
+  (`data/research_news_items.jsonl`) and the scorecard verdict history
+  (`results/scorecards/verdict_history.jsonl`). Both were unbounded: every writer
+  only appends, so the audit could only record retention as an operator task.
+  A store is rewritten in place under the same exclusive `flock` its writer uses
+  and reusing the file inode (truncate and write, never a rename), so a concurrent
+  appender cannot lose a record; the previous content is copied to a rotating
+  `<store>.bak-<UTC stamp>` first. A record is dropped only when it is older than
+  the age horizon **and** beyond the record floor, the two limits are independent
+  and `0` turns one off, and a record with no usable timestamp is always kept.
+  The default floors (news 8192 records / 180 days, verdict 512 records / 730
+  days) stay above each store's dedupe and read window, so a pruned store still
+  rejects a re-fetched headline and the tuning cycle still reads its evidence
+  chain. A missing store is reported and not created, malformed lines are dropped,
+  a store above 256 MiB is refused rather than rewritten, and an unchanged store is
+  left untouched. No store module imports this module.
+- `scripts/prune_jsonl_stores.py`, the only mutator. It resolves both store paths
+  through `RESEARCH_NEWS_STORE_PATH` and `SCORECARD_VERDICT_HISTORY_FILE`, accepts
+  `--dry-run`, per-store path/limit overrides and `--no-report`, and publishes a
+  `src.task_status` marker at `results/jsonl_retention/latest_status.env` with the
+  scheduled-task contract plus the per-store `news_*`/`verdict_*` counts. Exit
+  codes: `0` pruned or unchanged, `1` a store could not be pruned, `2` retention
+  disabled.
+- `deploy/jsonl-retention.service`/`.timer` (daily `03:30`, `Persistent=true`,
+  `User=trading`, `ProtectSystem=strict` with only `data/`,
+  `results/scorecards/` and `results/jsonl_retention/` writable) and the matching
+  `scripts/install_pi.sh` wiring, including the `results/jsonl_retention/`
+  directory. The single-Pi profile enables the timer; the cluster profile has no
+  retention unit, and because the lock is host-local only the node that owns a
+  store may prune it.
+- Configuration: `TRADING_JSONL_RETENTION_ENABLED` (default on, `0` is the
+  rollback), `TRADING_JSONL_RETENTION_{NEWS,VERDICT}_{DAYS,RECORDS}`,
+  `TRADING_JSONL_RETENTION_BACKUPS` and `TRADING_JSONL_RETENTION_REPORT`,
+  documented in `docs/CONFIGURATION.md` and `.env.example`. A malformed or
+  negative value falls back to the default instead of disabling a limit.
+- `trading_jsonl_store_bytes`/`_records`/`_pruned` gauges in
+  `scripts/export_operational_health.py`, read from the retention marker plus a
+  plain `stat` of each store - the exporter never opens a store or takes its lock.
+  The retention marker is listed as the `jsonl_retention` task in
+  `deploy/trading-operational-health.service`, so the generic
+  `TradingScheduledTask*` rules cover a failed or never-started pass.
+- `TradingJsonlStoreGrowing` (warning, above 16 MiB for 24 h) and
+  `TradingJsonlStoreOverRetentionGuard` (critical, above the 256 MiB pruner
+  guard) in `deploy/trading-alerts.yml`.
+- `tests/test_jsonl_retention.py`: the age horizon and record floor in
+  isolation, `0` disabling one dimension only, undated records kept and malformed
+  lines dropped, the store-inode guarantee under a held `flock` with a concurrent
+  appender, rotating backups and the switch that turns them off, dry-run and
+  idempotence, the size guard, the marker round-trip through `src.task_status`,
+  and every CLI exit path. Plus store-size assertions in
+  `tests/test_alert_rules.py`.
+
+### Changed
+
+- `src/news_item_store.py` and `src/scorecard_verdict_history.py` now name
+  `src.jsonl_retention` as the retention owner instead of leaving rotation to the
+  operator. Neither module gained or lost a removal path: appending stays
+  independent of the policy.
+- `docs/ARCHITECTURE_AUDIT.md` row 3 and the news/scorecard findings now record
+  the retention policy as repository code, while the cluster column keeps stating
+  that the inspected cluster has no retention unit installed.
+  `docs/CLUSTER_ARCHITECTURE.md`, `docs/CONFIGURATION.md`, `docs/MONITORING.md`
+  and `SERVER_README.md` describe the units, the settings, the gauges and the
+  single-writer-per-store constraint.
+
 ## v1.0.32 - 2026-11-26
 
 ### Added
