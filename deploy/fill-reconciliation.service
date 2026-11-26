@@ -1,0 +1,23 @@
+[Unit]
+Description=Trading Bot – Reconcile journalled fills against exchange order history
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=trading
+Group=trading
+WorkingDirectory=/opt/trading_2
+EnvironmentFile=/opt/trading_2/.env
+Environment=PYTHONPATH=/opt/trading_2
+Environment=TRADING_JOURNAL_FILE=/opt/trading_2/trade_journal.csv
+Environment=TRADING_FILL_RECONCILIATION_REPORT=/opt/trading_2/results/fill_reconciliation/latest_status.env
+ExecStart=/opt/trading_2/.venv/bin/python -m scripts.reconcile_fills
+# 1 means "a mismatch needs an operator" and 2 means "the pass is incomplete";
+# both are findings, not unit failures. The alerts read the marker, so keeping
+# the unit clean separates "the timer is broken" from "the journal is wrong".
+SuccessExitStatus=0 1 2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/trading_2/results/fill_reconciliation

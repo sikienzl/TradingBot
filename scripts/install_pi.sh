@@ -237,7 +237,7 @@ install_or_update_monitoring() {
 SYSTEMD_DIR="/etc/systemd/system"
 info "Installing systemd services..."
 
-for svc_file in trading-bot.service pnl-exporter.service scorecard.service scorecard.timer research-signal.service research-signal.timer tuning-cycle.service tuning-cycle.timer; do
+for svc_file in trading-bot.service pnl-exporter.service scorecard.service scorecard.timer research-signal.service research-signal.timer tuning-cycle.service tuning-cycle.timer fill-reconciliation.service fill-reconciliation.timer; do
   SRC="${INSTALL_DIR}/deploy/${svc_file}"
   DEST="${SYSTEMD_DIR}/${svc_file}"
   if [[ -f "$SRC" ]]; then
@@ -283,6 +283,17 @@ fi
 if [[ -f "${SYSTEMD_DIR}/research-signal.timer" ]]; then
   systemctl enable --now research-signal.timer
   ok "Research signal timer enabled (runs every hour)."
+fi
+
+# Hourly read-only journal/exchange reconciliation. It places no order and needs
+# no extra configuration, but it only means something once the deployment is
+# live, so enabling the timer is safe either way: a paper run reports that the
+# journal has no exchange side instead of failing.
+mkdir -p "${INSTALL_DIR}/results/fill_reconciliation"
+chown "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}/results/fill_reconciliation"
+if [[ -f "${SYSTEMD_DIR}/fill-reconciliation.timer" ]]; then
+  systemctl enable --now fill-reconciliation.timer
+  ok "Fill reconciliation timer enabled (runs every hour)."
 fi
 
 # Enable trading-bot service but do NOT start automatically

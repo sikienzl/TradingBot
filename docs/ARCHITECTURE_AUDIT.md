@@ -15,10 +15,10 @@ stays **[⚠️ Partial]**.
 | 2 | Decision pyramid and hardware fallback | **[✅ Implemented]** Volume, spread, and ATR gates run before any model or paid call, and the paid news veto runs after the pre-trade cost budget; the order is asserted end to end. Backend selection sits behind `src.inference_backend` with injected backends, and a dedicated CI job runs the Hailo→CPU→rules-only matrix with no Hailo package, device or model files installed. | **[⚠️ Partial]** Same cascade and gates; target-cluster service/device availability is not continuously exercised by CI, and a cluster fallback is only visible in the bot log. |
 | 3 | News integration | **[✅ Implemented]** RSS items retain `published_at`/`fetched_at`, are deduplicated, and are additionally appended to an immutable per-item JSONL store (`src/news_item_store.py`) with a point-in-time replay helper; the opt-in structured final veto reads that store and fails closed when it has no fresh item. | **[⚠️ Partial]** Same code is available, but the inspected cluster has no configured paid provider/credentials and no store retention policy; Hailo features do not consume news. |
 | 4 | Hard risk and kill switch | **[✅ Implemented]** The daily anchor, loss-streak pause, hourly BUY budget and re-entry cooldowns are persisted in `TRADING_RISK_STATE_FILE` and restored at startup; unreadable or unwritable risk state blocks new entries and latches the persistent kill switch in live mode. | **[⚠️ Partial]** Same persisted state per node, but the file and the stop marker are host-local; no cluster-wide shared switch or distributed state store is implemented. |
-| 5 | Execution and costs | **[✅ Implemented]** Exchange fill/fee records, a pre-trade taker-fee + spread + slippage cost budget (`MAX_ENTRY_COST_BPS`), and a Kraken `cl_ord_id` per submission are in place; a submission timeout is reconciled instead of resubmitted and an unknown outcome latches the stop marker. Partial fills keep their requested amount in the journal. | **[⚠️ Partial]** Same controls, but live exchange use remains unvalidated on the cluster. |
-| 6 | Single-Pi vs cluster operations | **[⚠️ Partial]** Local process lock, persisted live snapshot, startup balance comparison, open-order refusal, and uncertain-order latch exist; fill reconstruction needs operator review. | **[⚠️ Partial]** Optional account-scoped PostgreSQL advisory lease supplements local locks; shared PostgreSQL config and cluster deployment are operator prerequisites, and fill reconstruction remains manual. |
+| 5 | Execution and costs | **[✅ Implemented]** Exchange fill/fee records, a pre-trade taker-fee + spread + slippage cost budget (`MAX_ENTRY_COST_BPS`), and a Kraken `cl_ord_id` per submission are in place; a submission timeout is reconciled instead of resubmitted and an unknown outcome latches the stop marker. Partial fills keep their requested amount in the journal, and `src.fill_reconciliation` now compares every journalled live order against the Kraken order history automatically (bot startup plus an hourly timer) and reports unmatched orders and quantity/fee differences. | **[⚠️ Partial]** Same controls and the same reconciliation code, but live exchange use remains unvalidated on the cluster. |
+| 6 | Single-Pi vs cluster operations | **[⚠️ Partial]** Local process lock, persisted live snapshot, startup balance comparison, open-order refusal, uncertain-order latch, and automatic journal-to-exchange fill reconciliation with alerting exist; deriving a trusted position snapshot from Kraken fills still needs operator review. | **[⚠️ Partial]** Optional account-scoped PostgreSQL advisory lease supplements local locks; shared PostgreSQL config and cluster deployment are operator prerequisites, the reconciliation marker is host-local, and fill-to-position reconstruction remains manual. |
 | 7 | Evaluation and scorecard | **[✅ Implemented]** GO/HOLD/NO-GO and HOLD for insufficient data are implemented, with Pi systemd automation. A fresh `GO` verdict is now a prerequisite for `DRY_RUN=false` and for `scripts/manage_model_release.py promote`. | **[⚠️ Partial]** Same gate code and monitoring rules; the inspected cluster deployment still does not show scorecard automation as part of its active bot topology, so the gate reads the marker produced by the Pi/cluster `scorecard-status` timer. |
-| 8 | Monitoring and alerting | **[⚠️ Partial]** Pi installer configures Alertmanager, a private HTTPS webhook relay, and kill-switch/Hailo/research health alerts plus bounded journal/bot-log/market-data staleness probes, scheduled-task exit-status markers, disk-capacity gauges, and an optional analytics-database probe; operator webhook configuration and staging delivery validation remain required. | **[⚠️ Partial]** Alert rules and relay are available in the repository, but cluster-specific installation/configuration and live receiver validation remain outstanding. |
+| 8 | Monitoring and alerting | **[⚠️ Partial]** Pi installer configures Alertmanager, a private HTTPS webhook relay, and kill-switch/Hailo/research health alerts plus bounded journal/bot-log/market-data staleness probes, scheduled-task exit-status markers, disk-capacity gauges, fill-reconciliation presence/completeness/mismatch/staleness gauges, and an optional analytics-database probe; operator webhook configuration and staging delivery validation remain required. | **[⚠️ Partial]** Alert rules and relay are available in the repository, but cluster-specific installation/configuration and live receiver validation remain outstanding. |
 
 ## Findings and evidence
 
@@ -147,9 +147,26 @@ order up in the open/closed lists instead of resubmitting; an outcome that stays
 unknown latches the kill switch rather than risking a duplicate. Partial fills
 keep `requested_amount_coin` and `partial_fill` in the journal.
 
-**Next:** Reconcile journal rows against Kraken fill history automatically, and
-validate the cost budget and idempotency path against the live exchange before
-enabling live trading on either profile.
+Journal rows are now checked against the exchange automatically.
+`src.fill_reconciliation` reads the recent live rows of the journal
+(`src.journal_order_reader`, bounded tail, `dry_run=false` only), fetches the
+account order history (`src/exchange_order_history`, one page per symbol scope
+with a scope cap, plus an explicit `clientOrderId` lookup for an order outside
+the window), and classifies each row as `matched`, `partial_fill`, `unmatched`
+or `not_checkable` while comparing filled quantity and fee in the base currency
+(`src/fill_reconciliation_report` writes the summary marker and JSON report).
+`src.bot_runtime.run_fill_reconciliation` runs one pass inside the execution-
+owner lock after the live scorecard gate and before the trading loop, and
+`deploy/fill-reconciliation.timer` repeats it hourly; `scripts/reconcile_fills.py`
+is the manual command with stable exit codes. The pass is read-only and never
+places, cancels, or rewrites anything, so it cannot interact with the risk
+guardrails; a missing credential, unreadable journal, or failing exchange call
+makes the pass `incomplete` ("nothing verified") rather than clean, and a
+finding is logged and alerted instead of vetoing a trade.
+
+**Next:** Validate the cost budget, idempotency path, and reconciliation against
+the live exchange on a staging account before enabling live trading on either
+profile, and decide the retention policy for the reconciliation reports.
 
 ### 6. Runtime modes, locking, and reconciliation
 
@@ -172,8 +189,10 @@ addresses.
 
 **Next:** Configure and exercise the shared PostgreSQL lease on the actual
 cluster before enabling multiple execution candidates. Startup balance/open-
-order checks are implemented, but exact fill-to-position reconstruction
-remains an operator reconciliation step.
+order checks are implemented and journal fills are reconciled against the
+exchange automatically, but the reconciliation marker is written and read on one
+host only: it is not shared between nodes, and exact fill-to-position
+reconstruction remains an operator step.
 
 ### 7. Evaluation and scorecard
 
@@ -274,9 +293,10 @@ independent from cluster services.
    execution ownership, and per-submission `cl_ord_id` idempotency are
    implemented; the remaining gap is a cluster-wide shared switch.
 2. **P0: Fix live accounting and gates.** Exchange fees and spread are included
-   in live approval and journaling, retries are idempotent, and partial-fill
-   state is preserved; automatic reconciliation of journal rows against Kraken
-   fill history remains.
+   in live approval and journaling, retries are idempotent, partial-fill state is
+   preserved, and journal rows are reconciled against Kraken fill history
+   automatically with alerting; validating that reconciliation against the live
+   exchange on a staging account remains.
 3. **P1: Finish inference fallback.** Implement and test Hailo -> CPU -> rules
    selection without importing Hailo dependencies on the Pi path; keep missing
    inputs at HOLD.
@@ -289,7 +309,7 @@ independent from cluster services.
    training/compilation to the future x86 worker only after it exists.
 6. **P2: Close operational visibility gaps.** Alert receivers, kill-switch,
    Hailo, research-feed, scorecard, portfolio-snapshot, data-staleness,
-   scheduled-task exit-status, disk-capacity, analytics-database and live-mode
-   scorecard-gate alerts are implemented; running the weekly scorecard on the
-   cluster profile and staging delivery evidence for the private webhook remain.
-   Retain a tested standalone Pi dashboard/scorecard path.
+   scheduled-task exit-status, disk-capacity, analytics-database, live-mode
+   scorecard-gate and fill-reconciliation alerts are implemented; running the
+   weekly scorecard on the cluster profile and staging delivery evidence for the
+   private webhook remain. Retain a tested standalone Pi dashboard/scorecard path.

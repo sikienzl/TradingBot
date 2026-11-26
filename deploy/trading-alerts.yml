@@ -198,3 +198,39 @@ groups:
         annotations:
           summary: "Analytics PostgreSQL is unreachable"
           description: "ANALYTICS_DB_URL is configured but the size probe fails; the bot journals to CSV and skips PostgreSQL, so analytics dashboards go stale."
+
+      - alert: TradingFillReconciliationMismatch
+        expr: trading_fill_reconciliation_mismatches > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Journalled fills do not match the exchange"
+          description: "The last fill reconciliation pass found an unmatched order or a quantity/fee difference; the local accounting is wrong. Run scripts/reconcile_fills.py for the per-order detail."
+
+      - alert: TradingFillReconciliationIncomplete
+        expr: trading_fill_reconciliation_enabled == 1 and trading_fill_reconciliation_complete == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fill reconciliation could not verify the journal"
+          description: "The last pass was incomplete (missing credentials, unreadable journal, or a failing exchange call), so no journalled live order is verified."
+
+      - alert: TradingFillReconciliationStale
+        expr: trading_fill_reconciliation_enabled == 1 and trading_fill_reconciliation_age_seconds > 10800
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fill reconciliation has not run recently"
+          description: "The newest reconciliation marker is over three hours old; fill-reconciliation.timer is stopped or the bot has not started."
+
+      - alert: TradingFillReconciliationMarkerMissing
+        expr: trading_fill_reconciliation_enabled == 1 and trading_fill_reconciliation_present == 0
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fill reconciliation never reported"
+          description: "No parseable reconciliation marker on a live deployment, so the journal has never been verified since the exporter was configured."

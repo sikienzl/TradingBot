@@ -156,6 +156,17 @@ latches that node's marker. A cluster-wide shared switch and a shared risk-state
 store remain open work; until they exist, run exactly one candidate execution
 node per account.
 
+Fill reconciliation (`src.fill_reconciliation`) is likewise host-local and belongs
+to the node that owns the account: the bot pass reads that host's journal and the
+`fill-reconciliation.timer` unit writes its marker under the deployment root
+(`results/fill_reconciliation/`), which the operational-health exporter on the same
+host publishes. There is no cross-node coordination and no shared report store, so
+only the execution owner should run the timer - a second node reconciling the same
+account duplicates private Kraken calls without adding coverage. A `DRY_RUN=true`
+workload such as the observed `.74` shadow container is skipped by design because a
+paper journal has no exchange side, so the inspected cluster currently exercises
+none of this path; validating it against a live account remains an operator step.
+
 ## Single-Pi boundary
 
 The CM5 cluster is optional. The Raspberry Pi release can run the rules-based
