@@ -301,6 +301,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/src
         run: |
           pytest tests/test_inference_backend.py \
+            tests/test_inference_decision_stats.py \
             tests/test_decision_pyramid_ordering.py -v
 
   # The Hailo experiment test drives the real train -> ONNX export path, which

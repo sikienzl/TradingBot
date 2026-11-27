@@ -28,6 +28,10 @@ Environment=TRADING_FILL_RECONCILIATION_REPORT=/opt/trading_2/results/fill_recon
 # Store retention summary written by jsonl-retention.timer. Read-only here: the
 # exporter only stats the two store files and reads that marker.
 Environment=TRADING_JSONL_RETENTION_REPORT=/opt/trading_2/results/jsonl_retention/latest_status.env
+# Per-decision tabular inference backend counters written by the bot itself
+# (src.inference_decision_stats.py). Read-only here: the exporter publishes the
+# backend mix so a silent Hailo -> CPU -> rules_only fallback is visible.
+Environment=TRADING_INFERENCE_STATS_FILE=/opt/trading_2/results/inference/backend_stats.json
 # The live-mode scorecard gate gauge reads DRY_RUN from the bot deployment .env
 # and the verdict from results/scorecards/latest_status.(json|env) below
 # WorkingDirectory. Only the run mode is read - no credentials are exported.

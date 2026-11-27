@@ -51,6 +51,8 @@ environment overrides before starting the bot.
 | `TABULAR_RESEARCH_SIGNAL_PATH` | `./data/research_signal_latest.json` | Latest AutoResearch JSON used as model input features |
 | `RESEARCH_NEWS_STORE_PATH` | `./data/research_news_items.jsonl` | Append-only per-item news store written by `scripts/fetch_research_signal.py` (`none` disables it). The bot reads it back through `integration.news_store_path` in the signal file, so no bot restart is needed to change it. `jsonl-retention.timer` bounds it - see [JSONL store retention](#jsonl-store-retention) |
 | `AUTO_TUNE_TABULAR_CONFIDENCE` | `false` | Auto-adjust CatBoost threshold |
+| `TRADING_INFERENCE_STATS_FILE` | `results/inference/backend_stats.json` | Counter file in which the bot records which tabular backend served each decision (`hailo`/`cpu`/`rules_only`/`other`). `scripts/export_operational_health.py` only reads it and publishes the backend mix, so a silent fallback is visible in monitoring. `off`/`none`/`false` disables the counters |
+| `TRADING_INFERENCE_STATS_MIN_WRITE_SECONDS` | `15` | Minimum delay between two writes while the serving backend stays the same. A change of backend is always written immediately, because that transition is what the fallback alert watches for |
 | `USE_ML_MODEL` | `false` | Enable LLM signal (GPU recommended) |
 
 ### Simulation regimes

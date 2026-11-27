@@ -5,6 +5,67 @@ a version heading is assigned when a release is prepared.
 
 ## Unreleased
 
+### Added
+
+- `src/inference_decision_stats.py`, a layer-1 module that records which tabular
+  inference backend served each decision. Until now a `hailo -> cpu ->
+  rules_only` fallback was visible only in the bot log, so the audit could not
+  tell whether a cluster deployment had quietly stopped using its Hailo device.
+  The fallback cascade already tags every prediction with the stage that served
+  it, and `analyze_coin` is the single choke point where that tag is observable,
+  so the counter is recorded there and covers the cascade, a direct CatBoost
+  model and an injected predictor without touching the decision pyramid. A
+  candidate rejected by the volume, spread or ATR gate never reaches inference
+  and produces no counter, so the mix describes real inference decisions. The
+  backend label is normalised to `hailo`, `cpu`, `rules_only` or `other`, and an
+  unknown label is reported as `other` rather than guessed.
+- A cumulative counter file at `results/inference/backend_stats.json`
+  (`TRADING_INFERENCE_STATS_FILE`, `off` disables it), written with the
+  standard temp-file + `fsync` + `os.replace` sequence and holding the per
+  backend totals, the last backend and the last write time. Writes are throttled
+  to one per `TRADING_INFERENCE_STATS_MIN_WRITE_SECONDS` (default 15) so the
+  100-second loop cannot hammer the SD card, while a backend change is always
+  written immediately - that is the event monitoring cares about. The throttle
+  uses the marker's own timestamp, so it also holds across a restart.
+- Fail-closed reads: a missing file is an empty start, an unreadable, malformed,
+  wrong-version or contradictory counter file is reported as unknown and never
+  invents a backend, and a counter write failure is logged once and returns
+  without affecting the decision. No module imports `hailo_platform`, `catboost`
+  or `sklearn`, and the module keeps the bot's existing dependency direction.
+- Read-only Prometheus gauges in `scripts/export_operational_health.py`:
+  `trading_inference_decisions_total`, `trading_inference_backend_share`,
+  `trading_inference_stats_age_seconds`, `trading_inference_stats_present` and
+  `trading_inference_expected_backend_hailo`. The exporter only reads the
+  counter file, so it stays compatible with its `ProtectSystem=strict`, and the
+  expected backend comes from the deployment env (`TABULAR_MODEL_BACKEND`)
+  rather than a guess. `deploy/trading-operational-health.service` points at the
+  bot's counter file and `scripts/install_pi.sh` creates and owns
+  `results/inference/` alongside the other result directories.
+- Three alert rules in `deploy/trading-alerts.yml` (29 to 32):
+  `TradingInferenceBackendCountersMissing` (warning, 2h) when a deployment with
+  `USE_TABULAR_MODEL=true` publishes no usable counters,
+  `TradingInferenceBackendFallback` (warning, 30m) when a deployment configured
+  for `TABULAR_MODEL_BACKEND=hailo` served more than half its decisions from CPU
+  or rules-only, and `TradingInferenceRulesOnlyDecisions` (critical, 1h) when
+  more than 5% of decisions are rules-only on any profile. A CatBoost-only Pi
+  publishes `trading_inference_expected_backend_hailo=0`, so the fallback alert
+  cannot fire on a profile that never expects Hailo, and a rules-only
+  deployment publishes no share gauges at all, so neither alert can fire there.
+
+### Tests
+
+- `tests/test_inference_decision_stats.py` covers path and interval resolution,
+  backend normalisation, the fail-closed read matrix, the atomic write with no
+  temp-file leftovers, accumulation and restart continuity, the throttle window,
+  the immediate write on a backend change, the disabled no-op, a single log line
+  for a permanently unwritable path, and the `analyze_coin` hook: a CPU
+  prediction, a rules-only fallback, an untagged predictor falling back to the
+  configured backend, and no counter at all for an ATR-gated candidate.
+  `tests/test_alert_rules.py` asserts the exact gauge set for a Hailo mix, a
+  CatBoost profile, a rules-only share, a disabled tabular profile, a corrupt
+  counter file and a deployment with no counter file. The CI inference-matrix
+  job runs the counter tests on the no-package single-Pi profile.
+
 ## v1.0.33 - 2026-11-27
 
 ### Added

@@ -24,12 +24,20 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 from src.data_staleness import measure_staleness, resolve_log_timezone
-from src.env_file import env_bool
+from src.env_file import env_bool, read_env_value
 from src.exporter_paths import ENV_PATH
 from src.fill_reconciliation_report import (
     marker_age_seconds,
     marker_int,
     read_report_marker,
+)
+from src.inference_decision_stats import (
+    HAILO_BACKEND,
+    KNOWN_BACKENDS,
+    read_backend_stats,
+)
+from src.inference_decision_stats import (
+    resolve_stats_path as resolve_inference_stats_path,
 )
 from src.jsonl_retention import (
     read_report_marker as read_retention_marker,
@@ -263,6 +271,73 @@ def _jsonl_retention_lines(report_file: Path | None) -> list[str]:
     return lines
 
 
+def _inference_backend_lines(
+    stats_file: Path | None, env_file: Path, now: datetime
+) -> list[str]:
+    """Backend-share gauges for the tabular inference cascade.
+
+    The bot records which backend served each decision
+    (:mod:`src.inference_decision_stats`), so a cluster deployment that quietly
+    lost its Hailo endpoint keeps reporting decisions - only the backend mix
+    changes. The share gauges are what make that visible; the age gauge covers
+    the other failure mode, a bot that stopped recording at all. The expected
+    backend is read from the deployment ``.env`` the bot service loads, so a
+    single-node profile that legitimately runs ``catboost`` can never match the
+    Hailo-fallback alert.
+    """
+    if stats_file is None:
+        return []
+    stats = read_backend_stats(stats_file)
+    enabled = int(env_bool(
+        "USE_TABULAR_MODEL", False, str(env_file), quiet=True))
+    lines = [
+        ("# HELP trading_inference_model_enabled Whether the deployment enables "
+         "the optional tabular model."),
+        "# TYPE trading_inference_model_enabled gauge",
+        f"trading_inference_model_enabled {enabled}",
+        ("# HELP trading_inference_stats_present Whether the bot published "
+         "inference backend counters with at least one recorded decision."),
+        "# TYPE trading_inference_stats_present gauge",
+        f"trading_inference_stats_present {int(not stats.unreadable and stats.total > 0)}",
+    ]
+    if stats.unreadable or stats.total <= 0:
+        return lines
+    if stats.updated_utc is not None:
+        lines.extend([
+            ("# HELP trading_inference_stats_age_seconds Seconds since the bot last "
+             "updated its inference backend counters."),
+            "# TYPE trading_inference_stats_age_seconds gauge",
+            (
+                f"trading_inference_stats_age_seconds "
+                f"{max(0.0, (now - stats.updated_utc).total_seconds()):.3f}"
+            ),
+        ])
+    hailo_expected = int(
+        read_env_value("TABULAR_MODEL_BACKEND", str(env_file), quiet=True)
+        .strip().lower() == HAILO_BACKEND)
+    lines.extend([
+        ("# HELP trading_inference_expected_backend_hailo Whether the deployment "
+         "configures the remote Hailo backend."),
+        "# TYPE trading_inference_expected_backend_hailo gauge",
+        f"trading_inference_expected_backend_hailo {hailo_expected}",
+    ])
+    for backend in sorted(KNOWN_BACKENDS):
+        if backend not in stats.counts:
+            continue
+        label = f'{{backend="{escape_label_value(backend)}"}}'
+        lines.extend([
+            ("# HELP trading_inference_decisions_total Tabular decisions served by "
+             "this inference backend since the counters were created."),
+            "# TYPE trading_inference_decisions_total gauge",
+            f"trading_inference_decisions_total{label} {stats.counts[backend]}",
+            ("# HELP trading_inference_backend_share Share of recorded tabular "
+             "decisions served by this inference backend."),
+            "# TYPE trading_inference_backend_share gauge",
+            f"trading_inference_backend_share{label} {stats.share(backend):.6f}",
+        ])
+    return lines
+
+
 def _disk_lines(disk_paths: Sequence[str]) -> list[str]:
     """Capacity gauges for the filesystems the bot writes to.
 
@@ -372,6 +447,7 @@ def render_metrics(
     deployment_env_file: Path | None = None,
     fill_report_file: Path | None = None,
     retention_report_file: Path | None = None,
+    inference_stats_file: Path | None = None,
 ) -> str:
     now = now or datetime.now(UTC)
     kill_switch_active = int(os.path.lexists(kill_switch_file))
@@ -452,6 +528,11 @@ def render_metrics(
             _fill_reconciliation_lines(fill_report_file, env_file, live_enabled, now)
         )
     lines.extend(_jsonl_retention_lines(retention_report_file))
+    lines.extend(_inference_backend_lines(
+        inference_stats_file,
+        deployment_env_file or Path(ENV_PATH),
+        now,
+    ))
     return "\n".join(lines) + "\n"
 
 
@@ -487,6 +568,9 @@ def main() -> int:
     # Same resolution the retention unit writes with, including the default
     # path, so the exporter needs no extra configuration on a standard host.
     retention_report = resolve_report_path()
+    # The bot writes the inference backend counters and the exporter only reads
+    # them, so both sides use the same default path resolution.
+    inference_stats = resolve_inference_stats_path()
     body = render_metrics(
         Path(os.getenv("TRADING_KILL_SWITCH_FILE", ".trading_kill_switch")),
         os.getenv("HAILO_HEALTH_URL", ""),
@@ -504,6 +588,8 @@ def main() -> int:
             os.getenv("TRADING_DEPLOYMENT_ENV_FILE", ENV_PATH)),
         fill_report_file=Path(fill_report) if fill_report else None,
         retention_report_file=Path(retention_report) if retention_report else None,
+        inference_stats_file=(
+            Path(inference_stats) if inference_stats else None),
     )
     output = Path(os.getenv(
         "TRADING_HEALTH_METRICS_FILE",

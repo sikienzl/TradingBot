@@ -9,6 +9,7 @@ and check the scheduled-task and capacity rules against the real output of
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -59,6 +60,7 @@ def render(tmp_path: Path, gate_env: dict[str, str], *, dry_run: bool) -> str:
         deployment_env_file=write_deployment_env(tmp_path, dry_run=dry_run),
         fill_report_file=write_fill_marker(tmp_path),
         retention_report_file=write_retention_marker(tmp_path),
+        inference_stats_file=write_inference_stats_marker(tmp_path),
     )
 
 
@@ -110,6 +112,26 @@ def write_retention_marker(
         encoding="utf-8",
     )
     return marker
+
+
+def write_inference_stats_marker(
+    tmp_path: Path, *, age: timedelta = timedelta(minutes=2)
+) -> Path:
+    """Inference backend counters as ``src.inference_decision_stats`` writes them."""
+    stamp = datetime(2026, 11, 25, 12, 0, tzinfo=UTC) - age
+    path = tmp_path / "backend_stats.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_utc": stamp.isoformat(),
+                "last_backend": "hailo",
+                "decisions": {"hailo": 8, "cpu": 2},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
 
 
 def exported_metric_names(tmp_path: Path) -> set[str]:
@@ -198,6 +220,18 @@ NEW_ALERTS = {
     ),
     "TradingJsonlStoreOverRetentionGuard": "trading_jsonl_store_bytes > 268435456",
     "TradingJsonlStoreGrowing": "trading_jsonl_store_bytes > 16777216",
+    "TradingInferenceBackendCountersMissing": (
+        "trading_inference_model_enabled == 1 "
+        "and trading_inference_stats_present == 0"
+    ),
+    "TradingInferenceBackendFallback": (
+        'trading_inference_expected_backend_hailo == 1 '
+        'and (trading_inference_backend_share{backend="cpu"} + '
+        'trading_inference_backend_share{backend="rules_only"}) > 0.5'
+    ),
+    "TradingInferenceRulesOnlyDecisions": (
+        'trading_inference_backend_share{backend="rules_only"} > 0.05'
+    ),
 }
 
 
@@ -373,3 +407,125 @@ def test_alert_rules_stay_parsable_and_unique() -> None:
     for name, expr in alerts.items():
         assert expr, f"{name} has no expression"
         assert expr.count("(") == expr.count(")"), f"{name} has unbalanced parentheses"
+
+
+# ---------------------------------------------------------------------------
+# Inference backend mix: the cluster fallback must be observable
+# ---------------------------------------------------------------------------
+
+def inference_render(
+    tmp_path: Path,
+    *,
+    backend: str,
+    use_tabular_model: bool,
+    stats: dict[str, int] | None,
+    age: timedelta = timedelta(minutes=2),
+) -> dict[str, float]:
+    """Gauge values for one deployment profile plus its backend counters."""
+    env_file = tmp_path / "deployment.env"
+    env_file.write_text(
+        "DRY_RUN=true\n"
+        f"USE_TABULAR_MODEL={'true' if use_tabular_model else 'false'}\n"
+        f"TABULAR_MODEL_BACKEND={backend}\n",
+        encoding="utf-8",
+    )
+    stats_file = tmp_path / "backend_stats.json"
+    if stats is not None:
+        stamp = datetime(2026, 11, 25, 12, 0, tzinfo=UTC) - age
+        stats_file.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "updated_utc": stamp.isoformat(),
+                    "last_backend": max(stats),
+                    "decisions": stats,
+                }
+            ),
+            encoding="utf-8",
+        )
+    body = render_metrics(
+        tmp_path / "STOP", "", tmp_path / "signal.json", tmp_path / "journal.csv",
+        tmp_path / "bot.log",
+        now=datetime(2026, 11, 25, 12, 0, tzinfo=UTC),
+        scorecard_gate=scorecard_gate_settings(gate_env(tmp_path, None)),
+        deployment_env_file=env_file,
+        inference_stats_file=stats_file,
+    )
+    return gauge_values(body)
+
+
+def test_hailo_profile_publishes_the_backend_mix(tmp_path) -> None:
+    values = inference_render(
+        tmp_path, backend="hailo", use_tabular_model=True,
+        stats={"hailo": 8, "cpu": 2},
+    )
+    assert values["trading_inference_model_enabled"] == 1
+    assert values["trading_inference_stats_present"] == 1
+    assert values["trading_inference_expected_backend_hailo"] == 1
+    assert 100 < values["trading_inference_stats_age_seconds"] < 140
+    assert values['trading_inference_decisions_total{backend="hailo"}'] == 8
+    assert values['trading_inference_decisions_total{backend="cpu"}'] == 2
+    assert values['trading_inference_backend_share{backend="hailo"}'] == 0.8
+    assert values['trading_inference_backend_share{backend="cpu"}'] == 0.2
+    # No rules_only counter means no gauge, not a zero that dilutes the mix.
+    assert 'trading_inference_backend_share{backend="rules_only"}' not in (
+        "\n".join(values))
+
+
+def test_catboost_profile_cannot_match_the_hailo_fallback_alert(tmp_path) -> None:
+    """A single-node Pi legitimately runs on CPU, so it must stay silent."""
+    values = inference_render(
+        tmp_path, backend="catboost", use_tabular_model=True,
+        stats={"cpu": 10},
+    )
+    assert values["trading_inference_expected_backend_hailo"] == 0
+    assert values['trading_inference_backend_share{backend="cpu"}'] == 1.0
+
+
+def test_rules_only_fallback_is_reported_as_a_share(tmp_path) -> None:
+    values = inference_render(
+        tmp_path, backend="hailo", use_tabular_model=True,
+        stats={"hailo": 18, "cpu": 1, "rules_only": 1},
+    )
+    assert values['trading_inference_backend_share{backend="rules_only"}'] == 0.05
+
+
+def test_tabular_model_disabled_publishes_no_counters_and_no_alert(tmp_path) -> None:
+    """A rules-only deployment has no backend mix to monitor."""
+    values = inference_render(
+        tmp_path, backend="catboost", use_tabular_model=False, stats=None)
+    assert values["trading_inference_model_enabled"] == 0
+    assert values["trading_inference_stats_present"] == 0
+    assert "trading_inference_backend_share" not in str(values)
+
+
+def test_corrupt_counter_file_is_reported_as_absent(tmp_path) -> None:
+    stats_file = tmp_path / "backend_stats.json"
+    stats_file.write_text("{truncated", encoding="utf-8")
+    env_file = tmp_path / "deployment.env"
+    env_file.write_text(
+        "DRY_RUN=true\nUSE_TABULAR_MODEL=true\nTABULAR_MODEL_BACKEND=hailo\n",
+        encoding="utf-8",
+    )
+    body = render_metrics(
+        tmp_path / "STOP", "", tmp_path / "signal.json", tmp_path / "journal.csv",
+        tmp_path / "bot.log",
+        now=datetime(2026, 11, 25, 12, 0, tzinfo=UTC),
+        scorecard_gate=scorecard_gate_settings(gate_env(tmp_path, None)),
+        deployment_env_file=env_file,
+        inference_stats_file=stats_file,
+    )
+    values = gauge_values(body)
+    assert values["trading_inference_stats_present"] == 0
+    assert "trading_inference_stats_age_seconds" not in values
+
+
+def test_inference_gauges_are_absent_without_a_stats_file(tmp_path) -> None:
+    body = render_metrics(
+        tmp_path / "STOP", "", tmp_path / "signal.json", tmp_path / "journal.csv",
+        tmp_path / "bot.log",
+        now=datetime(2026, 11, 25, 12, 0, tzinfo=UTC),
+        scorecard_gate=scorecard_gate_settings(gate_env(tmp_path, None)),
+        deployment_env_file=write_deployment_env(tmp_path, dry_run=True),
+    )
+    assert "trading_inference_" not in body

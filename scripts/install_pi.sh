@@ -318,6 +318,13 @@ mkdir -p "${INSTALL_DIR}/results/scorecards" "${INSTALL_DIR}/results/tuning"
 chown "${SERVICE_USER}:${SERVICE_USER}" \
   "${INSTALL_DIR}/results/scorecards" "${INSTALL_DIR}/results/tuning"
 
+# Per-decision tabular inference backend counters (src.inference_decision_stats).
+# The bot creates the file itself, but the directory must belong to the service
+# user before the first analysis cycle, and scripts/export_operational_health.py
+# reads it to publish the backend mix.
+mkdir -p "${INSTALL_DIR}/results/inference"
+chown "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}/results/inference"
+
 # Enable trading-bot service but do NOT start automatically
 # (user must configure .env first)
 if [[ -f "${SYSTEMD_DIR}/trading-bot.service" ]]; then

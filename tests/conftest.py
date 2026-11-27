@@ -23,3 +23,17 @@ def isolated_risk_state_file(tmp_path, monkeypatch):
     """
     monkeypatch.setenv(
         "TRADING_RISK_STATE_FILE", str(tmp_path / "trading_risk_state.json"))
+
+
+@pytest.fixture(autouse=True)
+def isolated_inference_stats_file(tmp_path, monkeypatch):
+    """Keep the inference backend counters inside the test's own tmp directory.
+
+    ``src.inference_decision_stats`` defaults to a repository-relative path and
+    :func:`src.coin_analysis.analyze_coin` records a decision on every tabular
+    prediction, so without this redirect unrelated tests would accumulate
+    counters in the working tree and a counter test could read another test's
+    decisions.
+    """
+    monkeypatch.setenv(
+        "TRADING_INFERENCE_STATS_FILE", str(tmp_path / "backend_stats.json"))
