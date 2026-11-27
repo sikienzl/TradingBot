@@ -175,12 +175,26 @@ python3 -m scripts.manage_model_release promote \
 ```
 
 The promoter requires matching feature and label contracts and a matching
-training-data SHA-256, copies artifacts into an immutable release directory,
-records checksums, and atomically switches `/opt/trading-models/active`.
+training-data SHA-256, requires both metadata files to carry validation results
+and training provenance, copies artifacts into an immutable release directory,
+records checksums and the full per-side validation reports, and atomically
+switches `/opt/trading-models/active`.
 Configure the CPU predictor to use
 `/opt/trading-models/active/cpu`; configure the Hailo service's HEF and
 metadata paths under `/opt/trading-models/active/hailo`. Keep the prior release
-directory in place. Roll back by reactivating a checksummed earlier release:
+directory in place. Inspect a stored release at any time without changing the
+active release:
+
+```sh
+python3 -m scripts.manage_model_release validate \
+  --release-root /opt/trading-models --release-id trading-2026-01
+```
+
+`validate` prints the release contract, the validation metrics and training
+provenance of both sides, any recorded walk-forward folds, and the artifact
+checksums, and exits non-zero with the reason when a manifest is incomplete,
+disagrees with its own release contract, or an artifact no longer matches its
+recorded checksum. Roll back by reactivating a checksummed earlier release:
 
 ```sh
 python3 -m scripts.manage_model_release rollback \
@@ -190,6 +204,12 @@ python3 -m scripts.manage_model_release rollback \
 This verifies the package contract and checksums, not profitability or hardware
 compatibility. Run the selected HEF on the target Hailo device and complete the
 paper/shadow evaluation before operator promotion to any live workload.
+
+`src.train_catboost_model` also records its walk-forward folds in
+`walk_forward` and their averages in `walk_forward_summary`, which the release
+manifest stores per side so the operator can compare the CPU and Hailo
+evaluation of the same release after promotion. `src.train_hailo_model` does not
+run walk-forward evaluation yet, so its side reports no folds.
 
 ### 3. Dry-run / live trading
 ```sh

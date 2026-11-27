@@ -108,9 +108,14 @@ HA, or a trading-bot deployment. Docker and K3s containerd are separate runtimes
   `--feature-contract hailo` from the exact same input data to produce the CPU
   fallback.
 - `scripts.manage_model_release` verifies paired feature/label contracts and
-  training-data hashes, publishes immutable versioned directories with
-  checksums, and atomically switches the `active` symlink. Rollback validates
-  the old checksums before activation. Copy or synchronize the completed
+  training-data hashes, requires validation results and training provenance on
+  both sides, publishes immutable versioned directories with
+  checksums and the full per-side validation reports in `manifest.json`, and
+  atomically switches the `active` symlink. Rollback validates
+  the old checksums before activation. `validate` re-checks a stored release's
+  manifest, contract agreement and artifact checksums and prints both sides'
+  validation reports without touching `active`, so each node can confirm what it
+  is about to run. Copy or synchronize the completed
   immutable release to each node over a trusted channel; the promoter itself
   does not transfer files across the network.
 - Promotion is gated on a fresh `GO` scorecard verdict
