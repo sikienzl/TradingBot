@@ -118,6 +118,15 @@ HA, or a trading-bot deployment. Docker and K3s containerd are separate runtimes
   is about to run. Copy or synchronize the completed
   immutable release to each node over a trusted channel; the promoter itself
   does not transfer files across the network.
+- Which release a node is running is readable per host: set
+  `TRADING_MODEL_RELEASE_ROOT` to that node's release root and
+  `src.model_release.read_active_release` reports the active release ID, feature
+  contract, feature tuple, training-data hash and per-artifact checksum
+  verification without changing anything. The bot logs that state at startup and
+  `scripts.export_operational_health` publishes it as gauges, so the monitoring
+  node reads its own host's release tree read-only and never follows a network
+  path. The variable is unset by default; a node that does not use paired
+  releases publishes no release gauge and cannot match the release alerts.
 - Promotion is gated on a fresh `GO` scorecard verdict
   (`src.scorecard_gate`): the CLI reads
   `results/scorecards/latest_status.json`/`latest_status.env` relative to its
@@ -195,6 +204,19 @@ observed cluster has no Hailo readiness probe; the counters describe the node
 that wrote them and are never shared or merged across nodes. A node that runs no
 analysis path publishes no counters, and the exporter reports
 `trading_inference_stats_present=0` for it rather than an empty mix.
+
+The active model release is likewise read per host. `TRADING_MODEL_RELEASE_ROOT`
+points at that node's own release tree, `src.model_release.read_active_release`
+re-verifies the `active` release's manifest and artifact checksums, and the
+operational-health exporter on the same host publishes
+`trading_model_release_present`, `trading_model_release_artifacts_ok`,
+`trading_model_release_features` and `trading_model_release_age_seconds`. Because
+each node reads only its own filesystem, a release that was synchronized to one
+node but not the other shows up as a different release ID or a failed
+verification on the node that is behind; there is no shared release store and no
+cross-node release comparison. The variable is unset by default, so a host that
+never promotes paired releases publishes `trading_model_release_enabled=0` and
+cannot match either release alert.
 
 ## Single-Pi boundary
 

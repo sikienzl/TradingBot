@@ -19,6 +19,7 @@ from src.scorecard_gate import scorecard_gate_settings
 
 ROOT = Path(__file__).resolve().parents[1]
 ALERTS_FILE = ROOT / "deploy" / "trading-alerts.yml"
+NOW = datetime(2026, 11, 25, 12, 0, tzinfo=UTC)
 
 _ALERT_RE = re.compile(r"^\s*-\s+alert:\s+(\S+)\s*$", re.MULTILINE)
 _EXPR_RE = re.compile(r"^\s*expr:\s+(.*?)\s*$")
@@ -41,7 +42,13 @@ def parse_alerts(path: Path = ALERTS_FILE) -> dict[str, str]:
     return alerts
 
 
-def render(tmp_path: Path, gate_env: dict[str, str], *, dry_run: bool) -> str:
+def render(
+    tmp_path: Path,
+    gate_env: dict[str, str],
+    *,
+    dry_run: bool,
+    model_release_root: str | None = None,
+) -> str:
     """Operational-health exporter output for one deployment configuration."""
     marker = tmp_path / "latest_status.env"
     marker.write_text(
@@ -54,14 +61,76 @@ def render(tmp_path: Path, gate_env: dict[str, str], *, dry_run: bool) -> str:
         disk_paths=[str(tmp_path)],
         analytics_db_url="postgresql://localhost/analytics",
         database_probe=lambda _url: 1024,
-        now=datetime(2026, 11, 25, 12, 0, tzinfo=UTC),
+        now=NOW,
         health_probe=lambda *_args, **_kwargs: _Ok(),
         scorecard_gate=scorecard_gate_settings(gate_env),
         deployment_env_file=write_deployment_env(tmp_path, dry_run=dry_run),
         fill_report_file=write_fill_marker(tmp_path),
         retention_report_file=write_retention_marker(tmp_path),
         inference_stats_file=write_inference_stats_marker(tmp_path),
+        model_release_root=(
+            str(write_release_root(tmp_path))
+            if model_release_root is None else model_release_root
+        ),
     )
+
+
+def write_release_root(
+    tmp_path: Path, *, release_id: str = "release-1", tamper: str | None = None
+) -> Path:
+    """Promote a paired model release into a throwaway root and return that root.
+
+    Built with the real promotion command so the exporter is tested against a
+    manifest the runtime would actually accept, not a hand-written one.
+    """
+    from src.model_release import promote_release
+
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    (artifacts / "cpu.cbm").write_bytes(b"cpu model")
+    (artifacts / "model.hef").write_bytes(b"hailo model")
+    validation = {
+        "rows": 250,
+        "accuracy": 0.8,
+        "macro_f1": 0.7,
+        "threshold_macro_f1": 0.68,
+        "threshold_coverage": 0.62,
+    }
+    label_map = {"verkaufen": 0, "halten": 1, "kaufen": 2}
+    (artifacts / "cpu.json").write_text(json.dumps({
+        "feature_contract": "hailo",
+        "features": ["rsi", "macd"],
+        "label_map": label_map,
+        "training_data_sha256": "a" * 64,
+        "label_horizon": 6,
+        "train_rows": 1000,
+        "validation_rows": 250,
+        "validation": validation,
+    }), encoding="utf-8")
+    (artifacts / "hailo.json").write_text(json.dumps({
+        "feature_contract": "hailo",
+        "features": ["rsi", "macd"],
+        "label_map": label_map,
+        "data_provenance": {
+            "training_data_sha256": "a" * 64,
+            "label_map": label_map,
+            "label_horizon": 6,
+            "train_rows": 1000,
+            "validation_rows": 250,
+        },
+        "validation": validation,
+    }), encoding="utf-8")
+    root = tmp_path / "models"
+    release = promote_release(
+        root, release_id,
+        artifacts / "cpu.cbm", artifacts / "cpu.json",
+        artifacts / "model.hef", artifacts / "hailo.json",
+    )
+    if tamper == "checksum":
+        (release / "cpu" / "catboost_model.cbm").write_bytes(b"swapped")
+    elif tamper == "missing":
+        (release / "hailo" / "model.hef").unlink()
+    return root
 
 
 def write_fill_marker(tmp_path: Path, *, age: timedelta = timedelta(minutes=10)) -> Path:
@@ -232,6 +301,11 @@ NEW_ALERTS = {
     "TradingInferenceRulesOnlyDecisions": (
         'trading_inference_backend_share{backend="rules_only"} > 0.05'
     ),
+    "TradingModelReleaseMissing": (
+        "trading_model_release_enabled == 1 "
+        "and trading_model_release_present == 0"
+    ),
+    "TradingModelReleaseArtifactMismatch": "trading_model_release_artifacts_ok == 0",
 }
 
 
@@ -529,3 +603,59 @@ def test_inference_gauges_are_absent_without_a_stats_file(tmp_path) -> None:
         deployment_env_file=write_deployment_env(tmp_path, dry_run=True),
     )
     assert "trading_inference_" not in body
+
+
+# ---------------------------------------------------------------------------
+# Active model release: which paired release this host is trading on
+# ---------------------------------------------------------------------------
+
+def release_render(tmp_path: Path, release_root: str) -> dict[str, float]:
+    """Gauge values for one model release root state."""
+    body = render(
+        tmp_path,
+        {"SCORECARD_STATUS_JSON": str(tmp_path / "absent.json")},
+        dry_run=True,
+        model_release_root=release_root,
+    )
+    return gauge_values(body)
+
+
+def test_promoted_release_publishes_verified_gauges(tmp_path) -> None:
+    root = write_release_root(tmp_path)
+    values = release_render(tmp_path, str(root))
+    assert values["trading_model_release_enabled"] == 1
+    assert values["trading_model_release_present"] == 1
+    assert values["trading_model_release_artifacts_ok"] == 1
+    assert values["trading_model_release_features"] == 2
+    assert values["trading_model_release_age_seconds"] >= 0
+
+
+def test_unset_release_root_cannot_match_the_missing_release_alert(tmp_path) -> None:
+    """A host that never promotes releases publishes enabled 0, so it stays quiet."""
+    values = release_render(tmp_path, "")
+    assert values["trading_model_release_enabled"] == 0
+    assert "trading_model_release_present" not in values
+    assert "trading_model_release_artifacts_ok" not in values
+
+
+def test_release_root_without_active_link_matches_the_missing_alert(tmp_path) -> None:
+    (tmp_path / "models").mkdir()
+    values = release_render(tmp_path, str(tmp_path / "models"))
+    assert values["trading_model_release_enabled"] == 1
+    assert values["trading_model_release_present"] == 0
+    assert "trading_model_release_artifacts_ok" not in values
+
+
+def test_tampered_release_artifact_matches_the_mismatch_alert(tmp_path) -> None:
+    """The release is still live, so presence stays 1 while verification drops."""
+    root = write_release_root(tmp_path, tamper="checksum")
+    values = release_render(tmp_path, str(root))
+    assert values["trading_model_release_present"] == 1
+    assert values["trading_model_release_artifacts_ok"] == 0
+
+
+def test_missing_release_artifact_matches_the_mismatch_alert(tmp_path) -> None:
+    root = write_release_root(tmp_path, tamper="missing")
+    values = release_render(tmp_path, str(root))
+    assert values["trading_model_release_present"] == 1
+    assert values["trading_model_release_artifacts_ok"] == 0

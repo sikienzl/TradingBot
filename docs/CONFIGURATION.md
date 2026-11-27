@@ -53,6 +53,7 @@ environment overrides before starting the bot.
 | `AUTO_TUNE_TABULAR_CONFIDENCE` | `false` | Auto-adjust CatBoost threshold |
 | `TRADING_INFERENCE_STATS_FILE` | `results/inference/backend_stats.json` | Counter file in which the bot records which tabular backend served each decision (`hailo`/`cpu`/`rules_only`/`other`). `scripts/export_operational_health.py` only reads it and publishes the backend mix, so a silent fallback is visible in monitoring. `off`/`none`/`false` disables the counters |
 | `TRADING_INFERENCE_STATS_MIN_WRITE_SECONDS` | `15` | Minimum delay between two writes while the serving backend stays the same. A change of backend is always written immediately, because that transition is what the fallback alert watches for |
+| `TRADING_MODEL_RELEASE_ROOT` | unset | Root of the immutable paired CPU/Hailo releases that `scripts/manage_model_release.py` promotes, e.g. `/opt/trading-models`. When set, the bot logs the active release (ID, feature contract, training-data checksum, artifact verification) at startup and `scripts/export_operational_health.py` publishes it as gauges, so a missing, dangling or tampered release alerts. Unset means "this host has no paired releases": nothing is logged and no release gauge is published. `off`/`none`/`false` disables the lookup |
 | `USE_ML_MODEL` | `false` | Enable LLM signal (GPU recommended) |
 
 ### Simulation regimes

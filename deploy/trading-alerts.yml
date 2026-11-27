@@ -288,3 +288,21 @@ groups:
         annotations:
           summary: "Tabular decisions fell back to rules-only"
           description: "More than 5% of recorded decisions had neither a Hailo nor a CPU prediction, so both model backends are unavailable and the bot is trading on rules alone. Check the model artifacts and the backend log lines."
+
+      - alert: TradingModelReleaseMissing
+        expr: trading_model_release_enabled == 1 and trading_model_release_present == 0
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No valid active model release"
+          description: "TRADING_MODEL_RELEASE_ROOT is configured but its active link is missing, dangling, outside releases/, or its manifest does not validate, so no validated paired model is live. Promote or roll back with scripts/manage_model_release.py."
+
+      - alert: TradingModelReleaseArtifactMismatch
+        expr: trading_model_release_artifacts_ok == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Active model release artifacts do not match their manifest"
+          description: "A shipped CPU or Hailo artifact was replaced, truncated, or edited after promotion, so the checksums in the release manifest no longer describe what the bot loads. Roll back to the last known-good release."

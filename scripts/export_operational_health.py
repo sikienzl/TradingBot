@@ -46,6 +46,7 @@ from src.jsonl_retention import (
     report_int,
     resolve_report_path,
 )
+from src.model_release import read_active_release, resolve_release_root
 from src.pnl_prometheus_format import escape_label_value
 from src.scorecard_gate import ScorecardGateSettings, scorecard_gate_settings
 from src.task_status import (
@@ -338,6 +339,57 @@ def _inference_backend_lines(
     return lines
 
 
+def _model_release_lines(release_root: str, now: datetime) -> list[str]:
+    """Gauges for the paired model release this deployment is running.
+
+    Promotion and rollback are explicit operator commands, so a release can be
+    swapped, left dangling or edited on disk without anything in monitoring
+    noticing which model is actually live. ``read_active_release`` is the
+    read-only side of that same contract and never raises, so the exporter can
+    distinguish the three states that matter: no release root configured
+    (nothing published), a release root without a usable ``active`` link
+    (``present 0``), and a release whose files no longer match its manifest
+    (``artifacts_ok 0``).
+    """
+    root = release_root.strip()
+    enabled = int(bool(root))
+    lines = [
+        ("# HELP trading_model_release_enabled Whether a paired model release "
+         "root is configured for this host."),
+        "# TYPE trading_model_release_enabled gauge",
+        f"trading_model_release_enabled {enabled}",
+    ]
+    if not enabled:
+        return lines
+    active = read_active_release(root)
+    lines.extend([
+        ("# HELP trading_model_release_present Whether the release root has a "
+         "readable active release manifest."),
+        "# TYPE trading_model_release_present gauge",
+        f"trading_model_release_present {int(active is not None)}",
+    ])
+    if active is None:
+        return lines
+    lines.extend([
+        ("# HELP trading_model_release_artifacts_ok Whether every active release "
+         "artifact still matches its manifest checksum."),
+        "# TYPE trading_model_release_artifacts_ok gauge",
+        f"trading_model_release_artifacts_ok {int(active.artifacts_verified)}",
+        ("# HELP trading_model_release_features Number of features in the active "
+         "release contract."),
+        "# TYPE trading_model_release_features gauge",
+        f"trading_model_release_features {len(active.features)}",
+        ("# HELP trading_model_release_age_seconds Age of the active release "
+         "manifest since promotion."),
+        "# TYPE trading_model_release_age_seconds gauge",
+        (
+            f"trading_model_release_age_seconds "
+            f"{max(0.0, (now - active.manifest_updated_utc).total_seconds()):.3f}"
+        ),
+    ])
+    return lines
+
+
 def _disk_lines(disk_paths: Sequence[str]) -> list[str]:
     """Capacity gauges for the filesystems the bot writes to.
 
@@ -448,6 +500,7 @@ def render_metrics(
     fill_report_file: Path | None = None,
     retention_report_file: Path | None = None,
     inference_stats_file: Path | None = None,
+    model_release_root: str = "",
 ) -> str:
     now = now or datetime.now(UTC)
     kill_switch_active = int(os.path.lexists(kill_switch_file))
@@ -533,6 +586,7 @@ def render_metrics(
         deployment_env_file or Path(ENV_PATH),
         now,
     ))
+    lines.extend(_model_release_lines(model_release_root, now))
     return "\n".join(lines) + "\n"
 
 
@@ -571,6 +625,11 @@ def main() -> int:
     # The bot writes the inference backend counters and the exporter only reads
     # them, so both sides use the same default path resolution.
     inference_stats = resolve_inference_stats_path()
+    # Which paired model release is live is a property of the host, not of the
+    # bot process, so the exporter resolves the release root itself. Unset means
+    # "this host has no paired releases" and publishes no release gauges, which
+    # also keeps the read-only sandbox from probing a path that is not there.
+    model_release_root = resolve_release_root()
     body = render_metrics(
         Path(os.getenv("TRADING_KILL_SWITCH_FILE", ".trading_kill_switch")),
         os.getenv("HAILO_HEALTH_URL", ""),
@@ -590,6 +649,7 @@ def main() -> int:
         retention_report_file=Path(retention_report) if retention_report else None,
         inference_stats_file=(
             Path(inference_stats) if inference_stats else None),
+        model_release_root=model_release_root,
     )
     output = Path(os.getenv(
         "TRADING_HEALTH_METRICS_FILE",

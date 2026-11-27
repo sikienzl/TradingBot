@@ -36,6 +36,13 @@ Environment=TRADING_INFERENCE_STATS_FILE=/opt/trading_2/results/inference/backen
 # and the verdict from results/scorecards/latest_status.(json|env) below
 # WorkingDirectory. Only the run mode is read - no credentials are exported.
 Environment=TRADING_DEPLOYMENT_ENV_FILE=/opt/trading_2/.env
+# Paired model releases (scripts/manage_model_release.py) are opt-in: set
+# TRADING_MODEL_RELEASE_ROOT in /etc/trading-health.env on a host that promotes
+# them, and the exporter publishes which release is active plus a checksum
+# verdict. Left unset, no release gauge is published and the release alerts
+# cannot fire, which is correct for a host that has no paired releases.
+# TRADING_MODEL_RELEASE_ROOT is read-only here - the exporter never writes to
+# the release root and never follows an active link outside releases/.
 ExecStart=/opt/trading_2/.venv/bin/python -m scripts.export_operational_health
 NoNewPrivileges=true
 PrivateTmp=true

@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 from pathlib import Path
 
 import pytest
 
 from src.model_release import (
     EXPECTED_ARTIFACTS,
+    RELEASE_ROOT_ENV,
     promote_release,
+    read_active_release,
     release_directory,
+    resolve_release_root,
     rollback_release,
     validate_release,
 )
@@ -301,3 +306,139 @@ def test_release_directory_rejects_invalid_release_id(tmp_path):
     assert release_directory(tmp_path / "deploy", "release-1") == (
         tmp_path / "deploy" / "releases" / "release-1"
     )
+
+
+# ---------------------------------------------------------------------------
+# Reading which release is active
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("value", [None, "", "off", "NONE", "false", "No", " disabled "])
+def test_release_root_stays_unset_unless_configured(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv(RELEASE_ROOT_ENV, raising=False)
+    else:
+        monkeypatch.setenv(RELEASE_ROOT_ENV, value)
+    assert resolve_release_root() == ""
+
+
+def test_release_root_reads_environment_override(monkeypatch):
+    monkeypatch.setenv(RELEASE_ROOT_ENV, "/opt/trading-models")
+    assert resolve_release_root() == "/opt/trading-models"
+    assert resolve_release_root({RELEASE_ROOT_ENV: "/srv/models"}) == "/srv/models"
+
+
+def test_read_active_release_needs_a_release_root(tmp_path):
+    assert read_active_release(None) is None
+    assert read_active_release("") is None
+    assert read_active_release(tmp_path / "absent") is None
+
+
+def test_read_active_release_describes_the_promoted_release(tmp_path):
+    root = tmp_path / "deploy"
+    release = _promote(root, "release-1", _inputs(tmp_path / "artifacts"))
+
+    active = read_active_release(root)
+
+    assert active is not None
+    assert active.release_id == "release-1"
+    assert active.release_path == release
+    assert active.feature_contract == "hailo"
+    assert active.features == tuple(FEATURES)
+    assert active.training_data_sha256 == DATA_HASH
+    assert active.artifacts_verified is True
+    assert active.problem == ""
+    assert set(active.artifact_checksums) == set(EXPECTED_ARTIFACTS)
+    assert active.artifact_checksums["hailo_hef"] == _manifest(release)[
+        "artifacts"
+    ]["hailo_hef"]["sha256"]
+    # The manifest mtime is the promotion time, which is what the age gauge uses.
+    assert active.manifest_updated_utc.tzinfo is not None
+
+
+def test_read_active_release_follows_a_rollback(tmp_path):
+    root = tmp_path / "deploy"
+    _promote(root, "release-1", _inputs(tmp_path / "artifacts"))
+    _promote(root, "release-2", _inputs(tmp_path / "artifacts-2"))
+    rollback_release(root, "release-1")
+
+    assert read_active_release(root).release_id == "release-1"
+
+
+@pytest.mark.parametrize("kind", ["missing", "dangling", "directory", "absolute"])
+def test_read_active_release_fails_closed_on_an_unusable_active_link(
+    tmp_path, kind
+):
+    root = tmp_path / "deploy"
+    release = _promote(root, "release-1", _inputs(tmp_path / "artifacts"))
+    active = root / "active"
+
+    if kind == "missing":
+        active.unlink()
+    elif kind == "dangling":
+        active.unlink()
+        os.symlink(Path("releases") / "gone", active)
+    elif kind == "directory":
+        active.unlink()
+        shutil.copytree(release, active)
+    else:
+        active.unlink()
+        os.symlink(release, active)
+
+    assert read_active_release(root) is None
+
+
+def test_read_active_release_ignores_an_active_link_outside_releases(tmp_path):
+    """An ``active`` link may not smuggle an arbitrary directory in as a release."""
+    root = tmp_path / "deploy"
+    release = _promote(root, "release-1", _inputs(tmp_path / "artifacts"))
+    outside = tmp_path / "elsewhere"
+    shutil.copytree(release, outside)
+    (root / "active").unlink()
+    os.symlink(Path("..") / "elsewhere", root / "active")
+
+    assert read_active_release(root) is None
+
+
+def test_read_active_release_reports_a_tampered_artifact(tmp_path):
+    """Tampering must stay distinguishable from "no release", never silent."""
+    root = tmp_path / "deploy"
+    release = _promote(root, "release-1", _inputs(tmp_path / "artifacts"))
+    (release / "cpu" / "catboost_model.cbm").write_bytes(b"swapped")
+
+    active = read_active_release(root)
+
+    assert active is not None
+    assert active.release_id == "release-1"
+    assert active.artifacts_verified is False
+    assert active.problem == "cpu_model checksum mismatch"
+
+
+def test_read_active_release_reports_a_missing_artifact(tmp_path):
+    root = tmp_path / "deploy"
+    release = _promote(root, "release-1", _inputs(tmp_path / "artifacts"))
+    (release / "hailo" / "model.hef").unlink()
+
+    active = read_active_release(root)
+
+    assert active is not None
+    assert active.artifacts_verified is False
+    assert active.problem == "hailo_hef is not readable"
+
+
+@pytest.mark.parametrize("damage", ["not json", "missing key", "wrong id"])
+def test_read_active_release_rejects_a_malformed_manifest(tmp_path, damage):
+    root = tmp_path / "deploy"
+    release = _promote(root, "release-1", _inputs(tmp_path / "artifacts"))
+    manifest_path = release / "manifest.json"
+    if damage == "not json":
+        manifest_path.write_text("{", encoding="utf-8")
+    elif damage == "missing key":
+        manifest = _manifest(release)
+        del manifest["validation_reports"]
+        _rewrite_manifest(release, manifest)
+    else:
+        manifest = _manifest(release)
+        manifest["release_id"] = "release-9"
+        _rewrite_manifest(release, manifest)
+
+    assert read_active_release(root) is None

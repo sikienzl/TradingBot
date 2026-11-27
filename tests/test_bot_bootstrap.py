@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import types
@@ -13,6 +14,7 @@ from src.bot_bootstrap import (
     evaluate_live_scorecard_gate,
     load_ml_predictor,
     load_tabular_predictor,
+    log_active_release,
     log_startup_details,
     validate_live_scorecard_gate,
     validate_startup_config,
@@ -474,3 +476,177 @@ def test_load_tabular_predictor_catboost_propagates_unexpected_errors(
     config = _Config(use_tabular_model=True, tabular_model_backend="anything")
     with pytest.raises(ZeroDivisionError):
         load_tabular_predictor(logger, config)
+
+
+# ---------------------------------------------------------------------------
+# active model release visibility
+# ---------------------------------------------------------------------------
+
+def _release_root(tmp_path, *, tamper: str | None = None):
+    """Promote a paired release into a throwaway root and return that root.
+
+    Built with the real promotion code so the startup log is tested against a
+    manifest the runtime would actually accept, not a hand-written one.
+    """
+    from src.model_release import promote_release
+
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    (artifacts / "cpu.cbm").write_bytes(b"cpu model")
+    (artifacts / "model.hef").write_bytes(b"hailo model")
+    validation = {
+        "rows": 250,
+        "accuracy": 0.8,
+        "macro_f1": 0.7,
+        "threshold_macro_f1": 0.68,
+        "threshold_coverage": 0.62,
+    }
+    label_map = {"verkaufen": 0, "halten": 1, "kaufen": 2}
+    (artifacts / "cpu.json").write_text(json.dumps({
+        "feature_contract": "hailo",
+        "features": ["rsi", "macd"],
+        "label_map": label_map,
+        "training_data_sha256": "a" * 64,
+        "label_horizon": 6,
+        "train_rows": 1000,
+        "validation_rows": 250,
+        "validation": validation,
+    }), encoding="utf-8")
+    (artifacts / "hailo.json").write_text(json.dumps({
+        "feature_contract": "hailo",
+        "features": ["rsi", "macd"],
+        "label_map": label_map,
+        "data_provenance": {
+            "training_data_sha256": "a" * 64,
+            "label_map": label_map,
+            "label_horizon": 6,
+            "train_rows": 1000,
+            "validation_rows": 250,
+        },
+        "validation": validation,
+    }), encoding="utf-8")
+    root = tmp_path / "models"
+    release = promote_release(
+        root, "release-1",
+        artifacts / "cpu.cbm", artifacts / "cpu.json",
+        artifacts / "model.hef", artifacts / "hailo.json",
+    )
+    if tamper == "checksum":
+        (release / "cpu" / "catboost_model.cbm").write_bytes(b"swapped")
+    elif tamper == "manifest":
+        (release / "manifest.json").write_text("{", encoding="utf-8")
+    return root
+
+
+def test_log_active_release_is_silent_without_a_release_root(
+    logger: logging.Logger, monkeypatch
+) -> None:
+    monkeypatch.delenv("TRADING_MODEL_RELEASE_ROOT", raising=False)
+    assert log_active_release(logger, _Config()) is None
+    assert _records(logger) == []
+
+
+def test_log_active_release_warns_when_no_release_is_active(
+    logger: logging.Logger, tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("TRADING_MODEL_RELEASE_ROOT", str(tmp_path / "models"))
+    assert log_active_release(logger, _Config()) is None
+    assert _records(logger) == [
+        (
+            "WARNING|No valid active model release under "
+            f"{tmp_path / 'models'}: the tabular model is not backed by a "
+            "validated paired release. Run scripts/manage_model_release.py "
+            "validate to inspect it."
+        )
+    ]
+
+
+def test_log_active_release_reports_a_verified_release(
+    logger: logging.Logger, tmp_path, monkeypatch
+) -> None:
+    root = _release_root(tmp_path)
+    monkeypatch.setenv("TRADING_MODEL_RELEASE_ROOT", str(root))
+    config = _Config(tabular_model_path=str(root / "active" / "cpu"))
+
+    active = log_active_release(logger, config)
+
+    assert active is not None and active.release_id == "release-1"
+    assert _records(logger) == [
+        (
+            "INFO|Active model release: id=release-1 contract=hailo features=2 "
+            "training_data_sha256=" + "a" * 64 + " artifacts verified"
+        )
+    ]
+
+
+def test_log_active_release_flags_a_tampered_release(
+    logger: logging.Logger, tmp_path, monkeypatch
+) -> None:
+    root = _release_root(tmp_path, tamper="checksum")
+    monkeypatch.setenv("TRADING_MODEL_RELEASE_ROOT", str(root))
+
+    active = log_active_release(logger, _Config(tabular_model_path=""))
+
+    assert active is not None
+    assert active.artifacts_verified is False
+    assert _records(logger) == [
+        (
+            "ERROR|Active model release release-1 failed artifact verification "
+            "(cpu_model checksum mismatch). Roll back to a known-good release "
+            "before trading on this model."
+        )
+    ]
+
+
+def test_log_active_release_warns_when_model_path_escapes_the_release(
+    logger: logging.Logger, tmp_path, monkeypatch
+) -> None:
+    """The release root and TABULAR_MODEL_PATH can disagree after an edit."""
+    root = _release_root(tmp_path)
+    monkeypatch.setenv("TRADING_MODEL_RELEASE_ROOT", str(root))
+
+    log_active_release(logger, _Config(tabular_model_path="model/catboost_trading_model"))
+
+    assert "is outside the active model release" in _records(logger)[1]
+
+
+def test_load_tabular_predictor_logs_the_active_release(
+    logger: logging.Logger, tmp_path, monkeypatch
+) -> None:
+    root = _release_root(tmp_path)
+    monkeypatch.setenv("TRADING_MODEL_RELEASE_ROOT", str(root))
+
+    class _CatBoost:
+        def __init__(self, model_path: str, *, research_signal_path: str) -> None:
+            pass
+
+    module = types.ModuleType("src.predict_catboost")
+    module.CatBoostTradingPredictor = _CatBoost  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "src.predict_catboost", module)
+
+    config = _Config(
+        use_tabular_model=True,
+        tabular_model_backend="catboost",
+        tabular_model_path=str(root / "active" / "cpu"),
+    )
+    assert load_tabular_predictor(logger, config) is not None
+    assert _records(logger)[0].startswith("INFO|Active model release: id=release-1")
+
+
+def test_load_tabular_predictor_stays_silent_without_releases(
+    logger: logging.Logger, monkeypatch
+) -> None:
+    monkeypatch.delenv("TRADING_MODEL_RELEASE_ROOT", raising=False)
+
+    class _CatBoost:
+        def __init__(self, model_path: str, *, research_signal_path: str) -> None:
+            pass
+
+    module = types.ModuleType("src.predict_catboost")
+    module.CatBoostTradingPredictor = _CatBoost  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "src.predict_catboost", module)
+
+    assert load_tabular_predictor(logger, _Config(use_tabular_model=True)) is not None
+    assert _records(logger) == [
+        "INFO|\U0001f4ca CatBoost model loaded from 'model/catboost_trading_model'."
+    ]
