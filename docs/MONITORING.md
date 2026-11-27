@@ -343,6 +343,17 @@ Scheduled-task, capacity, and analytics gauges come from the same timer:
   tabular model switched off publishes `model_enabled 0` and no share gauge at
   all, and a corrupt counter file is reported as `stats_present 0` rather than
   as a fresh zero.
+- Active model release (`src.model_release`) exports
+  `trading_model_release_enabled`, and only when a release root is configured
+  also `trading_model_release_present`, then `trading_model_release_artifacts_ok`,
+  `trading_model_release_features` and `trading_model_release_age_seconds`. The
+  root comes from `TRADING_MODEL_RELEASE_ROOT` in `/etc/trading-health.env` and
+  is opt-in: a host that never promotes paired releases publishes `enabled 0`
+  and no other release gauge, so neither release alert can fire there. When the
+  root is set, the exporter re-reads the `active` release and re-hashes every
+  artifact against `manifest.json`, so a release that was swapped, left dangling
+  or edited in place is reported instead of assumed healthy. The exporter only
+  reads the release tree, which keeps its `ProtectSystem=strict`.
 
 The health unit uses `/etc/trading-health.env`, not the bot's
 credential-bearing `.env`; copy `deploy/trading-health.env.example` there.
@@ -387,7 +398,12 @@ all (`TradingInferenceBackendCountersMissing`, warning), a
 the CPU or rules-only fallback (`TradingInferenceBackendFallback`, warning) and
 any deployment where more than 5% of decisions had neither a Hailo nor a CPU
 prediction (`TradingInferenceRulesOnlyDecisions`, critical) are the inference
-fallback alerts. `tests/test_alert_rules.py`
+fallback alerts. A configured release root with no usable `active` release
+(`TradingModelReleaseMissing`, critical) and a live release whose artifacts no
+longer match their manifest checksums (`TradingModelReleaseArtifactMismatch`,
+critical) are the model release alerts - the second is the state where the bot is
+trading on a model the validated package no longer describes. 
+`tests/test_alert_rules.py`
 fails when one of those rules references a metric the exporter does not emit.
 The installer
 also configures local Alertmanager and a loopback-only relay. Before installing

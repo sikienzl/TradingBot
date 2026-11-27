@@ -11,14 +11,14 @@ stays **[⚠️ Partial]**.
 
 | # | Core area | Single Raspberry Pi | CM5 cluster |
 |---|---|---|---|
-| 1 | Data basis and model lifecycle | **[⚠️ Partial]** Paired contract/checksum manifest, full per-side validation reports and training provenance stored in the manifest, a read-only `validate` inspection command and atomic activation/rollback are implemented, and the release CLI is exercised end to end by deployment CI. Candidate training and DFC compilation remain separate operator steps. | **[⚠️ Partial]** Same paired release tooling, manifest reports and validation command; DFC and target-device validation remain external, and no x86 worker is deployed. |
+| 1 | Data basis and model lifecycle | **[⚠️ Partial]** Paired contract/checksum manifest, full per-side validation reports and training provenance stored in the manifest, a read-only `validate` inspection command, atomic activation/rollback and a fail-closed read of which release is live are implemented, and the release CLI is exercised end to end by deployment CI. Candidate training and DFC compilation remain separate operator steps. | **[⚠️ Partial]** Same paired release tooling, manifest reports, validation command and active-release reader; DFC and target-device validation remain external, and no x86 worker is deployed. |
 | 2 | Decision pyramid and hardware fallback | **[✅ Implemented]** Volume, spread, and ATR gates run before any model or paid call, and the paid news veto runs after the pre-trade cost budget; the order is asserted end to end. Backend selection sits behind `src.inference_backend` with injected backends, and a dedicated CI job runs the Hailo→CPU→rules-only matrix with no Hailo package, device or model files installed. The backend that served each decision is counted on disk and exported as Prometheus gauges. | **[⚠️ Partial]** Same cascade, gates and per-decision backend counters; target-cluster service/device availability is not continuously exercised by CI, so a cluster fallback is detected from the exported backend mix rather than a readiness probe. |
 | 3 | News integration | **[✅ Implemented]** RSS items retain `published_at`/`fetched_at`, are deduplicated, and are additionally appended to an immutable per-item JSONL store (`src/news_item_store.py`) with a point-in-time replay helper; the opt-in structured final veto reads that store and fails closed when it has no fresh item. The store is bounded by the shared retention policy (`src/jsonl_retention.py`, `deploy/jsonl-retention.timer`). | **[⚠️ Partial]** Same code is available, but the inspected cluster has no configured paid provider/credentials and no retention unit installed; Hailo features do not consume news. |
 | 4 | Hard risk and kill switch | **[✅ Implemented]** The daily anchor, loss-streak pause, hourly BUY budget and re-entry cooldowns are persisted in `TRADING_RISK_STATE_FILE` and restored at startup; unreadable or unwritable risk state blocks new entries and latches the persistent kill switch in live mode. | **[⚠️ Partial]** Same persisted state per node, but the file and the stop marker are host-local; no cluster-wide shared switch or distributed state store is implemented. |
 | 5 | Execution and costs | **[✅ Implemented]** Exchange fill/fee records, a pre-trade taker-fee + spread + slippage cost budget (`MAX_ENTRY_COST_BPS`), and a Kraken `cl_ord_id` per submission are in place; a submission timeout is reconciled instead of resubmitted and an unknown outcome latches the stop marker. Partial fills keep their requested amount in the journal, and `src.fill_reconciliation` now compares every journalled live order against the Kraken order history automatically (bot startup plus an hourly timer) and reports unmatched orders and quantity/fee differences. | **[⚠️ Partial]** Same controls and the same reconciliation code, but live exchange use remains unvalidated on the cluster. |
 | 6 | Single-Pi vs cluster operations | **[⚠️ Partial]** Local process lock, persisted live snapshot, startup balance comparison, open-order refusal, uncertain-order latch, and automatic journal-to-exchange fill reconciliation with alerting exist; deriving a trusted position snapshot from Kraken fills still needs operator review. | **[⚠️ Partial]** Optional account-scoped PostgreSQL advisory lease supplements local locks; shared PostgreSQL config and cluster deployment are operator prerequisites, the reconciliation marker is host-local, and fill-to-position reconstruction remains manual. |
 | 7 | Evaluation and scorecard | **[✅ Implemented]** GO/HOLD/NO-GO and HOLD for insufficient data are implemented, with Pi systemd automation. A fresh `GO` verdict is a prerequisite for `DRY_RUN=false` and for `scripts/manage_model_release.py promote`, and every run is additionally appended to an immutable per-run verdict history (`src.scorecard_verdict_history.py`) that the weekly tuning cycle reads as its evidence chain. | **[⚠️ Partial]** Same gate code and monitoring rules; the inspected cluster deployment still does not show scorecard automation as part of its active bot topology, so the gate reads the marker produced by the Pi/cluster `scorecard-status` timer. |
-| 8 | Monitoring and alerting | **[⚠️ Partial]** Pi installer configures Alertmanager, a private HTTPS webhook relay, and kill-switch/Hailo/research health alerts plus bounded journal/bot-log/market-data staleness probes, scheduled-task exit-status markers for the daily review, weekly scorecard and weekly tuning units, disk-capacity gauges, fill-reconciliation presence/completeness/mismatch/staleness gauges, per-decision tabular inference backend mix gauges with fallback and rules-only alerts, and an optional analytics-database probe; operator webhook configuration and staging delivery validation remain required. | **[⚠️ Partial]** Alert rules and relay are available in the repository, but cluster-specific installation/configuration and live receiver validation remain outstanding. |
+| 8 | Monitoring and alerting | **[⚠️ Partial]** Pi installer configures Alertmanager, a private HTTPS webhook relay, and kill-switch/Hailo/research health alerts plus bounded journal/bot-log/market-data staleness probes, scheduled-task exit-status markers for the daily review, weekly scorecard and weekly tuning units, disk-capacity gauges, fill-reconciliation presence/completeness/mismatch/staleness gauges, per-decision tabular inference backend mix gauges with fallback and rules-only alerts, opt-in active-model-release presence/verification gauges with missing-release and artifact-mismatch alerts, and an optional analytics-database probe; operator webhook configuration and staging delivery validation remain required. | **[⚠️ Partial]** Alert rules and relay are available in the repository, but cluster-specific installation/configuration and live receiver validation remain outstanding. |
 
 ## Findings and evidence
 
@@ -46,11 +46,29 @@ the artifact checksums without touching the active release.
 ships inside the Pi package, and `.github/scripts/tests/test_model_release_cli.py`
 drives a full promote/validate/rollback cycle in the release tooling job, which
 also proves the CLI stays importable without numpy, pandas or CatBoost.
+Which release is live is now readable without a shell command.
+`src.model_release.read_active_release` resolves `TRADING_MODEL_RELEASE_ROOT`,
+follows only an `active` symlink that points at a directory directly under
+`releases/`, re-checks the manifest shape and re-hashes every artifact, and never
+raises: a missing, dangling, absolute or out-of-tree link, a malformed manifest,
+or a tampered artifact is reported rather than treated as a valid release.
+`src.bot_bootstrap.log_active_release` uses it at startup to log the release ID,
+contract, feature count, training-data hash and verification result, to log an
+error when the live artifacts no longer match their manifest, and to warn when
+`TABULAR_MODEL_PATH` points outside the active release.
+`scripts/export_operational_health.py` publishes the same state as gauges and
+`deploy/trading-alerts.yml` pages a missing release or an artifact mismatch. The
+root is opt-in per host, so a profile that never promotes paired releases
+publishes no release gauge and cannot match either alert. Observed on the
+inspected deployments: `TRADING_MODEL_RELEASE_ROOT` is not set there yet, so this
+visibility is implemented and tested but not yet active on the live cluster.
 `scripts/update_autoresearch_signal.py` and the tuning cycle support research/parameter updates, but do not establish a
 separate x86 training worker or automatic DFC/promotion workflow.
 
 **Next:** Automate candidate training, DFC compilation, target-Hailo validation,
-and explicit promotion on the planned x86 worker.
+and explicit promotion on the planned x86 worker. Set
+`TRADING_MODEL_RELEASE_ROOT` on a deployment that has promoted a paired release
+and confirm the release gauges and both new alerts on the live receiver.
 
 ### 2. Decision pyramid and hardware agnosticism
 

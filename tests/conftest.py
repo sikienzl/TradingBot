@@ -37,3 +37,15 @@ def isolated_inference_stats_file(tmp_path, monkeypatch):
     """
     monkeypatch.setenv(
         "TRADING_INFERENCE_STATS_FILE", str(tmp_path / "backend_stats.json"))
+
+
+@pytest.fixture(autouse=True)
+def isolated_model_release_root(monkeypatch):
+    """Start every test with no paired model release root configured.
+
+    ``TRADING_MODEL_RELEASE_ROOT`` makes both the bot and the operational-health
+    exporter look for an ``active`` release, so a developer or CI environment
+    that happens to set it would change what unrelated tests observe. Tests that
+    exercise release visibility set it themselves, which overrides this default.
+    """
+    monkeypatch.delenv("TRADING_MODEL_RELEASE_ROOT", raising=False)

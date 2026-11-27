@@ -271,6 +271,36 @@ class ModelReleaseCliTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("never-promoted", output)
 
+    def test_reader_reports_which_release_is_live(self) -> None:
+        """The read-only side the bot and monitoring use follows the same link.
+
+        ``read_active_release`` is what makes "which model is live?" answerable
+        without a shell, so the deployment gate covers it against a release the
+        real CLI promoted - including the tamper case the alerts page on.
+        """
+        from src.model_release import read_active_release
+
+        self.assertIsNone(read_active_release(""))
+        self.assertIsNone(read_active_release(self.release_root))
+
+        self.promote("trading-2026-01")
+        active = read_active_release(self.release_root)
+        self.assertIsNotNone(active)
+        assert active is not None
+        self.assertEqual(active.release_id, "trading-2026-01")
+        self.assertEqual(active.feature_contract, "hailo")
+        self.assertEqual(len(active.features), 3)
+        self.assertEqual(active.training_data_sha256, TRAINING_DATA_SHA256)
+        self.assertTrue(active.artifacts_verified)
+        self.assertEqual(active.problem, "")
+
+        stored = self.release_root / "releases" / "trading-2026-01" / "hailo" / "model.hef"
+        stored.write_bytes(b"swapped hef")
+        tampered = read_active_release(self.release_root)
+        assert tampered is not None
+        self.assertFalse(tampered.artifacts_verified)
+        self.assertIn("checksum mismatch", tampered.problem)
+
     def test_library_entry_points_match_the_cli(self) -> None:
         """The library API a cluster playbook would call stays usable."""
         release = promote_release(

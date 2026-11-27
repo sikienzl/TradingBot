@@ -8,6 +8,9 @@ import os
 import re
 import shutil
 import tempfile
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -449,3 +452,114 @@ def _sync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+# ---------------------------------------------------------------------------
+# Reading the release a deployment is actually running
+# ---------------------------------------------------------------------------
+
+#: Environment override for the release root the runtime and monitoring read.
+#: Unset means "this deployment does not use paired model releases", which keeps
+#: the strict-sandbox health exporter from probing a path that does not exist.
+RELEASE_ROOT_ENV = "TRADING_MODEL_RELEASE_ROOT"
+
+#: Values that mean "no paired model releases are published here".
+_DISABLED_VALUES = frozenset({"", "off", "none", "false", "no", "disabled"})
+
+
+def resolve_release_root(environ: Mapping[str, str] | None = None) -> str:
+    """Where paired model releases live; an empty string disables the lookup."""
+    raw = (os.environ if environ is None else environ).get(RELEASE_ROOT_ENV)
+    if raw is None:
+        return ""
+    if raw.strip().lower() in _DISABLED_VALUES:
+        return ""
+    return raw.strip()
+
+
+@dataclass(frozen=True)
+class ActiveRelease:
+    """What a release root's ``active`` symlink currently points at.
+
+    ``artifacts_verified`` is the integrity verdict: a manifest that describes a
+    paired release but whose files no longer match it is still reported, because
+    "the release was tampered with" has to stay distinguishable from "there is
+    no release" for both the operator log and the alert rules.
+    """
+
+    release_id: str
+    release_path: Path
+    feature_contract: str
+    features: tuple[str, ...]
+    training_data_sha256: str
+    artifact_checksums: dict[str, str]
+    manifest_updated_utc: datetime
+    artifacts_verified: bool
+    #: Why the artifacts are not verified, empty when they are.
+    problem: str = ""
+
+
+def read_active_release(release_root: str | Path | None) -> ActiveRelease | None:
+    """Describe the active release of ``release_root`` without ever raising.
+
+    Promotion, rollback and ``validate`` are all explicit operator commands; the
+    runtime and the monitoring exporter need the read-only side of the same
+    contract, because today nothing anywhere reports which paired release is
+    live. The lookup fails closed: a missing, dangling, non-symlink or
+    malformed active release returns ``None`` rather than inventing a release,
+    and it never follows an ``active`` link that leaves ``releases/``.
+    """
+    root_text = str(release_root or "").strip()
+    if not root_text:
+        return None
+    root = Path(root_text)
+    active = root / "active"
+    if not active.is_symlink():
+        # Covers "no active link at all" and "a directory or file an operator
+        # placed by hand", which _activate() refuses to replace as well.
+        return None
+    try:
+        target = Path(os.readlink(active))
+    except OSError:
+        return None
+    if target.is_absolute() or target.parent != Path("releases"):
+        return None
+    release_id = target.name
+    if not _RELEASE_ID.fullmatch(release_id):
+        return None
+    release = root / "releases" / release_id
+    manifest_path = release / "manifest.json"
+    try:
+        with manifest_path.open("r", encoding="utf-8") as manifest_file:
+            manifest = json.load(manifest_file)
+        manifest = _validate_manifest_shape(manifest, release)
+        manifest_updated = datetime.fromtimestamp(
+            manifest_path.stat().st_mtime, UTC)
+    except (OSError, TypeError, ValueError):
+        return None
+
+    checksums: dict[str, str] = {}
+    verified = True
+    problem = ""
+    for name, artifact in manifest["artifacts"].items():
+        checksums[name] = artifact["sha256"]
+        try:
+            actual = sha256_file(release / artifact["path"])
+        except OSError:
+            verified = False
+            problem = problem or f"{name} is not readable"
+            continue
+        if actual != artifact["sha256"]:
+            verified = False
+            problem = problem or f"{name} checksum mismatch"
+    return ActiveRelease(
+        release_id=release_id,
+        release_path=release,
+        feature_contract=manifest["feature_contract"],
+        features=tuple(manifest["features"]),
+        training_data_sha256=manifest["training_data_sha256"],
+        artifact_checksums=checksums,
+        manifest_updated_utc=manifest_updated,
+        artifacts_verified=verified,
+        problem=problem,
+    )

@@ -14,9 +14,11 @@ decision to place real orders. See :mod:`src.scorecard_gate`.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from src.inference_backend import build_tabular_predictor
+from src.model_release import ActiveRelease, read_active_release, resolve_release_root
 from src.scorecard_gate import (
     ScorecardGateSettings,
     ScorecardGateStatus,
@@ -109,6 +111,62 @@ def log_startup_details(
         )
 
 
+def log_active_release(logger: logging.Logger, config: Any) -> ActiveRelease | None:
+    """Log which paired model release this process is running, fail closed.
+
+    Promotion, rollback and ``validate`` all report the release they acted on,
+    but the running bot never said which release it loaded, so a swapped,
+    dangling or edited release was invisible until a decision looked wrong.
+    A deployment without ``TRADING_MODEL_RELEASE_ROOT`` logs nothing - paired
+    releases are optional and the single-Pi profile may legitimately point the
+    CatBoost predictor at a plain model directory.
+    """
+    release_root = resolve_release_root()
+    if not release_root:
+        return None
+    active = read_active_release(release_root)
+    if active is None:
+        logger.warning(
+            "No valid active model release under %s: the tabular model is not "
+            "backed by a validated paired release. Run "
+            "scripts/manage_model_release.py validate to inspect it.",
+            release_root,
+        )
+        return None
+    if not active.artifacts_verified:
+        logger.error(
+            "Active model release %s failed artifact verification (%s). "
+            "Roll back to a known-good release before trading on this model.",
+            active.release_id,
+            active.problem,
+        )
+    else:
+        logger.info(
+            "Active model release: id=%s contract=%s features=%d "
+            "training_data_sha256=%s artifacts verified",
+            active.release_id,
+            active.feature_contract,
+            len(active.features),
+            active.training_data_sha256,
+        )
+    model_path = str(getattr(config, "tabular_model_path", "") or "").strip()
+    if model_path:
+        try:
+            loaded = Path(model_path).resolve()
+            inside = loaded == active.release_path or active.release_path in loaded.parents
+        except OSError:
+            inside = False
+        if not inside:
+            logger.warning(
+                "TABULAR_MODEL_PATH '%s' is outside the active model release %s; "
+                "the bot is loading a model that the release manifest does not "
+                "describe.",
+                model_path,
+                active.release_path,
+            )
+    return active
+
+
 def load_ml_predictor(logger: logging.Logger, config: Any) -> Any:
     """Loads the optional rule/ML predictor (USE_ML_MODEL=True)."""
     ml_predictor = None
@@ -138,5 +196,11 @@ def load_tabular_predictor(logger: logging.Logger, config: Any) -> Any:
     The backend cascade lives in :mod:`src.inference_backend`, where the Hailo
     and CPU backends are injected and the ``hailo -> CPU -> rules_only`` order is
     unit-testable without a Hailo package, device or endpoint.
+
+    A deployment that uses paired releases also states which release it is
+    running before the first prediction, so the log answers "which model served
+    this decision?" without a second command.
     """
+    if getattr(config, "use_tabular_model", False):
+        log_active_release(logger, config)
     return build_tabular_predictor(logger, config)

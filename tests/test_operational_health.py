@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import shutil
 import sys
 from datetime import UTC, datetime, timedelta
@@ -431,3 +432,177 @@ def test_main_defaults_disk_capacity_to_data_dir(tmp_path, monkeypatch):
     # The Pi profile gets capacity coverage without extra configuration.
     assert f'trading_disk_total_bytes{{path="{tmp_path}"}}' in body
     assert "trading_task_status_present" not in body
+
+
+def _release_root(tmp_path, *, tamper: str | None = None):
+    """Promote a paired release into a throwaway root and return that root.
+
+    Uses the real promotion command so the exporter is tested against a manifest
+    the runtime would actually accept rather than a hand-written one.
+    """
+    from src.model_release import promote_release
+
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    (artifacts / "cpu.cbm").write_bytes(b"cpu model")
+    (artifacts / "model.hef").write_bytes(b"hailo model")
+    validation = {
+        "rows": 250,
+        "accuracy": 0.8,
+        "macro_f1": 0.7,
+        "threshold_macro_f1": 0.68,
+        "threshold_coverage": 0.62,
+    }
+    label_map = {"verkaufen": 0, "halten": 1, "kaufen": 2}
+    (artifacts / "cpu.json").write_text(json.dumps({
+        "feature_contract": "hailo",
+        "features": ["rsi", "macd"],
+        "label_map": label_map,
+        "training_data_sha256": "a" * 64,
+        "label_horizon": 6,
+        "train_rows": 1000,
+        "validation_rows": 250,
+        "validation": validation,
+    }), encoding="utf-8")
+    (artifacts / "hailo.json").write_text(json.dumps({
+        "feature_contract": "hailo",
+        "features": ["rsi", "macd"],
+        "label_map": label_map,
+        "data_provenance": {
+            "training_data_sha256": "a" * 64,
+            "label_map": label_map,
+            "label_horizon": 6,
+            "train_rows": 1000,
+            "validation_rows": 250,
+        },
+        "validation": validation,
+    }), encoding="utf-8")
+    root = tmp_path / "models"
+    release = promote_release(
+        root, "release-1",
+        artifacts / "cpu.cbm", artifacts / "cpu.json",
+        artifacts / "model.hef", artifacts / "hailo.json",
+    )
+    if tamper == "checksum":
+        (release / "cpu" / "catboost_model.cbm").write_bytes(b"swapped")
+    elif tamper == "missing":
+        (release / "hailo" / "model.hef").unlink()
+    return root
+
+
+def test_render_metrics_omits_release_gages_when_root_is_unset(tmp_path):
+    now = datetime(2026, 11, 25, 12, 0, tzinfo=UTC)
+
+    metrics = render_metrics(
+        tmp_path / "STOP", "", tmp_path / "missing.json",
+        tmp_path / "missing_journal.csv", tmp_path / "missing_bot.log",
+        now=now, health_probe=lambda *_args, **_kwargs: _Response(),
+    )
+
+    # An unset root is a configuration choice, not a missing release: publishing
+    # "present 0" here would page every host that never promotes releases.
+    assert "trading_model_release_enabled 0" in metrics
+    assert "trading_model_release_present" not in metrics
+    assert "trading_model_release_artifacts_ok" not in metrics
+
+
+def test_render_metrics_publishes_the_active_release(tmp_path):
+    now = datetime(2026, 11, 25, 12, 0, tzinfo=UTC)
+    root = _release_root(tmp_path)
+    stamp = (now - timedelta(minutes=5)).timestamp()
+    os.utime(root / "active" / "manifest.json", (stamp, stamp))
+
+    metrics = render_metrics(
+        tmp_path / "STOP", "", **_base_kwargs(tmp_path, now),
+        model_release_root=str(root),
+    )
+
+    assert "trading_model_release_enabled 1" in metrics
+    assert "trading_model_release_present 1" in metrics
+    assert "trading_model_release_artifacts_ok 1" in metrics
+    assert "trading_model_release_features 2" in metrics
+    assert "trading_model_release_age_seconds 300.000" in metrics
+
+
+def test_render_metrics_reports_a_release_root_without_active_link(tmp_path):
+    now = datetime(2026, 11, 25, 12, 0, tzinfo=UTC)
+    (tmp_path / "models").mkdir()
+
+    metrics = render_metrics(
+        tmp_path / "STOP", "", **_base_kwargs(tmp_path, now),
+        model_release_root=str(tmp_path / "models"),
+    )
+
+    assert "trading_model_release_enabled 1" in metrics
+    assert "trading_model_release_present 0" in metrics
+    assert "trading_model_release_artifacts_ok" not in metrics
+
+
+def test_render_metrics_reports_a_tampered_release_artifact(tmp_path):
+    now = datetime(2026, 11, 25, 12, 0, tzinfo=UTC)
+    root = _release_root(tmp_path, tamper="checksum")
+
+    metrics = render_metrics(
+        tmp_path / "STOP", "", **_base_kwargs(tmp_path, now),
+        model_release_root=str(root),
+    )
+
+    # The release is still the one being traded on, so it stays present while
+    # the verification gauge drops - that combination is the alert condition.
+    assert "trading_model_release_present 1" in metrics
+    assert "trading_model_release_artifacts_ok 0" in metrics
+
+
+def test_render_metrics_reports_an_unreadable_release_artifact(tmp_path):
+    now = datetime(2026, 11, 25, 12, 0, tzinfo=UTC)
+    root = _release_root(tmp_path, tamper="missing")
+
+    metrics = render_metrics(
+        tmp_path / "STOP", "", **_base_kwargs(tmp_path, now),
+        model_release_root=str(root),
+    )
+
+    assert "trading_model_release_present 1" in metrics
+    assert "trading_model_release_artifacts_ok 0" in metrics
+
+
+def test_main_publishes_release_gages_from_environment(tmp_path, monkeypatch):
+    output = tmp_path / "textfile" / "trading_health.prom"
+    root = _release_root(tmp_path)
+    monkeypatch.setenv("TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TRADING_KILL_SWITCH_FILE", str(tmp_path / "STOP"))
+    monkeypatch.setenv("RESEARCH_SIGNAL_PATH", str(tmp_path / "missing.json"))
+    monkeypatch.setenv("HAILO_HEALTH_URL", "")
+    monkeypatch.setenv("TRADING_MODEL_RELEASE_ROOT", str(root))
+    monkeypatch.delenv("TRADING_MARKET_DATA_DIR", raising=False)
+    monkeypatch.delenv("TRADING_TASK_STATUS_FILES", raising=False)
+    monkeypatch.delenv("TRADING_DISK_PATHS", raising=False)
+    monkeypatch.delenv("ANALYTICS_DB_URL", raising=False)
+    monkeypatch.setenv("TRADING_HEALTH_METRICS_FILE", str(output))
+
+    assert main() == 0
+
+    body = output.read_text(encoding="utf-8")
+    assert "trading_model_release_enabled 1" in body
+    assert "trading_model_release_present 1" in body
+    assert "trading_model_release_artifacts_ok 1" in body
+
+
+def test_main_stays_silent_about_releases_when_unset(tmp_path, monkeypatch):
+    output = tmp_path / "textfile" / "trading_health.prom"
+    monkeypatch.setenv("TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TRADING_KILL_SWITCH_FILE", str(tmp_path / "STOP"))
+    monkeypatch.setenv("RESEARCH_SIGNAL_PATH", str(tmp_path / "missing.json"))
+    monkeypatch.setenv("HAILO_HEALTH_URL", "")
+    monkeypatch.delenv("TRADING_MODEL_RELEASE_ROOT", raising=False)
+    monkeypatch.delenv("TRADING_MARKET_DATA_DIR", raising=False)
+    monkeypatch.delenv("TRADING_TASK_STATUS_FILES", raising=False)
+    monkeypatch.delenv("TRADING_DISK_PATHS", raising=False)
+    monkeypatch.delenv("ANALYTICS_DB_URL", raising=False)
+    monkeypatch.setenv("TRADING_HEALTH_METRICS_FILE", str(output))
+
+    assert main() == 0
+
+    body = output.read_text(encoding="utf-8")
+    assert "trading_model_release_enabled 0" in body
+    assert "trading_model_release_present" not in body

@@ -201,6 +201,23 @@ python3 -m scripts.manage_model_release rollback \
   --release-root /opt/trading-models --release-id trading-previous
 ```
 
+Which release is live is visible without a shell command. Set
+`TRADING_MODEL_RELEASE_ROOT=/opt/trading-models` for the bot and in
+`/etc/trading-health.env` for the monitoring exporter. At startup the bot logs
+the active release ID, feature contract, feature count, training-data hash and
+artifact verification result, logs an error when the stored artifacts no longer
+match their checksums, and warns when `TABULAR_MODEL_PATH` points outside the
+active release. The variable is deliberately unset by default: a profile that
+never promotes paired releases keeps its plain model directory and publishes no
+release gauges, so the release alerts cannot fire there. With the root set,
+`scripts/export_operational_health.py` additionally publishes
+`trading_model_release_present`, `trading_model_release_artifacts_ok`,
+`trading_model_release_features` and `trading_model_release_age_seconds`, and
+`deploy/trading-alerts.yml` pages `TradingModelReleaseMissing` when the root has
+no usable `active` release and `TradingModelReleaseArtifactMismatch` when a live
+artifact no longer matches its manifest. The exporter only reads the release
+tree, so it keeps its `ProtectSystem=strict`.
+
 This verifies the package contract and checksums, not profitability or hardware
 compatibility. Run the selected HEF on the target Hailo device and complete the
 paper/shadow evaluation before operator promotion to any live workload.

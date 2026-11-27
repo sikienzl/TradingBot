@@ -89,6 +89,49 @@ a version heading is assigned when a release is prepared.
   instructs operators to run the release CLI on the Pi, but the staging list
   never copied it, so the documented model-swap path was missing from the
   published package.
+- `src/model_release.read_active_release`, a fail-closed read-only view of which
+  paired release a host is actually running. Promotion, rollback and `validate`
+  all reported the release they acted on, but nothing answered "which model
+  served this decision?" afterwards, so a release that was swapped, left dangling
+  or edited in place was invisible until a decision looked wrong. The reader
+  resolves `TRADING_MODEL_RELEASE_ROOT` (`resolve_release_root`: unset, `off`,
+  `none`, `false`, `no` or `disabled` all mean "not configured"), follows only an
+  `active` symlink whose target is a release directory directly under `releases/`,
+  re-validates the manifest shape and re-hashes every artifact against its
+  recorded checksum, and returns the release ID, path, feature contract, feature
+  tuple, training-data hash, per-artifact checksums, manifest timestamp,
+  verification flag and the first verification problem. It never raises: a
+  missing, dangling, absolute or out-of-tree link, an invalid release ID and an
+  unreadable or malformed manifest are all reported as "no active release", and
+  an unreadable or mismatched artifact is reported as an unverified release with
+  a reason. Stdlib only, so the deployment gate can exercise it without any
+  machine-learning package installed.
+- Startup visibility in `src/bot_bootstrap.log_active_release`, called from
+  `load_tabular_predictor` before the first prediction when
+  `USE_TABULAR_MODEL=true`. It logs the active release ID, contract, feature
+  count, training-data hash and verification result; logs an error naming the
+  problem when the stored artifacts no longer match their manifest; warns when
+  the root has no usable release; and warns when `TABULAR_MODEL_PATH` resolves
+  outside the active release, which is the case where the manifest does not
+  describe the model actually being loaded. A deployment without
+  `TRADING_MODEL_RELEASE_ROOT` logs nothing at all, keeping the single-Pi profile
+  that points at a plain model directory quiet.
+- Read-only model release gauges in `scripts/export_operational_health.py`:
+  `trading_model_release_enabled`, and only when a root is configured
+  `trading_model_release_present`, then `trading_model_release_artifacts_ok`,
+  `trading_model_release_features` and `trading_model_release_age_seconds`. The
+  exporter reads the release tree and never writes to it, so it keeps its
+  `ProtectSystem=strict`. The root is opt-in through `/etc/trading-health.env`
+  (`deploy/trading-health.env.example`) rather than defaulted, because a host
+  that never promotes paired releases must not page on a missing release.
+- Two alert rules in `deploy/trading-alerts.yml` (32 to 34):
+  `TradingModelReleaseMissing` (critical, 30m) when a host configures a release
+  root that has no usable `active` release, and `TradingModelReleaseArtifactMismatch`
+  (critical, 10m) when the live release's artifacts no longer match their
+  manifest checksums - the state where the bot is trading on a model that the
+  validated package no longer describes. Both are label-free, and an unset root
+  publishes `trading_model_release_enabled 0` and no other release gauge, so
+  neither rule can fire on a profile that does not use paired releases.
 
 ### Tests
 
@@ -125,6 +168,27 @@ a version heading is assigned when a release is prepared.
   import appears on the release path. The job installs no third-party packages,
   so this is also the guard that keeps the release CLI usable on a bare
   controller.
+- Release visibility is covered at every layer that reads it.
+  `tests/test_model_release.py` adds the reader matrix: the environment values
+  that mean "not configured", a root that is unset or has no `active` link, a
+  dangling, absolute, directory or out-of-tree link, a malformed manifest (not
+  JSON, missing key, release ID that disagrees with its directory), a promoted
+  release followed correctly after a rollback, and a swapped or deleted artifact
+  reported as an unverified release with the failing artifact named.
+  `tests/test_bot_bootstrap.py` asserts the startup log for each state - silent
+  without a root, the warning with no usable release, the verified release line,
+  the verification error, the "outside the active model release" warning, and
+  that `load_tabular_predictor` reports the release before loading the model.
+  `tests/test_operational_health.py` asserts the exported gauge set for an unset
+  root, a promoted release, a root without an `active` link, a tampered artifact
+  and a missing artifact, plus the same through `main()` from the environment.
+  `tests/test_alert_rules.py` now renders against a release promoted by the real
+  `promote_release`, so both new rules are checked against metrics the exporter
+  actually emits, and asserts the unset root cannot match either alert.
+  `tests/conftest.py` clears `TRADING_MODEL_RELEASE_ROOT` for every test so a
+  developer or CI environment that has one set cannot change what unrelated tests
+  observe. `.github/scripts/tests/test_model_release_cli.py` covers the reader
+  against a CLI-promoted release, including the tampered case the alert pages on.
 
 ## v1.0.33 - 2026-11-27
 
