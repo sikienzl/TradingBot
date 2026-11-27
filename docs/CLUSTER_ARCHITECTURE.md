@@ -181,6 +181,16 @@ workload such as the observed `.74` shadow container is skipped by design becaus
 paper journal has no exchange side, so the inspected cluster currently exercises
 none of this path; validating it against a live account remains an operator step.
 
+Per-decision inference backend counters (`src.inference_decision_stats`) are also
+host-local: the bot that runs the analysis path writes
+`results/inference/backend_stats.json` under its own deployment root and the
+operational-health exporter on the same host publishes the backend mix. That is
+the cluster signal for a quiet `hailo -> cpu -> rules_only` fallback, because the
+observed cluster has no Hailo readiness probe; the counters describe the node
+that wrote them and are never shared or merged across nodes. A node that runs no
+analysis path publishes no counters, and the exporter reports
+`trading_inference_stats_present=0` for it rather than an empty mix.
+
 ## Single-Pi boundary
 
 The CM5 cluster is optional. The Raspberry Pi release can run the rules-based

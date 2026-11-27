@@ -12,13 +12,13 @@ stays **[⚠️ Partial]**.
 | # | Core area | Single Raspberry Pi | CM5 cluster |
 |---|---|---|---|
 | 1 | Data basis and model lifecycle | **[⚠️ Partial]** Paired contract/checksum manifest and atomic activation/rollback are implemented; candidate training and DFC compilation remain separate operator steps. | **[⚠️ Partial]** Same paired release tooling; DFC and target-device validation remain external, and no x86 worker is deployed. |
-| 2 | Decision pyramid and hardware fallback | **[✅ Implemented]** Volume, spread, and ATR gates run before any model or paid call, and the paid news veto runs after the pre-trade cost budget; the order is asserted end to end. Backend selection sits behind `src.inference_backend` with injected backends, and a dedicated CI job runs the Hailo→CPU→rules-only matrix with no Hailo package, device or model files installed. | **[⚠️ Partial]** Same cascade and gates; target-cluster service/device availability is not continuously exercised by CI, and a cluster fallback is only visible in the bot log. |
+| 2 | Decision pyramid and hardware fallback | **[✅ Implemented]** Volume, spread, and ATR gates run before any model or paid call, and the paid news veto runs after the pre-trade cost budget; the order is asserted end to end. Backend selection sits behind `src.inference_backend` with injected backends, and a dedicated CI job runs the Hailo→CPU→rules-only matrix with no Hailo package, device or model files installed. The backend that served each decision is counted on disk and exported as Prometheus gauges. | **[⚠️ Partial]** Same cascade, gates and per-decision backend counters; target-cluster service/device availability is not continuously exercised by CI, so a cluster fallback is detected from the exported backend mix rather than a readiness probe. |
 | 3 | News integration | **[✅ Implemented]** RSS items retain `published_at`/`fetched_at`, are deduplicated, and are additionally appended to an immutable per-item JSONL store (`src/news_item_store.py`) with a point-in-time replay helper; the opt-in structured final veto reads that store and fails closed when it has no fresh item. The store is bounded by the shared retention policy (`src/jsonl_retention.py`, `deploy/jsonl-retention.timer`). | **[⚠️ Partial]** Same code is available, but the inspected cluster has no configured paid provider/credentials and no retention unit installed; Hailo features do not consume news. |
 | 4 | Hard risk and kill switch | **[✅ Implemented]** The daily anchor, loss-streak pause, hourly BUY budget and re-entry cooldowns are persisted in `TRADING_RISK_STATE_FILE` and restored at startup; unreadable or unwritable risk state blocks new entries and latches the persistent kill switch in live mode. | **[⚠️ Partial]** Same persisted state per node, but the file and the stop marker are host-local; no cluster-wide shared switch or distributed state store is implemented. |
 | 5 | Execution and costs | **[✅ Implemented]** Exchange fill/fee records, a pre-trade taker-fee + spread + slippage cost budget (`MAX_ENTRY_COST_BPS`), and a Kraken `cl_ord_id` per submission are in place; a submission timeout is reconciled instead of resubmitted and an unknown outcome latches the stop marker. Partial fills keep their requested amount in the journal, and `src.fill_reconciliation` now compares every journalled live order against the Kraken order history automatically (bot startup plus an hourly timer) and reports unmatched orders and quantity/fee differences. | **[⚠️ Partial]** Same controls and the same reconciliation code, but live exchange use remains unvalidated on the cluster. |
 | 6 | Single-Pi vs cluster operations | **[⚠️ Partial]** Local process lock, persisted live snapshot, startup balance comparison, open-order refusal, uncertain-order latch, and automatic journal-to-exchange fill reconciliation with alerting exist; deriving a trusted position snapshot from Kraken fills still needs operator review. | **[⚠️ Partial]** Optional account-scoped PostgreSQL advisory lease supplements local locks; shared PostgreSQL config and cluster deployment are operator prerequisites, the reconciliation marker is host-local, and fill-to-position reconstruction remains manual. |
 | 7 | Evaluation and scorecard | **[✅ Implemented]** GO/HOLD/NO-GO and HOLD for insufficient data are implemented, with Pi systemd automation. A fresh `GO` verdict is a prerequisite for `DRY_RUN=false` and for `scripts/manage_model_release.py promote`, and every run is additionally appended to an immutable per-run verdict history (`src.scorecard_verdict_history.py`) that the weekly tuning cycle reads as its evidence chain. | **[⚠️ Partial]** Same gate code and monitoring rules; the inspected cluster deployment still does not show scorecard automation as part of its active bot topology, so the gate reads the marker produced by the Pi/cluster `scorecard-status` timer. |
-| 8 | Monitoring and alerting | **[⚠️ Partial]** Pi installer configures Alertmanager, a private HTTPS webhook relay, and kill-switch/Hailo/research health alerts plus bounded journal/bot-log/market-data staleness probes, scheduled-task exit-status markers for the daily review, weekly scorecard and weekly tuning units, disk-capacity gauges, fill-reconciliation presence/completeness/mismatch/staleness gauges, and an optional analytics-database probe; operator webhook configuration and staging delivery validation remain required. | **[⚠️ Partial]** Alert rules and relay are available in the repository, but cluster-specific installation/configuration and live receiver validation remain outstanding. |
+| 8 | Monitoring and alerting | **[⚠️ Partial]** Pi installer configures Alertmanager, a private HTTPS webhook relay, and kill-switch/Hailo/research health alerts plus bounded journal/bot-log/market-data staleness probes, scheduled-task exit-status markers for the daily review, weekly scorecard and weekly tuning units, disk-capacity gauges, fill-reconciliation presence/completeness/mismatch/staleness gauges, per-decision tabular inference backend mix gauges with fallback and rules-only alerts, and an optional analytics-database probe; operator webhook configuration and staging delivery validation remain required. | **[⚠️ Partial]** Alert rules and relay are available in the repository, but cluster-specific installation/configuration and live receiver validation remain outstanding. |
 
 ## Findings and evidence
 
@@ -77,10 +77,33 @@ and `sklearn` are not importable, i.e. it is the single-Pi no-device profile.
 `tests/test_hailo_inference.py` still covers the inference/service contracts and
 the CI Hailo export job is separate.
 
+The selected backend is additionally recorded per decision. Every tabular
+prediction returned by `analyze_coin` is counted by
+`src.inference_decision_stats.py`, which reuses the `backend` tag the fallback
+cascade already emits and keeps a cumulative counter file
+(`results/inference/backend_stats.json` by default, written atomically and
+throttled so a fast loop cannot hammer the SD card). A candidate that never
+reaches inference - rejected by the volume, spread or ATR gate - produces no
+counter, so the mix describes real inference decisions. A missing, unreadable or
+wrong-version counter file is treated as unknown and never invents a backend,
+and a counter write failure is logged once and never changes a decision.
+`scripts/export_operational_health.py` publishes the mix as
+`trading_inference_decisions_total`, `trading_inference_backend_share` and
+`trading_inference_stats_age_seconds`, reading only, so it stays compatible with
+the exporter's `ProtectSystem=strict`. `deploy/trading-alerts.yml` then alerts
+when a deployment with tabular inference enabled has no counters at all
+(`TradingInferenceBackendCountersMissing`), when a Hailo-profile deployment
+served most decisions from CPU or rules-only
+(`TradingInferenceBackendFallback`), and when any deployment drifts into
+rules-only (`TradingInferenceRulesOnlyDecisions`). A CatBoost-only Pi publishes
+`trading_inference_expected_backend_hailo=0`, so the fallback alert cannot fire
+on a profile that never expects Hailo. `tests/test_alert_rules.py` asserts the
+gauge set per profile, and the CI inference-matrix job runs the counter tests on
+the no-package profile.
+
 **Next:** Exercise the target-cluster Hailo service and device availability
-continuously (readiness probe plus alert on the cluster profile) and record the
-selected backend per decision, so a silent cluster fallback to CPU or
-rules-only is visible in monitoring rather than only in the bot log.
+continuously (readiness probe plus alert on the cluster profile), so a fallback
+is detected before the exported backend mix has drifted rather than after.
 
 ### 3. News feed and veto schema
 

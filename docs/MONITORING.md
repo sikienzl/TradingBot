@@ -327,6 +327,22 @@ Scheduled-task, capacity, and analytics gauges come from the same timer:
   not manage (disabled policy, or a marker without that store) publishes nothing
   rather than a false zero, and `TRADING_JSONL_RETENTION_REPORT` selects the
   marker path for both the pruner and the exporter.
+- Tabular inference backend mix (`src.inference_decision_stats`) exports
+  `trading_inference_decisions_total{backend="hailo"|"cpu"|"rules_only"|"other"}`
+  and `trading_inference_backend_share{backend=...}` from the counter file the
+  bot writes for every tabular decision, plus `trading_inference_stats_present`,
+  `trading_inference_stats_age_seconds`, `trading_inference_model_enabled`
+  (`USE_TABULAR_MODEL` from the bot deployment `.env`) and
+  `trading_inference_expected_backend_hailo` (`TABULAR_MODEL_BACKEND=hailo`).
+  This is what makes a silent `hailo -> cpu -> rules_only` fallback visible: the
+  bot keeps producing decisions, only the backend mix changes. The bot owns the
+  counter file (`results/inference/backend_stats.json`, override with
+  `TRADING_INFERENCE_STATS_FILE`, `off` disables it) and the exporter only ever
+  reads it, so both release profiles publish their own mix and a `catboost`
+  deployment can never match the Hailo-fallback alert. A deployment with the
+  tabular model switched off publishes `model_enabled 0` and no share gauge at
+  all, and a corrupt counter file is reported as `stats_present 0` rather than
+  as a fresh zero.
 
 The health unit uses `/etc/trading-health.env`, not the bot's
 credential-bearing `.env`; copy `deploy/trading-health.env.example` there.
@@ -365,7 +381,13 @@ that keeps growing past 16 MiB for a day
 size guard (`TradingJsonlStoreOverRetentionGuard`, critical - the pruner refuses
 a store that large, so it needs an operator). A missing or overdue retention
 marker is reported by the generic `TradingScheduledTask*` rules through the
-`jsonl_retention` task. `tests/test_alert_rules.py`
+`jsonl_retention` task. A tabular deployment that recorded no backend counter at
+all (`TradingInferenceBackendCountersMissing`, warning), a
+`TABULAR_MODEL_BACKEND=hailo` deployment whose decisions are mostly served by
+the CPU or rules-only fallback (`TradingInferenceBackendFallback`, warning) and
+any deployment where more than 5% of decisions had neither a Hailo nor a CPU
+prediction (`TradingInferenceRulesOnlyDecisions`, critical) are the inference
+fallback alerts. `tests/test_alert_rules.py`
 fails when one of those rules references a metric the exporter does not emit.
 The installer
 also configures local Alertmanager and a loopback-only relay. Before installing

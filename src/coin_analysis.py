@@ -26,6 +26,7 @@ from src.indicator_service import (
     calculate_rsi,
     calculate_sma,
 )
+from src.inference_decision_stats import record_backend_selection
 
 logger = logging.getLogger(__name__)
 
@@ -325,6 +326,10 @@ def analyze_coin(
                 row_data, confidence_threshold=config.tabular_min_confidence)
             model_backend = tab_result.get(
                 'backend', config.tabular_model_backend)
+            # Durable per-decision counter: the backend label alone only reaches
+            # the log, so a silent cluster fallback to CPU or rules-only would
+            # stay invisible to monitoring (audit point 2).
+            record_backend_selection(model_backend)
             tab_decision = tab_result.get('decision', 'halten')
             tab_confidence = float(tab_result.get('confidence', 0.0))
             tab_proba = tab_result.get('proba', {})

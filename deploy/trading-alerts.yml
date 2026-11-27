@@ -261,3 +261,30 @@ groups:
         annotations:
           summary: "An append-only JSONL store stayed far above its retention budget"
           description: "More than 16 MiB for a whole day: jsonl-retention.timer is not running, retention is disabled, or TRADING_JSONL_RETENTION_* keeps too much history on the Pi volume."
+
+      - alert: TradingInferenceBackendCountersMissing
+        expr: trading_inference_model_enabled == 1 and trading_inference_stats_present == 0
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tabular model enabled but no backend counters recorded"
+          description: "USE_TABULAR_MODEL is on yet the bot published no usable inference backend counter file, so the backend mix is unmonitored: the analysis path never ran, the counters are corrupt, or TRADING_INFERENCE_STATS_FILE points somewhere else."
+
+      - alert: TradingInferenceBackendFallback
+        expr: trading_inference_expected_backend_hailo == 1 and (trading_inference_backend_share{backend="cpu"} + trading_inference_backend_share{backend="rules_only"}) > 0.5
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Hailo deployment is served by CPU or rules-only"
+          description: "TABULAR_MODEL_BACKEND=hailo but most recorded decisions came from the CPU or rules-only fallback, so the Hailo service, tunnel or device is unavailable and inference silently degraded."
+
+      - alert: TradingInferenceRulesOnlyDecisions
+        expr: trading_inference_backend_share{backend="rules_only"} > 0.05
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tabular decisions fell back to rules-only"
+          description: "More than 5% of recorded decisions had neither a Hailo nor a CPU prediction, so both model backends are unavailable and the bot is trading on rules alone. Check the model artifacts and the backend log lines."
