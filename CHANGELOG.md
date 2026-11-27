@@ -5,6 +5,8 @@ a version heading is assigned when a release is prepared.
 
 ## Unreleased
 
+## v1.0.33 - 2026-11-27
+
 ### Added
 
 - `src/jsonl_retention.py`, a layer-1 module that owns the retention policy for

@@ -1,0 +1,156 @@
+v1.0.33 - Bounded retention for the append-only JSONL stores
+
+Date: 2026-11-27
+
+Summary
+
+This release closes the one operational gap that v1.0.32 could only record as an
+operator task: the two append-only JSONL stores - the per-item news store and the
+scorecard verdict history - grew on every run with no bound. Retention is now
+repository code. A single pruner rewrites each store in place under the same
+exclusive lock its writer already holds, reusing the file inode so a concurrent
+appender can never lose a record, and copies the previous content to a rotating
+backup first. The age horizon and the record floor are independent limits, and
+both defaults stay above each store's dedupe and read window, so pruning never
+breaks fetch idempotence or the weekly tuning cycle's evidence chain. A failed or
+never-started pass is alertable through the existing scheduled-task rules, and an
+unbounded store is now a warning instead of slow disk exhaustion. No signal,
+entry rule, risk rule or strategy parameter changed.
+
+Changes
+
+Retention policy for both stores
+- New `src/jsonl_retention.py` (layer 1, 469 lines) owns the policy for the news
+  store (`data/research_news_items.jsonl`) and the verdict history
+  (`results/scorecards/verdict_history.jsonl`). Both writers only ever appended,
+  so until now the audit could only describe rotation as an operator step.
+- A store is rewritten in place under the store's own exclusive `flock`, reusing
+  the file inode (truncate and write, never a rename), so a writer that already
+  holds the lock cannot lose a record and a reader that opened the path keeps
+  reading a consistent file. The previous content is copied to a rotating
+  `<store>.bak-<UTC stamp>` before the rewrite.
+- A record is dropped only when it is older than the age horizon **and** beyond
+  the record floor. The two limits are independent, `0` turns one off, and a
+  record with no usable timestamp is always kept. The defaults (news 180 days /
+  8192 records, verdict 730 days / 512 records) stay above each store's dedupe
+  window (4096 / 256), so a pruned store still rejects a re-fetched headline and
+  the tuning cycle still reads its evidence chain.
+- A missing store is reported and never created, malformed lines are dropped, a
+  store above the 256 MiB guard is refused rather than loaded, and an unchanged
+  store is left untouched. No store module imports the retention module, so the
+  append path stays independent of the policy.
+
+The only mutator
+- New `scripts/prune_jsonl_stores.py` (235 lines) resolves both store paths
+  through `RESEARCH_NEWS_STORE_PATH` and `SCORECARD_VERDICT_HISTORY_FILE` and
+  accepts `--dry-run`, per-store path and limit overrides, and `--no-report`. It
+  publishes a `src.task_status` marker at `results/jsonl_retention/latest_status.env`
+  with the scheduled-task contract plus the per-store `news_*` and `verdict_*`
+  counters. Exit codes: `0` pruned or unchanged, `1` a store could not be pruned,
+  `2` retention disabled.
+
+Single-Pi scheduling and packaging
+- New `deploy/jsonl-retention.service` / `.timer`: daily at `03:30` with
+  `Persistent=true` so a Pi that was switched off for a week catches up instead
+  of growing the stores, `AccuracySec=60s`, `User=trading`, `ProtectSystem=strict`
+  with only `data/`, `results/scorecards/` and `results/jsonl_retention/`
+  writable, and `SuccessExitStatus=0 1 2` so the unit result never masks the real
+  exit code - the marker carries it and the generic `TradingScheduledTask*` rules
+  read it.
+- `scripts/install_pi.sh` stages both units, creates and owns
+  `results/jsonl_retention/`, and enables the timer. The single-Pi profile is the
+  only profile that installs a retention unit: the lock is host-local, so exactly
+  one node per store may prune it, and the CM5 cluster profile deliberately has no
+  such unit.
+- The release staging list carries `src/jsonl_retention.py`,
+  `scripts/prune_jsonl_stores.py` and both units, and
+  `.github/scripts/tests/test_pi_package_manifest.py` fails the build if a staged
+  file is missing or a staged wrapper invokes an unstaged helper.
+
+Monitoring and alerting
+- `scripts/export_operational_health.py` publishes `trading_jsonl_store_bytes`,
+  `trading_jsonl_store_records` and `trading_jsonl_store_pruned` per store, read
+  from the retention marker plus a plain `stat` of each file - the exporter never
+  opens a store and never takes its lock.
+- `deploy/trading-operational-health.service` lists the retention marker as the
+  `jsonl_retention` task in `TRADING_TASK_STATUS_FILES`, alongside the daily
+  review, the weekly scorecard and the weekly tuning cycle.
+- `deploy/trading-alerts.yml` now has 29 rules (was 27):
+  `TradingJsonlStoreGrowing` (warning, above 16 MiB for 24 h - the timer is not
+  running, retention is disabled, or the limits keep too much history) and
+  `TradingJsonlStoreOverRetentionGuard` (critical, above the 256 MiB pruner
+  guard, where the pruner refuses to load the store).
+
+Configuration
+- `TRADING_JSONL_RETENTION_ENABLED` (default on, `0` is the rollback),
+  `TRADING_JSONL_RETENTION_NEWS_DAYS` / `_NEWS_RECORDS`,
+  `TRADING_JSONL_RETENTION_VERDICT_DAYS` / `_VERDICT_RECORDS`,
+  `TRADING_JSONL_RETENTION_BACKUPS` and `TRADING_JSONL_RETENTION_REPORT`,
+  documented in `docs/CONFIGURATION.md` and `.env.example`. A malformed or
+  negative value falls back to the documented default instead of silently
+  disabling a limit.
+
+Testing
+- New `tests/test_jsonl_retention.py` (878 lines): the age horizon and the record
+  floor in isolation, `0` disabling one dimension only, undated records kept and
+  malformed lines dropped, the store-inode guarantee while another process holds
+  the `flock` with a concurrent appender, rotating backups and the switch that
+  turns them off, dry-run and idempotence, the size guard, the marker round-trip
+  through `src.task_status`, and every CLI exit path. Plus store-size assertions
+  in `tests/test_alert_rules.py`, which rejects any rule that references a metric
+  no exporter emits.
+- Gate results on this release: `pytest tests/` 1799 passed; the slim CI
+  environment simulation 1773 passed and 2 skipped; ruff clean; mypy 0 errors
+  across 77 source files; deployment config check exit 0; release tooling tests
+  22 passed; cluster-starter tests 5 passed.
+
+Documentation
+- `docs/ARCHITECTURE_AUDIT.md` records the retention policy as repository code in
+  row 3 and in the news and scorecard findings, while the cluster column keeps
+  stating that the inspected cluster has no retention unit installed.
+- `docs/CONFIGURATION.md` documents every `TRADING_JSONL_RETENTION_*` key with its
+  default and its rollback, `docs/MONITORING.md` covers the three gauges, the two
+  new rules and the retention task marker, `docs/CLUSTER_ARCHITECTURE.md` states
+  the single-writer-per-store constraint, and `SERVER_README.md` describes the
+  Pi timer and the manual prune path for a host without one.
+- `.env.example` carries the new keys.
+
+Notes
+- Release profiles: both are built, but this release changes the single-node
+  Raspberry Pi profile. The Pi stays autonomous - no Hailo-8, no second node, no
+  K3s, no PostgreSQL, no tunnel. The CM5 cluster profile is unchanged in
+  behaviour; it gains the module, the script and the alert rules but installs no
+  retention unit, because the store lock is host-local and only the node that
+  owns a store may prune it.
+- Behaviour change to expect: on a Pi with the timer enabled, the first pass at
+  `03:30` may drop records older than the horizon that are also beyond the floor,
+  and leaves one `<store>.bak-<UTC stamp>` next to each store. Nothing is dropped
+  from a store that is below either limit, and `--dry-run` reports the same
+  counts without writing.
+- Operational changes for an existing install: extract this package, re-run
+  `scripts/install_pi.sh` so the two units are staged and
+  `results/jsonl_retention/` is created and owned, then
+  `systemctl daemon-reload` and confirm `systemctl list-timers jsonl-retention.timer`.
+  Re-run `scripts/install_monitoring_pi.sh` to re-copy the alert rules. Nothing in
+  this release requires touching a running container or a cluster service.
+- New files on disk: `results/jsonl_retention/latest_status.env` and, after the
+  first rewrite, one `<store>.bak-<UTC stamp>` per store. All are git-ignored
+  runtime state under the deployment directory.
+- Migration and rollback: no migration step exists or is needed - the stores keep
+  their existing format and the pruner only removes records.
+  `TRADING_JSONL_RETENTION_ENABLED=0` (or disabling the timer) stops every
+  rewrite immediately, and a rotated backup can be moved back by hand. Reverting
+  this release leaves the marker and the backups inert; the stores simply go back
+  to growing.
+- Verification: `sha256sum -c trading-bot-pi-v1.0.33.tar.gz.sha256`, then confirm
+  the Pi archive contains `src/jsonl_retention.py`,
+  `scripts/prune_jsonl_stores.py`, `deploy/jsonl-retention.service` / `.timer`,
+  the 29 alert rules and the `jsonl_retention` entry in
+  `TRADING_TASK_STATUS_FILES`.
+- Still open, deliberately not in this release: a cluster-wide shared kill switch
+  and distributed risk-state store, deriving a trusted position snapshot from
+  Kraken fills, running the weekly scorecard on the cluster profile itself,
+  staging delivery evidence for the private alert webhook, staging validation of
+  the paid news provider, validating fill reconciliation against the live
+  exchange, making the selected inference backend visible per decision in
+  monitoring, and the x86 training/compilation worker.
