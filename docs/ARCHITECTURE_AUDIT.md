@@ -11,7 +11,7 @@ stays **[⚠️ Partial]**.
 
 | # | Core area | Single Raspberry Pi | CM5 cluster |
 |---|---|---|---|
-| 1 | Data basis and model lifecycle | **[⚠️ Partial]** Paired contract/checksum manifest and atomic activation/rollback are implemented; candidate training and DFC compilation remain separate operator steps. | **[⚠️ Partial]** Same paired release tooling; DFC and target-device validation remain external, and no x86 worker is deployed. |
+| 1 | Data basis and model lifecycle | **[⚠️ Partial]** Paired contract/checksum manifest, full per-side validation reports and training provenance stored in the manifest, a read-only `validate` inspection command and atomic activation/rollback are implemented, and the release CLI is exercised end to end by deployment CI. Candidate training and DFC compilation remain separate operator steps. | **[⚠️ Partial]** Same paired release tooling, manifest reports and validation command; DFC and target-device validation remain external, and no x86 worker is deployed. |
 | 2 | Decision pyramid and hardware fallback | **[✅ Implemented]** Volume, spread, and ATR gates run before any model or paid call, and the paid news veto runs after the pre-trade cost budget; the order is asserted end to end. Backend selection sits behind `src.inference_backend` with injected backends, and a dedicated CI job runs the Hailo→CPU→rules-only matrix with no Hailo package, device or model files installed. The backend that served each decision is counted on disk and exported as Prometheus gauges. | **[⚠️ Partial]** Same cascade, gates and per-decision backend counters; target-cluster service/device availability is not continuously exercised by CI, so a cluster fallback is detected from the exported backend mix rather than a readiness probe. |
 | 3 | News integration | **[✅ Implemented]** RSS items retain `published_at`/`fetched_at`, are deduplicated, and are additionally appended to an immutable per-item JSONL store (`src/news_item_store.py`) with a point-in-time replay helper; the opt-in structured final veto reads that store and fails closed when it has no fresh item. The store is bounded by the shared retention policy (`src/jsonl_retention.py`, `deploy/jsonl-retention.timer`). | **[⚠️ Partial]** Same code is available, but the inspected cluster has no configured paid provider/credentials and no retention unit installed; Hailo features do not consume news. |
 | 4 | Hard risk and kill switch | **[✅ Implemented]** The daily anchor, loss-streak pause, hourly BUY budget and re-entry cooldowns are persisted in `TRADING_RISK_STATE_FILE` and restored at startup; unreadable or unwritable risk state blocks new entries and latches the persistent kill switch in live mode. | **[⚠️ Partial]** Same persisted state per node, but the file and the stop marker are host-local; no cluster-wide shared switch or distributed state store is implemented. |
@@ -33,14 +33,24 @@ training-data hash and optional fixed Hailo feature contract. The separate
 `train_and_export` emits ONNX plus metadata for a later DFC compilation step.
 `src.model_release.promote_release` verifies paired CPU/Hailo feature and label
 contracts plus the training-data hash, copies immutable artifacts, records
-checksums, and atomically activates the release. `rollback_release` verifies
-checksums before switching back. `scripts/update_autoresearch_signal.py` and
-the tuning cycle support research/parameter updates, but do not establish a
+checksums, and atomically activates the release. The manifest also carries a
+`validation_reports` side for CPU and Hailo - each side's feature contract,
+features, label map, validation metrics, training provenance and walk-forward
+folds as recorded by the trainer - so an operator can review what a release
+actually measured after promotion instead of only before it. Promotion requires
+the validation metrics and provenance to be present on both sides, and
+`validate_release` re-checks the stored manifest against the release contract and
+the artifact checksums without touching the active release.
+`rollback_release` verifies checksums before switching back.
+`scripts/manage_model_release.py` exposes `promote`, `validate` and `rollback`,
+ships inside the Pi package, and `.github/scripts/tests/test_model_release_cli.py`
+drives a full promote/validate/rollback cycle in the release tooling job, which
+also proves the CLI stays importable without numpy, pandas or CatBoost.
+`scripts/update_autoresearch_signal.py` and the tuning cycle support research/parameter updates, but do not establish a
 separate x86 training worker or automatic DFC/promotion workflow.
 
 **Next:** Automate candidate training, DFC compilation, target-Hailo validation,
-and explicit promotion on the planned x86 worker. Include full validation
-reports in the release manifest and exercise the release CLI in deployment CI.
+and explicit promotion on the planned x86 worker.
 
 ### 2. Decision pyramid and hardware agnosticism
 
@@ -376,6 +386,17 @@ failed the tuning timer with a missing file. The list now carries that script an
 the verdict-history helper, and the manifest test additionally scans every
 staged wrapper for `${ROOT_DIR}/scripts/...` calls and `-m scripts.<name>`
 modules, so a wrapper whose helper is unstaged now fails the packaging test.
+
+Observed packaging gap (found while exercising the release CLI in deployment CI):
+`docs/USAGE.md` tells an operator to run
+`python3 -m scripts.manage_model_release promote|rollback` on the Pi, but the
+release staging list never copied `scripts/manage_model_release.py`, so the
+documented model-swap path was not available in the published Pi package. The
+script and `src/model_release.py` are now staged and release-blocking, and
+`.github/scripts/tests/test_model_release_cli.py` runs a real
+promote/validate/rollback cycle in the release tooling job - the only CI job
+without third-party dependencies, which is also what keeps the release CLI free
+of numpy, pandas and CatBoost imports.
 
 **Next:** Configure the private receiver on each deployment and validate
 delivery in staging. Keep the dashboard read-only and the Pi monitoring path

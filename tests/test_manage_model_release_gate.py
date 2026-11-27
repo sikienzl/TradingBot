@@ -21,6 +21,16 @@ LABEL_MAP = {"verkaufen": 0, "halten": 1, "kaufen": 2}
 DATA_HASH = "b" * 64
 
 
+def _validation(accuracy: float, macro_f1: float) -> dict[str, float]:
+    return {
+        "rows": 250,
+        "accuracy": accuracy,
+        "macro_f1": macro_f1,
+        "threshold_macro_f1": macro_f1 - 0.01,
+        "threshold_coverage": 0.6,
+    }
+
+
 def _artifacts(root: Path) -> list[Path]:
     root.mkdir(parents=True, exist_ok=True)
     cpu_model = root / "cpu.cbm"
@@ -33,15 +43,24 @@ def _artifacts(root: Path) -> list[Path]:
         "features": FEATURES,
         "label_map": LABEL_MAP,
         "training_data_sha256": DATA_HASH,
-        "validation": {"accuracy": 0.8, "macro_f1": 0.7},
+        "label_horizon": 6,
+        "train_rows": 1000,
+        "validation_rows": 250,
+        "validation": _validation(0.8, 0.7),
     }), encoding="utf-8")
     hailo_metadata = root / "hailo.json"
     hailo_metadata.write_text(json.dumps({
         "feature_contract": "hailo",
         "features": FEATURES,
         "label_map": LABEL_MAP,
-        "data_provenance": {"training_data_sha256": DATA_HASH},
-        "validation": {"accuracy": 0.79, "macro_f1": 0.69},
+        "data_provenance": {
+            "training_data_sha256": DATA_HASH,
+            "label_map": LABEL_MAP,
+            "label_horizon": 6,
+            "train_rows": 1000,
+            "validation_rows": 250,
+        },
+        "validation": _validation(0.79, 0.69),
     }), encoding="utf-8")
     return [cpu_model, cpu_metadata, hef, hailo_metadata]
 
@@ -78,6 +97,14 @@ def rollback_argv(tmp_path: Path) -> list[str]:
         "manage_model_release.py", "rollback",
         "--release-root", str(tmp_path / "deploy"),
         "--release-id", "release-1",
+    ]
+
+
+def validate_argv(tmp_path: Path, release_id: str = "release-1") -> list[str]:
+    return [
+        "manage_model_release.py", "validate",
+        "--release-root", str(tmp_path / "deploy"),
+        "--release-id", release_id,
     ]
 
 
@@ -162,3 +189,62 @@ def test_rollback_is_never_gated(tmp_path, monkeypatch, capsys):
     write_marker(tmp_path / "status.env", verdict="NO-GO", age=timedelta(hours=1))
     assert run(monkeypatch, rollback_argv(tmp_path)) == 0
     assert (tmp_path / "deploy" / "active").resolve().name == "release-1"
+
+
+def test_validate_prints_release_contract_and_reports(tmp_path, monkeypatch, capsys):
+    marker = write_marker(tmp_path / "status.env", verdict="GO", age=timedelta(hours=1))
+    assert run(monkeypatch, promote_argv(tmp_path, marker)) == 0
+    capsys.readouterr()
+
+    assert run(monkeypatch, validate_argv(tmp_path)) == 0
+    out = capsys.readouterr().out
+    assert "Release: release-1" in out
+    assert "Feature contract: hailo (2 features)" in out
+    assert f"Training data sha256: {DATA_HASH}" in out
+    assert "cpu: rows=250 accuracy=0.8000 macro_f1=0.7000" in out
+    assert "hailo: rows=250 accuracy=0.7900 macro_f1=0.6900" in out
+    assert "walk-forward: not recorded" in out
+    assert "artifact hailo_hef: hailo/model.hef sha256=" in out
+    assert "Model release validated:" in out
+
+
+def test_validate_is_never_gated_and_never_activates(tmp_path, monkeypatch, capsys):
+    marker = write_marker(tmp_path / "status.env", verdict="GO", age=timedelta(hours=1))
+    assert run(monkeypatch, promote_argv(tmp_path, marker)) == 0
+    second = _artifacts(tmp_path / "artifacts-2")
+    argv = [
+        "manage_model_release.py", "promote",
+        "--release-root", str(tmp_path / "deploy"),
+        "--release-id", "release-2",
+        "--cpu-model", str(second[0]),
+        "--cpu-metadata", str(second[1]),
+        "--hailo-hef", str(second[2]),
+        "--hailo-metadata", str(second[3]),
+        "--no-require-go-verdict",
+    ]
+    assert run(monkeypatch, argv) == 0
+    capsys.readouterr()
+
+    # Inspecting an inactive release is a read-only operation: no verdict is
+    # consulted and the active pointer must not move.
+    write_marker(tmp_path / "status.env", verdict="NO-GO", age=timedelta(hours=1))
+    assert run(monkeypatch, validate_argv(tmp_path, "release-1")) == 0
+    assert "Release: release-1" in capsys.readouterr().out
+    assert (tmp_path / "deploy" / "active").resolve().name == "release-2"
+
+
+def test_validate_reports_tampered_release(tmp_path, monkeypatch, capsys):
+    marker = write_marker(tmp_path / "status.env", verdict="GO", age=timedelta(hours=1))
+    assert run(monkeypatch, promote_argv(tmp_path, marker)) == 0
+    (tmp_path / "deploy" / "releases" / "release-1" / "cpu" / "catboost_model.cbm").write_bytes(
+        b"tampered"
+    )
+
+    assert run(monkeypatch, validate_argv(tmp_path)) == 1
+    assert "checksum mismatch" in capsys.readouterr().err
+    assert (tmp_path / "deploy" / "active").resolve().name == "release-1"
+
+
+def test_validate_reports_missing_release(tmp_path, monkeypatch, capsys):
+    assert run(monkeypatch, validate_argv(tmp_path, "never-promoted")) == 1
+    assert "never-promoted" in capsys.readouterr().err

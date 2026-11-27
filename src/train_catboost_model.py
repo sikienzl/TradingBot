@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import warnings
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -284,6 +285,17 @@ def run_walk_forward_evaluation(
     return pd.DataFrame(rows)
 
 
+def _json_fold(fold: dict[str, Any]) -> dict[str, Any]:
+    """One walk-forward fold as JSON-safe scalars for the model metadata."""
+    record: dict[str, Any] = {}
+    for key, value in fold.items():
+        if key in ("fold", "train_size", "val_size"):
+            record[key] = int(value)
+        else:
+            record[key] = float(value)
+    return record
+
+
 def prepare_xy(
     df: pd.DataFrame,
     feature_columns: list[str] | None = None,
@@ -398,6 +410,27 @@ def train_model(
         "threshold_coverage": float(threshold_stats["coverage"]),
     }
 
+    # Walk-forward evaluation runs before the metadata is written so the folds
+    # become part of the model record: a paired release carries its full
+    # validation evidence, and chronological splits are the only forward-looking
+    # evidence this training path produces.
+    walk_forward_df = run_walk_forward_evaluation(
+        df,
+        n_splits=walk_forward_splits,
+        min_train_size=300,
+        min_val_size=100,
+    )
+    walk_forward_folds: list[dict[str, Any]] = []
+    walk_forward_summary: dict[str, float] = {}
+    if not walk_forward_df.empty:
+        walk_forward_folds = [_json_fold(fold) for fold in walk_forward_df.to_dict("records")]
+        walk_forward_summary = {
+            "folds": float(len(walk_forward_folds)),
+            "accuracy": float(walk_forward_df["accuracy"].mean()),
+            "macro_f1": float(walk_forward_df["macro_f1"].mean()),
+            "weighted_f1": float(walk_forward_df["weighted_f1"].mean()),
+        }
+
     metadata = {
         "features": features,
         "label_map": HAILO_LABEL_MAP if feature_contract == "hailo" else LABEL_MAP,
@@ -407,6 +440,8 @@ def train_model(
         "train_rows": len(y_train),
         "validation_rows": len(y_val),
         "validation": validation_metrics,
+        "walk_forward": walk_forward_folds,
+        "walk_forward_summary": walk_forward_summary,
         "class_weights": class_weights,
         "recommended_confidence_threshold": recommended_conf_threshold,
         "recommended_confidence_threshold_stats": threshold_stats,
@@ -426,12 +461,6 @@ def train_model(
         f"(macro_f1={threshold_stats['macro_f1']:.4f}, coverage={threshold_stats['coverage']:.2%})"
     )
 
-    walk_forward_df = run_walk_forward_evaluation(
-        df,
-        n_splits=walk_forward_splits,
-        min_train_size=300,
-        min_val_size=100,
-    )
     if walk_forward_df.empty:
         print("\n=== Walk-Forward Evaluation ===")
         print("Insufficient data for walk-forward splits.")

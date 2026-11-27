@@ -83,6 +83,7 @@ jobs:
              scripts/export_operational_health.py \
              scripts/reconcile_fills.py \
              scripts/prune_jsonl_stores.py \
+             scripts/manage_model_release.py \
              scripts/alert_webhook_relay.py \
              scripts/daily_dryrun_review.py \
              scripts/run_daily_dryrun_review.sh \
@@ -175,6 +176,8 @@ jobs:
             "${PKG}/src/jsonl_retention.py"
             "${PKG}/scripts/reconcile_fills.py"
             "${PKG}/src/fill_reconciliation.py"
+            "${PKG}/scripts/manage_model_release.py"
+            "${PKG}/src/model_release.py"
             "${PKG}/deploy/trading-health.env.example"
             "${PKG}/deploy/trading-alert-relay.service"
             "${PKG}/deploy/trading-alert-relay.env.example"

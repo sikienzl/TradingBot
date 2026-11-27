@@ -12,6 +12,49 @@ from pathlib import Path
 from typing import Any
 
 _RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+_SHA256 = re.compile(r"^[a-f0-9]{64}$")
+
+# The paired artifact set a release must contain, as staged inside the release
+# directory. Both release profiles load exactly these four files, so a manifest
+# that names anything else is not a release this repository can activate.
+EXPECTED_ARTIFACTS: dict[str, str] = {
+    "cpu_model": "cpu/catboost_model.cbm",
+    "cpu_metadata": "cpu/metadata.json",
+    "hailo_hef": "hailo/model.hef",
+    "hailo_metadata": "hailo/metadata.json",
+}
+
+# Keys the release CLI and the runtime need in order to describe an active
+# release without opening the per-side metadata files again.
+REQUIRED_MANIFEST_KEYS: tuple[str, ...] = (
+    "release_id",
+    "feature_contract",
+    "features",
+    "label_map",
+    "training_data_sha256",
+    "validation",
+    "validation_reports",
+    "artifacts",
+)
+
+# Every training run in this repository reports these metrics on its validation
+# fold, so a report without them is not evidence a release can be judged on.
+REQUIRED_VALIDATION_METRICS: tuple[str, ...] = (
+    "rows",
+    "accuracy",
+    "macro_f1",
+    "threshold_macro_f1",
+    "threshold_coverage",
+)
+
+# Provenance the paired-artifact contract is proven from. ``training_data_sha256``
+# is checked separately because the CPU metadata keeps it at the top level.
+PROVENANCE_KEYS: tuple[str, ...] = (
+    "label_map",
+    "label_horizon",
+    "train_rows",
+    "validation_rows",
+)
 
 
 def sha256_file(path: Path) -> str:
@@ -34,9 +77,112 @@ def _training_hash(metadata: dict[str, Any]) -> str:
     value = metadata.get("training_data_sha256")
     if value is None:
         value = metadata.get("data_provenance", {}).get("training_data_sha256")
-    if not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value):
+    if not isinstance(value, str) or not _SHA256.fullmatch(value):
         raise ValueError("Both model metadata files must include a SHA-256 training_data_sha256")
     return value
+
+
+def _feature_list(metadata: dict[str, Any], label: str) -> list[str]:
+    """Feature contract of one side as a list of non-empty names."""
+    features = metadata.get("features")
+    if not isinstance(features, list) or not features:
+        raise ValueError(f"{label} artifact is missing its feature list")
+    if not all(isinstance(feature, str) and feature for feature in features):
+        raise ValueError(f"{label} artifact has an invalid feature list")
+    return list(features)
+
+
+def _label_map(metadata: dict[str, Any], label: str) -> dict[str, Any]:
+    """Label contract of one side as a non-empty mapping."""
+    label_map = metadata.get("label_map")
+    if not isinstance(label_map, dict) or not label_map:
+        raise ValueError(f"{label} artifact is missing its label map")
+    return label_map
+
+
+def _validation_report(metadata: dict[str, Any], label: str) -> dict[str, Any]:
+    """Validation report of one training side, with its required metrics.
+
+    Promotion is the only place a candidate pair is judged as a pair, so the
+    report that gets baked into the release manifest has to be checked here
+    rather than discovered later by an operator running ``validate``.
+    """
+    validation = metadata.get("validation")
+    if not isinstance(validation, dict) or not validation:
+        raise ValueError(f"{label} artifact is missing validation results")
+    missing = [metric for metric in REQUIRED_VALIDATION_METRICS if metric not in validation]
+    if missing:
+        raise ValueError(
+            f"{label} artifact validation results are missing: {', '.join(missing)}"
+        )
+    return validation
+
+
+def _provenance(metadata: dict[str, Any], label: str) -> dict[str, Any]:
+    """Training provenance of one side, normalised to one shape.
+
+    The CatBoost trainer keeps provenance at the top level of its metadata while
+    the Hailo trainer nests it under ``data_provenance``. The manifest stores one
+    shape per side so a reviewer can compare both sides key by key.
+    """
+    raw = metadata.get("data_provenance")
+    provenance: dict[str, Any] = dict(raw) if isinstance(raw, dict) else {}
+    for key in ("label_map", "label_horizon", "train_rows", "validation_rows"):
+        if key not in provenance and key in metadata:
+            provenance[key] = metadata[key]
+    provenance["training_data_sha256"] = _training_hash(metadata)
+    missing = [key for key in PROVENANCE_KEYS if key not in provenance]
+    if missing:
+        raise ValueError(
+            f"{label} artifact is missing training provenance: {', '.join(missing)}"
+        )
+    return provenance
+
+
+def _walk_forward(metadata: dict[str, Any], label: str) -> list[dict[str, Any]]:
+    """Walk-forward folds of one side, when the trainer recorded them.
+
+    Chronological walk-forward evaluation is the only evidence in this repository
+    that a time-series model generalises forward, so the manifest carries the
+    per-fold metrics instead of leaving them in a training-workspace CSV.
+    """
+    folds = metadata.get("walk_forward")
+    if folds is None:
+        return []
+    if not isinstance(folds, list) or not all(isinstance(fold, dict) for fold in folds):
+        raise ValueError(f"{label} artifact has an invalid walk-forward report")
+    return [dict(fold) for fold in folds]
+
+
+def _report_side(
+    metadata: dict[str, Any],
+    label: str,
+) -> dict[str, Any]:
+    """Full validation record of one side: metrics, provenance and thresholds.
+
+    ``validation`` alone is only five numbers; the release manifest keeps the
+    whole record so a promotion can be re-examined - or an old release rolled
+    back to - long after the training workspace is gone.
+    """
+    side: dict[str, Any] = {
+        "feature_contract": metadata.get("feature_contract"),
+        "features": _feature_list(metadata, label),
+        "label_map": _label_map(metadata, label),
+        "validation": _validation_report(metadata, label),
+        "provenance": _provenance(metadata, label),
+        "walk_forward": _walk_forward(metadata, label),
+    }
+    for key in ("model_id", "confidence_threshold", "recommended_confidence_threshold"):
+        value = metadata.get(key)
+        if value is not None:
+            side[key] = value
+    stats = metadata.get("recommended_confidence_threshold_stats")
+    if isinstance(stats, dict) and stats:
+        side["confidence_threshold_stats"] = stats
+    summary = metadata.get("walk_forward_summary")
+    if isinstance(summary, dict) and summary:
+        side["walk_forward_summary"] = summary
+    return side
 
 
 def _validate_contract(cpu_metadata: dict[str, Any], hailo_metadata: dict[str, Any]) -> None:
@@ -44,16 +190,14 @@ def _validate_contract(cpu_metadata: dict[str, Any], hailo_metadata: dict[str, A
         raise ValueError("CPU artifact was not trained with the fixed Hailo feature contract")
     if hailo_metadata.get("feature_contract") != "hailo":
         raise ValueError("Hailo artifact has an invalid feature contract")
-    if list(cpu_metadata.get("features", [])) != list(hailo_metadata.get("features", [])):
+    if _feature_list(cpu_metadata, "CPU") != _feature_list(hailo_metadata, "Hailo"):
         raise ValueError("CPU and Hailo feature contracts do not match")
-    if cpu_metadata.get("label_map") != hailo_metadata.get("label_map"):
+    if _label_map(cpu_metadata, "CPU") != _label_map(hailo_metadata, "Hailo"):
         raise ValueError("CPU and Hailo label contracts do not match")
     if _training_hash(cpu_metadata) != _training_hash(hailo_metadata):
         raise ValueError("CPU and Hailo artifacts were not trained from the same data")
     for label, metadata in (("CPU", cpu_metadata), ("Hailo", hailo_metadata)):
-        validation = metadata.get("validation")
-        if not isinstance(validation, dict) or not validation:
-            raise ValueError(f"{label} artifact is missing validation results")
+        _validation_report(metadata, label)
 
 
 def _artifact(path: Path, label: str) -> Path:
@@ -99,12 +243,19 @@ def promote_release(
         manifest = {
             "release_id": release_id,
             "feature_contract": "hailo",
-            "features": list(cpu_meta["features"]),
-            "label_map": cpu_meta["label_map"],
+            "features": _feature_list(cpu_meta, "CPU"),
+            "label_map": _label_map(cpu_meta, "CPU"),
             "training_data_sha256": _training_hash(cpu_meta),
             "validation": {
-                "cpu": cpu_meta["validation"],
-                "hailo": hailo_meta["validation"],
+                "cpu": _validation_report(cpu_meta, "CPU"),
+                "hailo": _validation_report(hailo_meta, "Hailo"),
+            },
+            # The full reports behind those numbers: provenance, thresholds and
+            # walk-forward folds, kept per side so a release can be re-judged
+            # without the training workspace that produced it.
+            "validation_reports": {
+                "cpu": _report_side(cpu_meta, "CPU"),
+                "hailo": _report_side(hailo_meta, "Hailo"),
             },
             "artifacts": {
                 "cpu_model": {"path": "cpu/catboost_model.cbm", "sha256": sha256_file(staging / "cpu" / "catboost_model.cbm")},
@@ -130,12 +281,138 @@ def promote_release(
         raise
 
 
+def _validate_manifest_shape(manifest: Any, release: Path) -> dict[str, Any]:
+    """Reject a manifest that does not describe a paired release.
+
+    ``validate_release`` is the check an operator runs before trusting a release
+    - usually right after a ``NO-GO``, when the fastest way back to a known-good
+    model is to roll back to an older one. A manifest that only carries the
+    artifact map would let a release activate without any record of which
+    contract it implements or which validation evidence backed it, so the whole
+    shape is checked here and not left to the checksum pass.
+    """
+    if not isinstance(manifest, dict):
+        raise TypeError("Invalid model release manifest")
+    missing = [key for key in REQUIRED_MANIFEST_KEYS if key not in manifest]
+    if missing:
+        raise ValueError(
+            f"Model release manifest is missing: {', '.join(missing)}"
+        )
+
+    release_id = manifest["release_id"]
+    if not isinstance(release_id, str) or not _RELEASE_ID.fullmatch(release_id):
+        raise ValueError("Model release manifest has an invalid release ID")
+    if release_id != release.name:
+        raise ValueError(
+            f"Model release manifest ID {release_id} does not match the "
+            f"release directory {release.name}"
+        )
+    if manifest["feature_contract"] != "hailo":
+        raise ValueError("Model release manifest does not use the Hailo feature contract")
+
+    features = manifest["features"]
+    if not isinstance(features, list) or not features or not all(
+        isinstance(feature, str) and feature for feature in features
+    ):
+        raise ValueError("Model release manifest has an invalid feature contract")
+    if not isinstance(manifest["label_map"], dict) or not manifest["label_map"]:
+        raise ValueError("Model release manifest has an invalid label map")
+
+    training_hash = manifest["training_data_sha256"]
+    if not isinstance(training_hash, str) or not _SHA256.fullmatch(training_hash):
+        raise ValueError("Model release manifest has an invalid training data checksum")
+
+    for side_name in ("cpu", "hailo"):
+        reports = manifest["validation_reports"].get(side_name)
+        if not isinstance(reports, dict):
+            raise ValueError(  # noqa: TRY004
+                f"Model release manifest is missing the {side_name} validation report"
+            )
+        report = reports.get("validation")
+        if not isinstance(report, dict) or not report:
+            raise ValueError(
+                f"Model release manifest has no {side_name} validation results"
+            )
+        missing_metrics = [
+            metric for metric in REQUIRED_VALIDATION_METRICS if metric not in report
+        ]
+        if missing_metrics:
+            raise ValueError(
+                f"Model release manifest {side_name} validation results are missing: "
+                f"{', '.join(missing_metrics)}"
+            )
+        if not isinstance(reports.get("provenance"), dict):
+            raise ValueError(  # noqa: TRY004
+                f"Model release manifest is missing {side_name} training provenance"
+            )
+        if list(reports.get("features", [])) != list(features):
+            raise ValueError(
+                f"Model release manifest {side_name} feature contract does not match "
+                "the release contract"
+            )
+        if reports.get("label_map") != manifest["label_map"]:
+            raise ValueError(
+                f"Model release manifest {side_name} label map does not match "
+                "the release contract"
+            )
+        side_provenance = reports["provenance"]
+        if side_provenance.get("training_data_sha256") != training_hash:
+            raise ValueError(
+                f"Model release manifest {side_name} training data checksum does not "
+                "match the release contract"
+            )
+
+    artifacts = manifest["artifacts"]
+    if not isinstance(artifacts, dict):
+        raise TypeError("Invalid model release manifest")
+    if set(artifacts) != set(EXPECTED_ARTIFACTS):
+        missing_artifacts = sorted(set(EXPECTED_ARTIFACTS) - set(artifacts))
+        unknown = sorted(set(artifacts) - set(EXPECTED_ARTIFACTS))
+        details = []
+        if missing_artifacts:
+            details.append(f"missing {', '.join(missing_artifacts)}")
+        if unknown:
+            details.append(f"unexpected {', '.join(unknown)}")
+        raise ValueError(
+            f"Model release manifest artifact set is invalid: {', '.join(details)}"
+        )
+    for name, artifact in artifacts.items():
+        if not isinstance(artifact, dict):
+            raise ValueError(  # noqa: TRY004
+                f"Model release manifest artifact {name} is invalid"
+            )
+        if artifact.get("path") != EXPECTED_ARTIFACTS[name]:
+            raise ValueError(f"Model release manifest artifact {name} has an unexpected path")
+        checksum = artifact.get("sha256")
+        if not isinstance(checksum, str) or not _SHA256.fullmatch(checksum):
+            raise ValueError(
+                f"Model release manifest artifact {name} has an invalid checksum"
+            )
+    return manifest
+
+
+def release_directory(release_root: str | Path, release_id: str) -> Path:
+    """Directory of one stored release, without creating anything.
+
+    The CLI inspects releases without activating them, so the ID has to be
+    checked here too - otherwise a mistyped ``--release-id`` would let an
+    operator point a read-only command at an arbitrary directory.
+    """
+    if not _RELEASE_ID.fullmatch(release_id):
+        raise ValueError("Invalid release ID")
+    return Path(release_root).resolve() / "releases" / release_id
+
+
 def validate_release(release_path: str | Path) -> dict[str, Any]:
-    release = Path(release_path).resolve(strict=True)
+    candidate = Path(release_path)
+    if not candidate.is_dir():
+        # Name the release that is missing instead of the nearest existing
+        # ancestor, which is what a strict resolve() error would report.
+        raise ValueError(f"Model release directory not found: {candidate}")
+    release = candidate.resolve(strict=True)
     with (release / "manifest.json").open("r", encoding="utf-8") as manifest_file:
         manifest = json.load(manifest_file)
-    if not isinstance(manifest, dict) or not isinstance(manifest.get("artifacts"), dict):
-        raise TypeError("Invalid model release manifest")
+    manifest = _validate_manifest_shape(manifest, release)
     for artifact in manifest["artifacts"].values():
         relative = Path(artifact["path"])
         path = (release / relative).resolve(strict=True)
@@ -147,10 +424,8 @@ def validate_release(release_path: str | Path) -> dict[str, Any]:
 
 
 def rollback_release(release_root: str | Path, release_id: str) -> Path:
-    if not _RELEASE_ID.fullmatch(release_id):
-        raise ValueError("Invalid release ID")
     root = Path(release_root).resolve()
-    release = root / "releases" / release_id
+    release = release_directory(root, release_id)
     validate_release(release)
     _activate(root, release_id)
     return release

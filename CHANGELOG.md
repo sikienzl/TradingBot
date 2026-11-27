@@ -51,6 +51,44 @@ a version heading is assigned when a release is prepared.
   publishes `trading_inference_expected_backend_hailo=0`, so the fallback alert
   cannot fire on a profile that never expects Hailo, and a rules-only
   deployment publishes no share gauges at all, so neither alert can fire there.
+- Full validation reports in the paired model release manifest. A promoted
+  release used to store only the release ID, the shared feature/label contract,
+  the training-data hash and artifact checksums, so after promotion an operator
+  could not see what the release had actually measured and had to keep the
+  trainer workspace alive. `src.model_release.promote_release` now also stores a
+  `validation_reports` side for CPU and Hailo - each side's feature contract,
+  features, label map, validation metrics, training provenance and walk-forward
+  folds as the trainer recorded them, plus the recommended confidence threshold
+  when the trainer derived one. Promotion additionally requires both metadata
+  files to carry the validation metrics (`rows`, `accuracy`, `macro_f1`,
+  `threshold_macro_f1`, `threshold_coverage`) and the training provenance
+  (`label_map`, `label_horizon`, `train_rows`, `validation_rows`), so a release
+  cannot be activated from a run that never evaluated anything. A malformed
+  `walk_forward` report is rejected rather than ignored.
+- `src.model_release.validate_release` now inspects a stored release before
+  anything reads it: the manifest must be a complete object with every required
+  key, its release ID must match its directory, its per-side feature contract,
+  label map and training-data checksum must agree with the release contract, the
+  artifact set must be exactly the four paired artifacts at their expected paths
+  with usable checksums, and a missing release directory is reported by name
+  instead of as an unrelated ancestor path. Nothing about a validated release can
+  be trusted from the manifest alone, so the artifact hash pass still runs after
+  the manifest pass.
+- `scripts/manage_model_release.py validate`, a read-only inspection command that
+  prints the release contract, both sides' validation metrics and training
+  provenance, any recorded walk-forward folds and the artifact checksums, and
+  exits non-zero with the reason for an incomplete, contradictory or tampered
+  release. It never activates anything and is deliberately never scorecard-gated,
+  so an operator can verify a rollback target after a `NO-GO`.
+- `src.train_catboost_model` records its walk-forward folds in `walk_forward`
+  and their averages in `walk_forward_summary` in the metadata it writes, and
+  evaluates walk-forward once instead of twice, so the release manifest and the
+  existing `walk_forward_report.csv` come from the same folds.
+- `scripts/manage_model_release.py` and `src/model_release.py` are staged in the
+  Pi release archive and are release-blocking in `required_files`. `docs/USAGE.md`
+  instructs operators to run the release CLI on the Pi, but the staging list
+  never copied it, so the documented model-swap path was missing from the
+  published package.
 
 ### Tests
 
@@ -65,6 +103,28 @@ a version heading is assigned when a release is prepared.
   CatBoost profile, a rules-only share, a disabled tabular profile, a corrupt
   counter file and a deployment with no counter file. The CI inference-matrix
   job runs the counter tests on the no-package single-Pi profile.
+- `tests/test_model_release.py` covers the manifest report round trip, promotion
+  that is refused for missing validation metrics or missing training provenance
+  on either side, a malformed walk-forward report, and the validation matrix for
+  a stored manifest: missing reports, no evidence at all, a side that disagrees
+  with the release contract on training hash, label map or feature list, a
+  release ID that does not match its directory, and an incomplete, swapped or
+  tampered artifact set. `tests/test_manage_model_release_gate.py` adds the
+  `validate` CLI: the report it prints, that it is never gated and never moves
+  the active release, and that a tampered or missing release is reported with
+  exit code 1 while the active release stays put.
+- `tests/test_train_catboost_model.py` asserts a walk-forward fold is converted
+  to JSON-safe scalars, so the metadata a trainer writes is the same evidence the
+  release manifest stores.
+- `.github/scripts/tests/test_model_release_cli.py` drives the real release CLI
+  end to end in the release tooling job - promote, inspect the staged release
+  layout, validate, promote a second candidate, validate the first again, then
+  roll back - and asserts the `NO-GO` refusal, a tampered artifact, a missing
+  release, that the library entry points behave like the CLI, that the CLI is
+  staged in the Pi package, and that no numpy/pandas/catboost/sklearn/torch
+  import appears on the release path. The job installs no third-party packages,
+  so this is also the guard that keeps the release CLI usable on a bare
+  controller.
 
 ## v1.0.33 - 2026-11-27
 
