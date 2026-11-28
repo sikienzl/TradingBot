@@ -313,7 +313,7 @@ def optimize_confidence_threshold(
         )
 
 
-def summarize(df: pd.DataFrame, base_currency: str) -> None:
+def summarize(df: pd.DataFrame, base_currency: str) -> None:  # noqa: C901
     if df.empty:
         print("No trades found.")
         return

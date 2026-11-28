@@ -90,9 +90,14 @@ exclude = [
 extend-select = ["C901"]
 
 [tool.ruff.lint.mccabe]
-# Freeze current complexity: existing hotspots carry `# noqa: C901`, new code
-# must stay at or below this threshold.
-max-complexity = 25
+# Clean Code complexity ratchet: new code must stay at or below this
+# threshold. The 42 known hotspots above it carry an explicit
+# `# noqa: C901`, and tests/test_complexity.py pins every one of them by
+# qualified name together with its current score. Ruff's unused-noqa check
+# (RUF100) rejects a marker as soon as a hotspot is split below the limit,
+# and an unpinned new hotspot fails both ruff and that test, so the
+# exception list can only ever shrink.
+max-complexity = 10
 
 # ---------------------------------------------------------------------------
 # Type checking – informational only (the CI job does not gate the build).

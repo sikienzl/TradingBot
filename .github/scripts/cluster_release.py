@@ -152,7 +152,7 @@ def starter_allowed(name: str) -> bool:
     return bool(STARTER_TREE.fullmatch(name))
 
 
-def allowed_path(name: str) -> bool:
+def allowed_path(name: str) -> bool:  # noqa: C901
     """Return True when a tracked path belongs in the cluster archive."""
     path = PurePosixPath(name)
     if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
@@ -189,7 +189,7 @@ def env_kind(name: str) -> str | None:
     return None
 
 
-def check_content(name: str, data: bytes) -> None:
+def check_content(name: str, data: bytes) -> None:  # noqa: C901
     """Reject credential material and filled-in secrets in packaged files."""
     if SECRET_MARKERS.search(data.decode("utf-8", "replace")):
         raise ValueError(f"Possible credential material in {name}")

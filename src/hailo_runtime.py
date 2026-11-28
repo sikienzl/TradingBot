@@ -25,7 +25,7 @@ class HailoModelMetadata:
     margin_threshold: float
 
     @classmethod
-    def load(cls, path: str | Path) -> "HailoModelMetadata":
+    def load(cls, path: str | Path) -> "HailoModelMetadata":  # noqa: C901
         try:
             with open(path, encoding="utf-8") as metadata_file:
                 raw = json.load(metadata_file)

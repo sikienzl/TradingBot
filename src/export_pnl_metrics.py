@@ -288,7 +288,7 @@ def read_portfolio_start_value(log_path=BOT_LOG_PATH):
     return 0.0
 
 
-def read_ai_copilot_usage(
+def read_ai_copilot_usage(  # noqa: C901
     env_path=ENV_PATH,
     state_path=AI_COPILOT_STATE_PATH,
     *,

@@ -37,7 +37,7 @@ def estimate_ai_cost_usd(prompt_tokens: int, completion_tokens: int, input_cost_
     return float(input_cost + output_cost)
 
 
-def can_run_ai_copilot(
+def can_run_ai_copilot(  # noqa: C901
     state: dict,
     *,
     enabled: bool,

@@ -72,7 +72,7 @@ def order_fill_details(
     return filled, average, cost
 
 
-def confirm_order_fill_record(
+def confirm_order_fill_record(  # noqa: C901
     exchange: Any,
     order: dict[str, Any],
     symbol: str,
@@ -207,7 +207,7 @@ def _confirm_fill(
     return filled, average, cost, order
 
 
-def execute_real_trade(
+def execute_real_trade(  # noqa: C901
     exchange: Any,
     config: Any,
     portfolio: Any,

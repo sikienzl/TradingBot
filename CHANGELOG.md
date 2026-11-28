@@ -190,6 +190,34 @@ a version heading is assigned when a release is prepared.
   observe. `.github/scripts/tests/test_model_release_cli.py` covers the reader
   against a CLI-promoted release, including the tampered case the alert pages on.
 
+### Changed
+
+- The Ruff cyclomatic-complexity gate (`C901`) is ratcheted from 25 to 10, so
+  new code cannot add a function above that threshold. The 42 functions that
+  were already above it keep working unchanged: each carries an explicit
+  `# noqa: C901` on its `def` line, and `tests/test_complexity.py` pins every
+  one of them by qualified name together with its current score. The ratchet
+  then closes in both directions. A new hotspot fails Ruff and that test, a
+  pinned hotspot that gains branches fails the pinned ceiling, and a hotspot
+  that is split below the limit is forced out of the list: Ruff's unused-`noqa`
+  check (RUF100) rejects a suppression that no longer suppresses anything, and
+  the test rejects the leftover exception entry. The exception list can
+  therefore only ever shrink.
+- The test re-implements the complexity count with `ast` only, because the
+  quality job installs nothing but Ruff and the test job has no Ruff, so neither
+  side can ask the other for the number. Its counting rules were validated to
+  match Ruff 0.17 exactly on all 907 functions in the repository, including the
+  two that are easy to get wrong: a nested `def` adds one to its enclosing
+  function and a `try` with an `else` clause adds one, while boolean operators,
+  conditional expressions, comprehensions and `lambda` add nothing. The
+  threshold itself is cross-checked against `pyproject.toml`, so the gate and
+  the ratchet cannot drift apart.
+- The 42 `# noqa: C901` markers are comment-only edits and were verified as
+  such: the `ast.dump()` of every touched file is byte-identical to the same
+  file at `main`, and each diff hunk is exactly one `def` line plus the marker.
+  The stale comment in `pyproject.toml` that described the old threshold as a
+  permanent setting is replaced with the ratchet contract above.
+
 ## v1.0.33 - 2026-11-27
 
 ### Added

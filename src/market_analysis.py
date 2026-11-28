@@ -23,7 +23,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
-def dynamic_excluded_coins(config: Any, *, logger: logging.Logger = logger) -> set[str]:
+def dynamic_excluded_coins(config: Any, *, logger: logging.Logger = logger) -> set[str]:  # noqa: C901
     """Builds a temporary exclusion set from recent sell-side underperformance."""
     if not config.dynamic_lossmaker_exclusion_enabled:
         return set()
@@ -90,7 +90,7 @@ def dynamic_excluded_coins(config: Any, *, logger: logging.Logger = logger) -> s
     return dynamic_exclusions
 
 
-def select_analysis_coins(
+def select_analysis_coins(  # noqa: C901
     config: Any,
     market_data: dict[str, dict],
     dynamic_excluded_coins: set[str],

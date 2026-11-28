@@ -209,7 +209,7 @@ def initialize_dry_run_portfolio(
                 f"Failed to load initial balance from exchange in dry-run mode: {e}")
 
 
-def refresh_live_portfolio_balance(
+def refresh_live_portfolio_balance(  # noqa: C901
     context: PortfolioBootstrapContext,
     *,
     log: logging.Logger = logger,

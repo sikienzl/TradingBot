@@ -131,7 +131,7 @@ def _field_total(rows: list[dict[str, str]], field: str) -> float | None:
     return round(sum(value for value in values if value is not None), 8)
 
 
-def _read_bot_log(
+def _read_bot_log(  # noqa: C901
     path: Path, start: datetime
 ) -> tuple[dict[str, int | None], dict[str, Any] | None]:
     counts: Counter[str] = Counter()
@@ -197,7 +197,7 @@ def _read_bot_log(
     return log_counts, cycle_data
 
 
-def load_dashboard_data() -> dict[str, Any]:
+def load_dashboard_data() -> dict[str, Any]:  # noqa: C901
     data_dir = Path(os.getenv("DASHBOARD_DATA_DIR", "/data"))
     report_file = Path(os.getenv("DASHBOARD_REPORT_FILE", "/reports/latest.json"))
     journal_path = data_dir / "trade_journal.csv"

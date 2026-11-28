@@ -29,7 +29,7 @@ def _max_drawdown_base(equity_curve: pd.Series) -> float:
     return float(drawdown.min()) if not drawdown.empty else 0.0
 
 
-def _evaluate_verdict(
+def _evaluate_verdict(  # noqa: C901
     closed_trades: int,
     min_closed_trades: int,
     realized_pnl: float,

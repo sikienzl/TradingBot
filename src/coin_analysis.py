@@ -240,7 +240,7 @@ def apply_ml_signal(
     return recommendation, score, signal_source, signal_confidence
 
 
-def analyze_coin(
+def analyze_coin(  # noqa: C901
     config: Any,
     fetch_ohlcv: Callable[..., pd.DataFrame | None],
     ml_predictor: Any,

@@ -427,7 +427,7 @@ def _apply_verdict(journal: JournalOrder, order: ExchangeOrder, state: _Pass) ->
     state.add_totals(journal, order, include_exchange=status != STATUS_UNMATCHED)
 
 
-def reconcile_journal_fills(
+def reconcile_journal_fills(  # noqa: C901
     config: ReconciliationConfig,
     *,
     exchange: Any = None,

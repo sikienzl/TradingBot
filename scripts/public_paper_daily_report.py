@@ -107,7 +107,7 @@ LOG_TIMESTAMP = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d[,.]\d++)\s++-\s++\
 DECISION = re.compile(r"HAILO for (\S+): (KAUFEN|HALTEN|VERKAUFEN)\b")
 
 
-def log_report(text: str, start: datetime, end: datetime, timezone: ZoneInfo,
+def log_report(text: str, start: datetime, end: datetime, timezone: ZoneInfo,  # noqa: C901
                window_limited: bool = False) -> dict:
     decisions: Counter[str] = Counter()
     blocked: Counter[str] = Counter()

@@ -49,7 +49,7 @@ class OpenTradeHooks:
     public_paper_mode: Callable[[], bool]
 
 
-def manage_open_trades(
+def manage_open_trades(  # noqa: C901
     context: OpenTradeContext,
     hooks: OpenTradeHooks,
     current_market_data: dict[str, dict],

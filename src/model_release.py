@@ -284,7 +284,7 @@ def promote_release(
         raise
 
 
-def _validate_manifest_shape(manifest: Any, release: Path) -> dict[str, Any]:
+def _validate_manifest_shape(manifest: Any, release: Path) -> dict[str, Any]:  # noqa: C901
     """Reject a manifest that does not describe a paired release.
 
     ``validate_release`` is the check an operator runs before trusting a release

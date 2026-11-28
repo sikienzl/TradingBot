@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 
-def inspect(device, expected_serial, mode):
+def inspect(device, expected_serial, mode):  # noqa: C901
     resolved = os.path.realpath(device)
     if not stat.S_ISBLK(os.stat(resolved).st_mode):
         raise ValueError("device is not a block device")

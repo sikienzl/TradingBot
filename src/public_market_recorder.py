@@ -226,7 +226,7 @@ class PublicMarketRecorder:
         _append_rows(self.ticker_path, TICKER_FIELDS, rows)
         return len(rows)
 
-    def _record_candles(self, now: datetime) -> int:
+    def _record_candles(self, now: datetime) -> int:  # noqa: C901
         now_ms = int(now.timestamp() * 1000)
         current_candle_start_ms = (now_ms // CANDLE_TIMEFRAME_MS) * CANDLE_TIMEFRAME_MS
         rows_to_write: list[dict[str, Any]] = []
