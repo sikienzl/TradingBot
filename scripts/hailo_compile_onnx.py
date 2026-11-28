@@ -30,7 +30,7 @@ def run(command: list[str]) -> None:
     subprocess.run(command, check=True, stdin=subprocess.DEVNULL)
 
 
-def main() -> int:
+def main() -> int:  # noqa: C901
     args = parse_args()
     model = args.onnx.resolve(strict=True)
     calibration = args.calibration.resolve(strict=True)

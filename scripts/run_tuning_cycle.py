@@ -88,7 +88,7 @@ def _extract_max_drawdown_pct(path: str) -> float | None:
     return None
 
 
-def _build_safety_guard_result(args: argparse.Namespace, status: dict[str, Any]) -> dict[str, Any]:
+def _build_safety_guard_result(args: argparse.Namespace, status: dict[str, Any]) -> dict[str, Any]:  # noqa: C901
     verdict = str(status.get("verdict", "ERROR")).upper()
     reasons: list[str] = []
     recent_reports_checked: list[str] = []
@@ -179,7 +179,7 @@ def _build_safety_guard_result(args: argparse.Namespace, status: dict[str, Any])
     }
 
 
-def main() -> None:
+def main() -> None:  # noqa: C901
     parser = argparse.ArgumentParser(
         description="Run recommendation + apply tuning cycle")
     parser.add_argument("--policy", default="tuning_policy.json")

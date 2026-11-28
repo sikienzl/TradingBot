@@ -30,7 +30,7 @@ def file_sha256(path: str | Path) -> str:
     return digest.hexdigest()
 
 
-def prepare_hailo_data(data_path: str) -> tuple[np.ndarray, ...]:
+def prepare_hailo_data(data_path: str) -> tuple[np.ndarray, ...]:  # noqa: C901
     from src.train_catboost_model import (
         LABEL_HORIZON,
         _purge_training_boundary,
@@ -98,7 +98,7 @@ def prepare_hailo_data(data_path: str) -> tuple[np.ndarray, ...]:
     return x_train, y_train, x_validation, y_validation, np.asarray(class_weights)
 
 
-def train_and_export(
+def train_and_export(  # noqa: C901
     data_path: str,
     output_dir: str,
     epochs: int = 150,

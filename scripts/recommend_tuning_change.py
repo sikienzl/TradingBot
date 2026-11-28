@@ -296,7 +296,7 @@ def _make_change(
     return typed
 
 
-def recommend(
+def recommend(  # noqa: C901
     policy: dict[str, Any],
     status: dict[str, Any],
     env_values: dict[str, str],

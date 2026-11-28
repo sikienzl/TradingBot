@@ -40,7 +40,7 @@ class ReplaySettings:
         "ZEC", "HYPE", "TON", "BTC", "XRP",
     })
 
-    def validate(self) -> None:
+    def validate(self) -> None:  # noqa: C901
         if self.initial_cash <= 0:
             raise ValueError("initial_cash must be greater than zero")
         if not 0 <= self.fee_rate < 1 or not 0 <= self.slippage < 1:
@@ -67,7 +67,7 @@ class ReplaySettings:
             raise ValueError("recent PnL guard window and minimum trades must be positive")
 
 
-def load_ohlcv(path: str | Path, settings: ReplaySettings) -> pd.DataFrame:
+def load_ohlcv(path: str | Path, settings: ReplaySettings) -> pd.DataFrame:  # noqa: C901
     df = pd.read_csv(path)
     required = {"timestamp", "coin", "open", "high", "low", "close", "volume"}
     missing = required.difference(df.columns)

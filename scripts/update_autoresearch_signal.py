@@ -9,7 +9,7 @@ from typing import Any
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
-def _discover_repo_candidates() -> list[str]:
+def _discover_repo_candidates() -> list[str]:  # noqa: C901
     """Returns likely local AutoResearch repository paths."""
     home = os.path.expanduser("~")
     hints = [
@@ -214,7 +214,7 @@ def _build_neutral_payload(reason: str = "") -> dict[str, Any]:
     return out
 
 
-def main() -> None:
+def main() -> None:  # noqa: C901
     parser = argparse.ArgumentParser(
         description="Run AutoResearch and write canonical signal JSON for model features."
     )

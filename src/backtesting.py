@@ -35,7 +35,7 @@ class Backtester:
         self.trades = []
         self.equity_curve = []
 
-    def run(self, strategy_func, **kwargs):
+    def run(self, strategy_func, **kwargs):  # noqa: C901
         df = pd.read_csv(self.data_file)
         required = {"coin", "timestamp", "close"}
         missing = required.difference(df.columns)

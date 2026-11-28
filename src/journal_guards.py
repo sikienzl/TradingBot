@@ -12,7 +12,7 @@ from typing import Any
 import pandas as pd
 
 
-def _compute_dynamic_lossmaker_entry_pairs(
+def _compute_dynamic_lossmaker_entry_pairs(  # noqa: C901
     df: pd.DataFrame,
     window: int,
     min_sells: int,
@@ -96,7 +96,7 @@ def _compute_dynamic_lossmaker_entry_pairs(
     return blocked_pairs
 
 
-def _compute_degraded_entry_sources(
+def _compute_degraded_entry_sources(  # noqa: C901
     df: pd.DataFrame,
     window: int,
     min_sells: int,

@@ -105,7 +105,7 @@ def risk_state_to_payload(state: RiskState, *, now_utc: datetime | None = None) 
     }
 
 
-def parse_risk_state(payload: Any) -> RiskState:
+def parse_risk_state(payload: Any) -> RiskState:  # noqa: C901
     """Builds a :class:`RiskState` from a decoded JSON document.
 
     Raises :class:`TypeError` for a document with the wrong shape and

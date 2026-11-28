@@ -491,7 +491,7 @@ def _append_news_store_records(store_path: str, signal: dict[str, Any]) -> dict[
     return details
 
 
-def main() -> None:
+def main() -> None:  # noqa: C901
     parser = argparse.ArgumentParser(
         description="Fetch modular research signal (FNG + optional RSS news) and write canonical JSON."
     )

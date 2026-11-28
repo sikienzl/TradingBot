@@ -260,7 +260,7 @@ def load_market_observations(selected_symbol: str | None = None) -> dict[str, An
     }
 
 
-def _valid_rows(
+def _valid_rows(  # noqa: C901
     rows: Iterator[dict[str, str]],
     timestamp_field: str,
     symbols: list[str],

@@ -43,7 +43,7 @@ def rows(path):
 
 @pytest.mark.parametrize("crash_point", ["intent", "partial_journal", "state", "unlink"])
 @pytest.mark.parametrize("action", ["buy", "partial_sell", "full_sell"])
-def test_restart_completes_interrupted_trade_once(monkeypatch, tmp_path, crash_point, action):
+def test_restart_completes_interrupted_trade_once(monkeypatch, tmp_path, crash_point, action):  # noqa: C901
     bot = make_bot(monkeypatch, tmp_path)
     if action != "buy":
         assert bot._execute_trade("BTC", "buy", 100, 80)

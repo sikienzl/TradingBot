@@ -140,7 +140,7 @@ def entry_volatility_guard(config: Any, coin_data: dict) -> tuple[bool, str]:
     return True, 'ok'
 
 
-def passes_downtrend_reversal_filter(config: Any, coin_data: dict) -> tuple[bool, str]:
+def passes_downtrend_reversal_filter(config: Any, coin_data: dict) -> tuple[bool, str]:  # noqa: C901
     """Allows down-trend fallback entries only for oversold coins with improving tabular odds."""
     recommendation = str(coin_data.get('recommendation', ''))
     if recommendation != 'HOLD (Down-Trend)':

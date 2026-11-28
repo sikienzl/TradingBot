@@ -65,7 +65,7 @@ def fetch_ohlcv(
     return None
 
 
-def fetch_market_data(
+def fetch_market_data(  # noqa: C901
     exchange,
     symbols: list[str],
     *,

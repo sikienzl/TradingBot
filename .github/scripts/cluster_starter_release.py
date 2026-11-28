@@ -68,7 +68,7 @@ def allowed_path(name):
     )
 
 
-def check_content(name, data):
+def check_content(name, data):  # noqa: C901
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -102,7 +102,7 @@ def check_content(name, data):
             raise ValueError("Example Prometheus targets must use placeholders")
 
 
-def build(version, output_dir):
+def build(version, output_dir):  # noqa: C901
     if not VERSION.fullmatch(version):
         raise ValueError("Version must be vMAJOR.MINOR.PATCH with an optional prerelease suffix")
     tracked = subprocess.check_output(
