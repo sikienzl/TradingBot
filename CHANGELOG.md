@@ -189,6 +189,19 @@ a version heading is assigned when a release is prepared.
   developer or CI environment that has one set cannot change what unrelated tests
   observe. `.github/scripts/tests/test_model_release_cli.py` covers the reader
   against a CLI-promoted release, including the tampered case the alert pages on.
+- `tests/test_model_release.py` pins the manifest shape checks that previously
+  only had incidental coverage, so splitting `_validate_manifest_shape()` cannot
+  silently drop a defect: a manifest that is not an object at all, the exact list
+  of missing keys, each unusable release ID (empty, spaced, leading dash, or a
+  valid ID that names a different directory), each broken contract field, each
+  malformed per-side report (report not an object, no validation block, missing
+  provenance, side features or label map that disagree with the release), the
+  metric list a side report must carry, an artifact set with an unexpected
+  member and one that is both missing and unexpected at once, and an artifact
+  entry that is not an object or has no path. Three deliberately multi-defect
+  manifests assert that the earliest defect is the one reported, and four more
+  drive the same defects through `read_active_release()` to prove the runtime
+  path still fails closed for each of them.
 
 ### Changed
 
@@ -217,6 +230,30 @@ a version heading is assigned when a release is prepared.
   file at `main`, and each diff hunk is exactly one `def` line plus the marker.
   The stale comment in `pyproject.toml` that described the old threshold as a
   permanent setting is replaced with the ratchet contract above.
+- The first hotspot comes out of that list. `_validate_manifest_shape()` in
+  `src/model_release.py` was the largest function in the repository at
+  complexity 25: one body that checked the manifest type, the required keys, the
+  release ID, the release-wide contract, both validation sides and all four
+  artifacts. It is now an orchestrator at complexity 4 over six helpers -
+  `_validate_manifest_release_id()`, `_validate_manifest_contract()`,
+  `_validate_side_validation_report()`, `_artifact_set_details()`,
+  `_validate_manifest_artifact()` and `_validate_manifest_artifacts()` - each at
+  or below the limit, so the largest function in `src/model_release.py` is now
+  10. The call order is unchanged, which matters because the first defect is
+  what an operator sees while fixing a manifest top-down, and every message
+  string is unchanged, because the release CLI and the tests quote them. The
+  exception entry is deleted from `tests/test_complexity.py` and the `def` line
+  loses its `# noqa: C901`, which is the ratchet working as designed: RUF100
+  rejects the leftover marker and the test rejects the stale entry. The
+  `pyproject.toml` comment no longer names a hotspot count, since that number is
+  now expected to move.
+  Equivalence was proven rather than asserted: the pre-split and post-split
+  modules were loaded side by side and fed the same 217 malformed manifests
+  (every required key missing alone and in every pair, invalid release IDs,
+  contract fields, per-side report shapes and metrics, artifact entries, and
+  combinations with several defects at once) against three release directory
+  names - 651 comparisons, identical exception type and message in every case,
+  plus an AST inventory showing the same 20 message templates on both sides.
 
 ## v1.0.33 - 2026-11-27
 

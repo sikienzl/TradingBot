@@ -284,24 +284,8 @@ def promote_release(
         raise
 
 
-def _validate_manifest_shape(manifest: Any, release: Path) -> dict[str, Any]:  # noqa: C901
-    """Reject a manifest that does not describe a paired release.
-
-    ``validate_release`` is the check an operator runs before trusting a release
-    - usually right after a ``NO-GO``, when the fastest way back to a known-good
-    model is to roll back to an older one. A manifest that only carries the
-    artifact map would let a release activate without any record of which
-    contract it implements or which validation evidence backed it, so the whole
-    shape is checked here and not left to the checksum pass.
-    """
-    if not isinstance(manifest, dict):
-        raise TypeError("Invalid model release manifest")
-    missing = [key for key in REQUIRED_MANIFEST_KEYS if key not in manifest]
-    if missing:
-        raise ValueError(
-            f"Model release manifest is missing: {', '.join(missing)}"
-        )
-
+def _validate_manifest_release_id(manifest: dict[str, Any], release: Path) -> None:
+    """Reject a manifest whose release ID cannot be trusted to name the release."""
     release_id = manifest["release_id"]
     if not isinstance(release_id, str) or not _RELEASE_ID.fullmatch(release_id):
         raise ValueError("Model release manifest has an invalid release ID")
@@ -310,6 +294,15 @@ def _validate_manifest_shape(manifest: Any, release: Path) -> dict[str, Any]:  #
             f"Model release manifest ID {release_id} does not match the "
             f"release directory {release.name}"
         )
+
+
+def _validate_manifest_contract(manifest: dict[str, Any]) -> tuple[list[str], dict[str, Any], str]:
+    """Return the release-wide feature, label and training-data contract.
+
+    The three values are returned because both validation sides and the artifact
+    pass have to agree with them; re-reading them from the manifest at each use
+    site hides which check belongs to which contract field.
+    """
     if manifest["feature_contract"] != "hailo":
         raise ValueError("Model release manifest does not use the Hailo feature contract")
 
@@ -325,72 +318,129 @@ def _validate_manifest_shape(manifest: Any, release: Path) -> dict[str, Any]:  #
     if not isinstance(training_hash, str) or not _SHA256.fullmatch(training_hash):
         raise ValueError("Model release manifest has an invalid training data checksum")
 
-    for side_name in ("cpu", "hailo"):
-        reports = manifest["validation_reports"].get(side_name)
-        if not isinstance(reports, dict):
-            raise ValueError(  # noqa: TRY004
-                f"Model release manifest is missing the {side_name} validation report"
-            )
-        report = reports.get("validation")
-        if not isinstance(report, dict) or not report:
-            raise ValueError(
-                f"Model release manifest has no {side_name} validation results"
-            )
-        missing_metrics = [
-            metric for metric in REQUIRED_VALIDATION_METRICS if metric not in report
-        ]
-        if missing_metrics:
-            raise ValueError(
-                f"Model release manifest {side_name} validation results are missing: "
-                f"{', '.join(missing_metrics)}"
-            )
-        if not isinstance(reports.get("provenance"), dict):
-            raise ValueError(  # noqa: TRY004
-                f"Model release manifest is missing {side_name} training provenance"
-            )
-        if list(reports.get("features", [])) != list(features):
-            raise ValueError(
-                f"Model release manifest {side_name} feature contract does not match "
-                "the release contract"
-            )
-        if reports.get("label_map") != manifest["label_map"]:
-            raise ValueError(
-                f"Model release manifest {side_name} label map does not match "
-                "the release contract"
-            )
-        side_provenance = reports["provenance"]
-        if side_provenance.get("training_data_sha256") != training_hash:
-            raise ValueError(
-                f"Model release manifest {side_name} training data checksum does not "
-                "match the release contract"
-            )
+    return features, manifest["label_map"], training_hash
 
+
+def _validate_side_validation_report(
+    manifest: dict[str, Any],
+    side_name: str,
+    features: list[str],
+    label_map: dict[str, Any],
+    training_hash: str,
+) -> None:
+    """Require one side to carry evidence for exactly the release contract."""
+    reports = manifest["validation_reports"].get(side_name)
+    if not isinstance(reports, dict):
+        raise ValueError(  # noqa: TRY004
+            f"Model release manifest is missing the {side_name} validation report"
+        )
+    report = reports.get("validation")
+    if not isinstance(report, dict) or not report:
+        raise ValueError(
+            f"Model release manifest has no {side_name} validation results"
+        )
+    missing_metrics = [
+        metric for metric in REQUIRED_VALIDATION_METRICS if metric not in report
+    ]
+    if missing_metrics:
+        raise ValueError(
+            f"Model release manifest {side_name} validation results are missing: "
+            f"{', '.join(missing_metrics)}"
+        )
+    if not isinstance(reports.get("provenance"), dict):
+        raise ValueError(  # noqa: TRY004
+            f"Model release manifest is missing {side_name} training provenance"
+        )
+    if list(reports.get("features", [])) != list(features):
+        raise ValueError(
+            f"Model release manifest {side_name} feature contract does not match "
+            "the release contract"
+        )
+    if reports.get("label_map") != label_map:
+        raise ValueError(
+            f"Model release manifest {side_name} label map does not match "
+            "the release contract"
+        )
+    side_provenance = reports["provenance"]
+    if side_provenance.get("training_data_sha256") != training_hash:
+        raise ValueError(
+            f"Model release manifest {side_name} training data checksum does not "
+            "match the release contract"
+        )
+
+
+def _artifact_set_details(artifacts: dict[str, Any]) -> list[str]:
+    """Describe how the artifact map differs from the required paired set."""
+    missing_artifacts = sorted(set(EXPECTED_ARTIFACTS) - set(artifacts))
+    unknown = sorted(set(artifacts) - set(EXPECTED_ARTIFACTS))
+    details = []
+    if missing_artifacts:
+        details.append(f"missing {', '.join(missing_artifacts)}")
+    if unknown:
+        details.append(f"unexpected {', '.join(unknown)}")
+    return details
+
+
+def _validate_manifest_artifact(name: str, artifact: Any) -> None:
+    """Require one artifact entry to point at its contract path with a real checksum."""
+    if not isinstance(artifact, dict):
+        raise ValueError(  # noqa: TRY004
+            f"Model release manifest artifact {name} is invalid"
+        )
+    if artifact.get("path") != EXPECTED_ARTIFACTS[name]:
+        raise ValueError(f"Model release manifest artifact {name} has an unexpected path")
+    checksum = artifact.get("sha256")
+    if not isinstance(checksum, str) or not _SHA256.fullmatch(checksum):
+        raise ValueError(
+            f"Model release manifest artifact {name} has an invalid checksum"
+        )
+
+
+def _validate_manifest_artifacts(manifest: dict[str, Any]) -> None:
+    """Require exactly the four paired artifacts, each individually well formed."""
     artifacts = manifest["artifacts"]
     if not isinstance(artifacts, dict):
         raise TypeError("Invalid model release manifest")
     if set(artifacts) != set(EXPECTED_ARTIFACTS):
-        missing_artifacts = sorted(set(EXPECTED_ARTIFACTS) - set(artifacts))
-        unknown = sorted(set(artifacts) - set(EXPECTED_ARTIFACTS))
-        details = []
-        if missing_artifacts:
-            details.append(f"missing {', '.join(missing_artifacts)}")
-        if unknown:
-            details.append(f"unexpected {', '.join(unknown)}")
+        details = _artifact_set_details(artifacts)
         raise ValueError(
             f"Model release manifest artifact set is invalid: {', '.join(details)}"
         )
     for name, artifact in artifacts.items():
-        if not isinstance(artifact, dict):
-            raise ValueError(  # noqa: TRY004
-                f"Model release manifest artifact {name} is invalid"
-            )
-        if artifact.get("path") != EXPECTED_ARTIFACTS[name]:
-            raise ValueError(f"Model release manifest artifact {name} has an unexpected path")
-        checksum = artifact.get("sha256")
-        if not isinstance(checksum, str) or not _SHA256.fullmatch(checksum):
-            raise ValueError(
-                f"Model release manifest artifact {name} has an invalid checksum"
-            )
+        _validate_manifest_artifact(name, artifact)
+
+
+def _validate_manifest_shape(manifest: Any, release: Path) -> dict[str, Any]:
+    """Reject a manifest that does not describe a paired release.
+
+    ``validate_release`` is the check an operator runs before trusting a release
+    - usually right after a ``NO-GO``, when the fastest way back to a known-good
+    model is to roll back to an older one. A manifest that only carries the
+    artifact map would let a release activate without any record of which
+    contract it implements or which validation evidence backed it, so the whole
+    shape is checked here and not left to the checksum pass.
+
+    The checks run in contract order - identity, release-wide contract, both
+    validation sides, then the artifact map - so a broken manifest always
+    reports its first defect and never its least specific one.
+    """
+    if not isinstance(manifest, dict):
+        raise TypeError("Invalid model release manifest")
+    missing = [key for key in REQUIRED_MANIFEST_KEYS if key not in manifest]
+    if missing:
+        raise ValueError(
+            f"Model release manifest is missing: {', '.join(missing)}"
+        )
+
+    _validate_manifest_release_id(manifest, release)
+    features, label_map, training_hash = _validate_manifest_contract(manifest)
+
+    for side_name in ("cpu", "hailo"):
+        _validate_side_validation_report(
+            manifest, side_name, features, label_map, training_hash
+        )
+
+    _validate_manifest_artifacts(manifest)
     return manifest
 
 
