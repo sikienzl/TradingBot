@@ -202,6 +202,21 @@ a version heading is assigned when a release is prepared.
   manifests assert that the earliest defect is the one reported, and four more
   drive the same defects through `read_active_release()` to prove the runtime
   path still fails closed for each of them.
+- `tests/test_risk_state.py` pins the risk-state reader guardrail by guardrail,
+  so splitting `parse_risk_state()` cannot silently drop a defect: documents that
+  are not objects at all, every unsupported schema version (including the string
+  `"1"`, which is rejected because the version is compared numerically), the
+  lenient forms a daily anchor value accepts (numeric strings, `"1e5"`, booleans,
+  `-0.0`) against the forms it refuses (negatives, `nan`, `inf`, text), a loss
+  streak that must be a whole number rather than `1.0` or `True`, the four
+  timestamp spellings a BUY pause accepts against the nine it refuses, the plain
+  `YYYY-MM-DD` shape an anchor date needs, an absent BUY budget or cooldown map
+  treated as empty while `True` or a string is a type error, each unusable entry
+  inside an otherwise valid list or map, coin normalisation, and unknown fields
+  being ignored. A multi-defect document asserts that the earliest defect in
+  on-disk order is the one reported, and seven broken JSON files are driven
+  through `read_risk_state()` to prove the runtime path still fails closed with
+  `unreadable` set for each of them.
 
 ### Changed
 
@@ -254,6 +269,31 @@ a version heading is assigned when a release is prepared.
   combinations with several defects at once) against three release directory
   names - 651 comparisons, identical exception type and message in every case,
   plus an AST inventory showing the same 20 message templates on both sides.
+- The second hotspot comes out of that list, and it is the guardrail that decides
+  whether the bot may trade at all. `parse_risk_state()` in `src/risk_state.py`
+  sat at complexity 16: one body that validated the document type, the schema
+  version, the daily anchor value, the loss streak, the BUY pause, the anchor
+  date, the BUY budget and the re-entry cooldown map. It is now an orchestrator
+  at complexity 3 over six readers - `_parse_anchor_value()`, `_parse_loss_streak()`,
+  `_parse_buy_pause()`, `_parse_anchor_date()`, `_parse_buy_budget()` and
+  `_parse_reentry_cooldown()` - each at complexity 2 to 4, so the largest function
+  in the module is now 5. Each reader keeps the statement shape of the block it
+  replaced, the calls stay in the order the on-disk document lists its fields, and
+  every message string is unchanged, because an operator reads them while
+  hand-repairing `data/risk_state.json` on a Pi. The exception entry is deleted
+  and the `def` line loses its `# noqa: C901`, taking the ratchet from 41 pinned
+  hotspots to 40.
+  Equivalence was proven three ways rather than asserted. The pre-split and
+  post-split modules were loaded side by side and fed the same 126 payloads
+  (valid documents, each field broken alone, several broken at once, and the
+  counter-intuitive lenient cases) compared as both the raised exception and the
+  full `RiskState` repr - zero mismatches - and an AST inventory showed the same
+  12 message templates on both sides. Because the split stays inside one module,
+  a third and stronger check was possible: each helper body is byte-identical to
+  the statement list it replaced (`ast.dump()`), the three-statement header is
+  identical, and the `return RiskState(...)` is identical once the two local
+  variables are renamed. The new tests were then run against the original module
+  and passed unchanged, which shows they pin behaviour rather than structure.
 
 ## v1.0.33 - 2026-11-27
 

@@ -164,6 +164,206 @@ def test_coin_keys_are_normalised():
 
 
 # ---------------------------------------------------------------------------
+# Every guardrail, pinned by the message the operator sees
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("payload", [None, [], "nope", 7, 1.5, True])
+def test_parse_rejects_a_document_that_is_not_an_object(payload):
+    with pytest.raises(TypeError, match="Risk state document is not an object"):
+        parse_risk_state(payload)
+
+
+@pytest.mark.parametrize("version", [2, 0, "1", None, [], {}, ""])
+def test_parse_rejects_an_unsupported_schema_version(version):
+    with pytest.raises(ValueError) as caught:
+        parse_risk_state({"version": version})
+    assert str(caught.value) == f"Unsupported risk state version: {version!r}"
+
+
+@pytest.mark.parametrize("version", [1, 1.0, True])
+def test_parse_accepts_the_pinned_schema_version_only_numerically(version):
+    state = parse_risk_state({"version": version})
+    assert state.unreadable is False
+    assert state.consecutive_losses == 0
+
+
+@pytest.mark.parametrize("raw, expected", [
+    (1000.0, 1000.0),
+    ("1000", 1000.0),
+    ("1e5", 100000.0),
+    (None, 0.0),
+    (True, 1.0),
+    (False, 0.0),
+    (-0.0, -0.0),
+])
+def test_parse_reads_the_daily_anchor_value_leniently(raw, expected):
+    state = parse_risk_state({"version": 1, "daily_anchor_value": raw})
+    assert state.anchor_value == expected
+
+
+@pytest.mark.parametrize("raw", [-5, -0.5, "lots", [], {}, float("nan"),
+                                 float("inf"), "-inf"])
+def test_parse_rejects_an_unusable_daily_anchor_value(raw):
+    with pytest.raises(ValueError, match="Risk state has an invalid daily anchor value"):
+        parse_risk_state({"version": 1, "daily_anchor_value": raw})
+
+
+@pytest.mark.parametrize("raw", ["0", "two", None, True, False, [], {}, 1.0, 2.5])
+def test_parse_requires_a_whole_number_loss_streak(raw):
+    with pytest.raises(TypeError, match="Risk state has an invalid loss streak"):
+        parse_risk_state({"version": 1, "consecutive_losses": raw})
+
+
+@pytest.mark.parametrize("raw", [-1, -7])
+def test_parse_rejects_a_negative_loss_streak(raw):
+    with pytest.raises(ValueError, match="Risk state has a negative loss streak"):
+        parse_risk_state({"version": 1, "consecutive_losses": raw})
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("2026-03-04T12:00:00+00:00", NOW),
+    ("2026-03-04T12:00:00", NOW),
+    ("2026-03-04 12:00:00", NOW),
+    ("2026-03-04T12:00:00+02:00", NOW - timedelta(hours=2)),
+])
+def test_parse_normalises_the_buy_pause_to_utc(raw, expected):
+    state = parse_risk_state({"version": 1, "buy_pause_until_utc": raw})
+    assert state.buy_pause_until_utc == expected
+    assert state.buy_pause_until_utc.tzinfo is UTC
+
+
+@pytest.mark.parametrize("raw", ["yesterday", "", 0, 1, True, False, [], {},
+                                 "2026-13-45T99:99:99+00:00"])
+def test_parse_rejects_an_unusable_buy_pause(raw):
+    with pytest.raises(ValueError, match="Risk state has an invalid BUY pause timestamp"):
+        parse_risk_state({"version": 1, "buy_pause_until_utc": raw})
+
+
+def test_parse_reads_a_plain_iso_anchor_date():
+    state = parse_risk_state({"version": 1, "daily_anchor_date": "2026-03-04"})
+    assert state.anchor_date == date(2026, 3, 4)
+
+
+@pytest.mark.parametrize("raw", ["2026-1-2", "nope", "", 0, True, "2026-13-45", [], {},
+                                 "2026-03-04T00:00:00+00:00"])
+def test_parse_rejects_an_unusable_anchor_date(raw):
+    with pytest.raises(ValueError, match="Risk state has an invalid daily anchor date"):
+        parse_risk_state({"version": 1, "daily_anchor_date": raw})
+
+
+@pytest.mark.parametrize("raw", [None, [], {}, 0])
+def test_parse_treats_an_absent_buy_budget_as_empty(raw):
+    state = parse_risk_state({"version": 1, "buy_timestamps_utc": raw})
+    assert state.buy_timestamps_utc == []
+
+
+@pytest.mark.parametrize("raw", ["yesterday", True, 1, 2.5])
+def test_parse_rejects_a_buy_budget_that_is_not_a_list(raw):
+    with pytest.raises(TypeError, match="Risk state has an invalid BUY budget"):
+        parse_risk_state({"version": 1, "buy_timestamps_utc": raw})
+
+
+@pytest.mark.parametrize("raw", [["yesterday"], [None], [[]], [{}],
+                                 ["2026-03-04T12:00:00+00:00", "yesterday"]])
+def test_parse_rejects_each_unusable_buy_budget_timestamp(raw):
+    with pytest.raises(ValueError, match="Risk state has an invalid BUY budget timestamp"):
+        parse_risk_state({"version": 1, "buy_timestamps_utc": raw})
+
+
+@pytest.mark.parametrize("raw", [None, {}, [], 0])
+def test_parse_treats_an_absent_cooldown_map_as_empty(raw):
+    state = parse_risk_state({"version": 1, "last_sell_utc": raw})
+    assert state.last_sell_timestamps_utc == {}
+
+
+@pytest.mark.parametrize("raw", ["BTC", True, 1, 2.5])
+def test_parse_rejects_a_cooldown_map_that_is_not_an_object(raw):
+    with pytest.raises(TypeError, match="Risk state has an invalid re-entry cooldown map"):
+        parse_risk_state({"version": 1, "last_sell_utc": raw})
+
+
+@pytest.mark.parametrize("raw", [
+    {"BTC": "yesterday"},
+    {"": "2026-03-04T12:00:00+00:00"},
+    {"BTC": None},
+    {"BTC": []},
+    {1: "2026-03-04T12:00:00+00:00"},
+    {"ETH": "2026-03-04T12:00:00+00:00", "XRP": "yesterday"},
+])
+def test_parse_rejects_unusable_cooldown_entries(raw):
+    with pytest.raises(ValueError,
+                       match="Risk state has an invalid re-entry cooldown timestamp"):
+        parse_risk_state({"version": 1, "last_sell_utc": raw})
+
+
+def test_parse_upper_cases_every_cooldown_coin():
+    state = parse_risk_state({
+        "version": 1,
+        "last_sell_utc": {
+            "btc": "2026-03-04T12:00:00+00:00",
+            "eTc": "2026-03-04T11:00:00+00:00",
+        },
+    })
+    assert state.last_sell_timestamps_utc == {
+        "BTC": NOW,
+        "ETC": NOW - timedelta(hours=1),
+    }
+
+
+def test_parse_reports_the_first_defect_in_document_order():
+    broken = {
+        "version": 1,
+        "daily_anchor_value": -5,
+        "consecutive_losses": "two",
+        "buy_pause_until_utc": "yesterday",
+        "daily_anchor_date": "nope",
+        "buy_timestamps_utc": ["yesterday"],
+        "last_sell_utc": {"BTC": "yesterday"},
+    }
+    with pytest.raises(ValueError, match="Risk state has an invalid daily anchor value"):
+        parse_risk_state(dict(broken))
+    without_anchor = {key: value for key, value in broken.items()
+                      if key != "daily_anchor_value"}
+    with pytest.raises(TypeError, match="Risk state has an invalid loss streak"):
+        parse_risk_state(without_anchor)
+    only_the_last = {key: value for key, value in broken.items()
+                     if key not in ("daily_anchor_value", "consecutive_losses",
+                                    "buy_pause_until_utc", "daily_anchor_date",
+                                    "buy_timestamps_utc")}
+    with pytest.raises(ValueError,
+                       match="Risk state has an invalid re-entry cooldown timestamp"):
+        parse_risk_state(only_the_last)
+
+
+def test_parse_ignores_fields_it_does_not_understand():
+    state = parse_risk_state({
+        "version": 1,
+        "written_by": "a future release",
+        "daily_anchor_value": 250.0,
+    })
+    assert state.anchor_value == 250.0
+    assert state.unreadable is False
+
+
+@pytest.mark.parametrize("document", [
+    {"version": 1, "daily_anchor_value": "lots"},
+    {"version": 1, "consecutive_losses": 1.0},
+    {"version": 1, "buy_pause_until_utc": ""},
+    {"version": 1, "daily_anchor_date": "2026-13-45"},
+    {"version": 1, "buy_timestamps_utc": True},
+    {"version": 1, "last_sell_utc": "BTC"},
+    {"version": 2},
+])
+def test_read_fails_closed_for_each_field_defect(tmp_path, caplog, document):
+    path = tmp_path / "risk.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with caplog.at_level(logging.ERROR):
+        state = read_risk_state(str(path))
+    assert state.unreadable is True
+    assert state.restored is False
+    assert "is invalid" in caplog.text
+
+
+# ---------------------------------------------------------------------------
 # Write failures must stop a live process
 # ---------------------------------------------------------------------------
 def test_write_failure_raises_runtime_error(tmp_path):
