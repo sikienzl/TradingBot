@@ -91,7 +91,6 @@ EXCEPTIONS: dict[str, int] = {
     "src/market_analysis.py::select_analysis_coins": 11,
     "src/market_data.py::fetch_market_data": 11,
     "src/market_observations.py::_valid_rows": 12,
-    "src/model_release.py::_validate_manifest_shape": 25,
     "src/open_trade_manager.py::manage_open_trades": 12,
     "src/portfolio_bootstrap.py::refresh_live_portfolio_balance": 16,
     "src/public_market_recorder.py::PublicMarketRecorder._record_candles": 12,

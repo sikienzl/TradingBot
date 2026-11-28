@@ -300,6 +300,217 @@ def test_validate_rejects_incomplete_or_swapped_artifact_set(tmp_path):
     }
 
 
+# ---------------------------------------------------------------------------
+# Every manifest shape defect, pinned by the message the operator sees
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("payload", ["null", "[]", "\"release-1\"", "7"])
+def test_validate_rejects_a_manifest_that_is_not_an_object(tmp_path, payload):
+    release = _promote(tmp_path / "deploy", "release-1", _inputs(tmp_path / "artifacts"))
+    (release / "manifest.json").write_text(payload, encoding="utf-8")
+
+    with pytest.raises(TypeError, match="Invalid model release manifest"):
+        validate_release(release)
+
+
+def test_validate_lists_every_missing_manifest_key(tmp_path):
+    release = _promote(tmp_path / "deploy", "release-1", _inputs(tmp_path / "artifacts"))
+    manifest = _manifest(release)
+    del manifest["label_map"]
+    del manifest["artifacts"]
+    _rewrite_manifest(release, manifest)
+
+    with pytest.raises(
+        ValueError, match="manifest is missing: label_map, artifacts"
+    ):
+        validate_release(release)
+
+
+@pytest.mark.parametrize(
+    "release_id,expected",
+    [
+        ("", "has an invalid release ID"),
+        ("release 1", "has an invalid release ID"),
+        ("-release-1", "has an invalid release ID"),
+        ("release-9", "does not match the release directory"),
+    ],
+)
+def test_validate_rejects_unusable_release_id(tmp_path, release_id, expected):
+    release = _promote(tmp_path / "deploy", "release-1", _inputs(tmp_path / "artifacts"))
+    manifest = _manifest(release)
+    manifest["release_id"] = release_id
+    _rewrite_manifest(release, manifest)
+
+    with pytest.raises(ValueError, match=expected):
+        validate_release(release)
+
+
+@pytest.mark.parametrize(
+    "field,value,expected",
+    [
+        ("feature_contract", "cpu", "does not use the Hailo feature contract"),
+        ("features", [], "has an invalid feature contract"),
+        ("features", ["rsi", ""], "has an invalid feature contract"),
+        ("label_map", {}, "has an invalid label map"),
+        ("training_data_sha256", "not-a-hash", "has an invalid training data checksum"),
+    ],
+)
+def test_validate_rejects_broken_release_contract_fields(
+    tmp_path, field, value, expected
+):
+    release = _promote(tmp_path / "deploy", "release-1", _inputs(tmp_path / "artifacts"))
+    manifest = _manifest(release)
+    manifest[field] = value
+    _rewrite_manifest(release, manifest)
+
+    with pytest.raises(ValueError, match=expected):
+        validate_release(release)
+
+
+@pytest.mark.parametrize("side", ["cpu", "hailo"])
+@pytest.mark.parametrize(
+    "field,value,expected",
+    [
+        ("validation", "reported", "has no {side} validation results"),
+        ("validation", {}, "has no {side} validation results"),
+        ("provenance", [], "is missing {side} training provenance"),
+        ("features", ["rsi"], "{side} feature contract does not match"),
+        ("label_map", {"halten": 1}, "{side} label map does not match"),
+    ],
+)
+def test_validate_rejects_broken_side_report(tmp_path, side, field, value, expected):
+    release = _promote(tmp_path / "deploy", "release-1", _inputs(tmp_path / "artifacts"))
+    manifest = _manifest(release)
+    manifest["validation_reports"][side][field] = value
+    _rewrite_manifest(release, manifest)
+
+    with pytest.raises(ValueError, match=expected.format(side=side)):
+        validate_release(release)
+
+
+@pytest.mark.parametrize("side", ["cpu", "hailo"])
+@pytest.mark.parametrize("value", ["[]", "null", "\"reports\""])
+def test_validate_rejects_a_side_report_that_is_not_an_object(tmp_path, side, value):
+    release = _promote(tmp_path / "deploy", "release-1", _inputs(tmp_path / "artifacts"))
+    manifest = _manifest(release)
+    manifest["validation_reports"][side] = json.loads(value)
+    _rewrite_manifest(release, manifest)
+
+    with pytest.raises(ValueError, match=f"is missing the {side} validation report"):
+        validate_release(release)
+
+
+@pytest.mark.parametrize("metric", ["rows", "threshold_macro_f1", "threshold_coverage"])
+def test_validate_lists_missing_validation_metrics_per_side(tmp_path, metric):
+    release = _promote(tmp_path / "deploy", "release-1", _inputs(tmp_path / "artifacts"))
+    manifest = _manifest(release)
+    del manifest["validation_reports"]["hailo"]["validation"][metric]
+    _rewrite_manifest(release, manifest)
+
+    with pytest.raises(
+        ValueError, match=f"hailo validation results are missing: {metric}"
+    ):
+        validate_release(release)
+
+
+def test_validate_reports_unexpected_artifacts(tmp_path):
+    release = _promote(tmp_path / "deploy", "release-1", _inputs(tmp_path / "artifacts"))
+    manifest = _manifest(release)
+    manifest["artifacts"]["gpu_model"] = {"path": "gpu/model.cbm", "sha256": "c" * 64}
+    _rewrite_manifest(release, manifest)
+
+    with pytest.raises(ValueError, match="artifact set is invalid: unexpected gpu_model"):
+        validate_release(release)
+
+
+def test_validate_reports_missing_and_unexpected_artifacts_together(tmp_path):
+    release = _promote(tmp_path / "deploy", "release-1", _inputs(tmp_path / "artifacts"))
+    manifest = _manifest(release)
+    del manifest["artifacts"]["cpu_metadata"]
+    manifest["artifacts"]["gpu_model"] = {"path": "gpu/model.cbm", "sha256": "c" * 64}
+    _rewrite_manifest(release, manifest)
+
+    with pytest.raises(
+        ValueError,
+        match="artifact set is invalid: missing cpu_metadata, unexpected gpu_model",
+    ):
+        validate_release(release)
+
+
+@pytest.mark.parametrize("artifact", ["cpu_model", "hailo_hef", "hailo_metadata"])
+@pytest.mark.parametrize("value", ["[]", "null", "\"path\""])
+def test_validate_rejects_artifact_entry_that_is_not_an_object(tmp_path, artifact, value):
+    release = _promote(tmp_path / "deploy", "release-1", _inputs(tmp_path / "artifacts"))
+    manifest = _manifest(release)
+    manifest["artifacts"][artifact] = json.loads(value)
+    _rewrite_manifest(release, manifest)
+
+    with pytest.raises(ValueError, match=f"artifact {artifact} is invalid"):
+        validate_release(release)
+
+
+def test_validate_rejects_artifact_without_path(tmp_path):
+    release = _promote(tmp_path / "deploy", "release-1", _inputs(tmp_path / "artifacts"))
+    manifest = _manifest(release)
+    del manifest["artifacts"]["cpu_metadata"]["path"]
+    _rewrite_manifest(release, manifest)
+
+    with pytest.raises(ValueError, match="cpu_metadata has an unexpected path"):
+        validate_release(release)
+
+
+def test_validate_reports_the_first_defect_not_the_last(tmp_path):
+    """Order matters: an operator fixing a manifest works top-down."""
+    root = tmp_path / "deploy"
+    inputs = _inputs(tmp_path / "artifacts")
+
+    release = _promote(root, "early", inputs)
+    manifest = _manifest(release)
+    manifest["artifacts"] = {}
+    manifest["validation_reports"]["hailo"]["features"] = ["rsi"]
+    _rewrite_manifest(release, manifest)
+    with pytest.raises(ValueError, match="hailo feature contract does not match"):
+        validate_release(release)
+
+    release = _promote(root, "identity", inputs)
+    manifest = _manifest(release)
+    manifest["release_id"] = "other-release"
+    manifest["feature_contract"] = "cpu"
+    manifest["features"] = []
+    _rewrite_manifest(release, manifest)
+    with pytest.raises(ValueError, match="does not match the release directory"):
+        validate_release(release)
+
+    release = _promote(root, "side-order", inputs)
+    manifest = _manifest(release)
+    manifest["validation_reports"]["cpu"]["validation"] = {}
+    manifest["validation_reports"]["hailo"]["label_map"] = {}
+    _rewrite_manifest(release, manifest)
+    with pytest.raises(ValueError, match="has no cpu validation results"):
+        validate_release(release)
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        lambda m: m.update({"feature_contract": "cpu"}),
+        lambda m: m["features"].append(""),
+        lambda m: m["validation_reports"]["cpu"].update({"provenance": []}),
+        lambda m: m["artifacts"].update({"cpu_model": "cpu/catboost_model.cbm"}),
+    ],
+)
+def test_read_active_release_fails_closed_on_each_manifest_defect(tmp_path, damage):
+    """The runtime path must not activate a release with any of these defects."""
+    root = tmp_path / "deploy"
+    release = _promote(root, "release-1", _inputs(tmp_path / "artifacts"))
+    assert read_active_release(root) is not None
+    manifest = _manifest(release)
+    damage(manifest)
+    _rewrite_manifest(release, manifest)
+
+    assert read_active_release(root) is None
+
+
 def test_release_directory_rejects_invalid_release_id(tmp_path):
     with pytest.raises(ValueError, match="Invalid release ID"):
         release_directory(tmp_path / "deploy", "../outside")
