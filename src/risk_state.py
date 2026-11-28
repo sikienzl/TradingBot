@@ -105,44 +105,44 @@ def risk_state_to_payload(state: RiskState, *, now_utc: datetime | None = None) 
     }
 
 
-def parse_risk_state(payload: Any) -> RiskState:  # noqa: C901
-    """Builds a :class:`RiskState` from a decoded JSON document.
-
-    Raises :class:`TypeError` for a document with the wrong shape and
-    :class:`ValueError` for a value that is not a trustworthy risk state, so a
-    corrupt file can never silently reset the guardrails.
-    """
-    if not isinstance(payload, dict):
-        raise TypeError("Risk state document is not an object")
-    version = payload.get('version')
-    if version != RISK_STATE_VERSION:
-        raise ValueError(f"Unsupported risk state version: {version!r}")
-
+def _parse_anchor_value(payload: dict[str, Any]) -> float:
     anchor_raw = payload.get('daily_anchor_value', 0.0)
     anchor_value = _finite_float(anchor_raw) if anchor_raw is not None else 0.0
     if anchor_value is None or anchor_value < 0:
         raise ValueError("Risk state has an invalid daily anchor value")
+    return anchor_value
 
+
+def _parse_loss_streak(payload: dict[str, Any]) -> int:
     losses_raw = payload.get('consecutive_losses', 0)
     if isinstance(losses_raw, bool) or not isinstance(losses_raw, int):
         raise TypeError("Risk state has an invalid loss streak")
     if losses_raw < 0:
         raise ValueError("Risk state has a negative loss streak")
+    return losses_raw
 
+
+def _parse_buy_pause(payload: dict[str, Any]) -> datetime | None:
     pause_raw = payload.get('buy_pause_until_utc')
     pause_until = None
     if pause_raw is not None:
         pause_until = _parse_datetime(pause_raw)
         if pause_until is None:
             raise ValueError("Risk state has an invalid BUY pause timestamp")
+    return pause_until
 
+
+def _parse_anchor_date(payload: dict[str, Any]) -> date | None:
     anchor_raw_date = payload.get('daily_anchor_date')
     anchor_date = None
     if anchor_raw_date is not None:
         anchor_date = _parse_date(anchor_raw_date)
         if anchor_date is None:
             raise ValueError("Risk state has an invalid daily anchor date")
+    return anchor_date
 
+
+def _parse_buy_budget(payload: dict[str, Any]) -> list[datetime]:
     buys_raw = payload.get('buy_timestamps_utc') or []
     if not isinstance(buys_raw, list):
         raise TypeError("Risk state has an invalid BUY budget")
@@ -152,7 +152,10 @@ def parse_risk_state(payload: Any) -> RiskState:  # noqa: C901
         if parsed is None:
             raise ValueError("Risk state has an invalid BUY budget timestamp")
         buy_timestamps.append(parsed)
+    return buy_timestamps
 
+
+def _parse_reentry_cooldown(payload: dict[str, Any]) -> dict[str, datetime]:
     sells_raw = payload.get('last_sell_utc') or {}
     if not isinstance(sells_raw, dict):
         raise TypeError("Risk state has an invalid re-entry cooldown map")
@@ -162,16 +165,42 @@ def parse_risk_state(payload: Any) -> RiskState:  # noqa: C901
         if parsed is None or not isinstance(coin, str) or not coin:
             raise ValueError("Risk state has an invalid re-entry cooldown timestamp")
         last_sell[coin.upper()] = parsed
+    return last_sell
+
+
+def parse_risk_state(payload: Any) -> RiskState:
+    """Builds a :class:`RiskState` from a decoded JSON document.
+
+    Raises :class:`TypeError` for a document with the wrong shape and
+    :class:`ValueError` for a value that is not a trustworthy risk state, so a
+    corrupt file can never silently reset the guardrails.
+
+    Each guardrail is validated by its own reader, in the order the on-disk
+    document lists them - version, daily anchor, loss streak, BUY pause, anchor
+    date, BUY budget, re-entry cooldown - so a damaged file always reports its
+    first defect instead of whichever check happens to run last.
+    """
+    if not isinstance(payload, dict):
+        raise TypeError("Risk state document is not an object")
+    version = payload.get('version')
+    if version != RISK_STATE_VERSION:
+        raise ValueError(f"Unsupported risk state version: {version!r}")
+
+    anchor_value = _parse_anchor_value(payload)
+    consecutive_losses = _parse_loss_streak(payload)
+    buy_pause_until = _parse_buy_pause(payload)
+    anchor_date = _parse_anchor_date(payload)
+    buy_timestamps = _parse_buy_budget(payload)
+    last_sell = _parse_reentry_cooldown(payload)
 
     return RiskState(
         anchor_date=anchor_date,
         anchor_value=anchor_value,
-        consecutive_losses=losses_raw,
-        buy_pause_until_utc=pause_until,
+        consecutive_losses=consecutive_losses,
+        buy_pause_until_utc=buy_pause_until,
         buy_timestamps_utc=buy_timestamps,
         last_sell_timestamps_utc=last_sell,
     )
-
 
 def read_risk_state(path: str | None, *, logger: logging.Logger = logger) -> RiskState:
     """Loads the risk state, failing closed on an unreadable file.

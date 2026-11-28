@@ -96,7 +96,6 @@ EXCEPTIONS: dict[str, int] = {
     "src/public_market_recorder.py::PublicMarketRecorder._record_candles": 12,
     "src/public_paper_dashboard.py::_read_bot_log": 14,
     "src/public_paper_dashboard.py::load_dashboard_data": 14,
-    "src/risk_state.py::parse_risk_state": 16,
     "src/train_hailo_model.py::prepare_hailo_data": 11,
     "src/train_hailo_model.py::train_and_export": 12,
     "tests/test_public_paper_transactions.py::test_restart_completes_interrupted_trade_once": 11,
